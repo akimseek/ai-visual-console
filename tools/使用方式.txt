@@ -1,0 +1,33 @@
+测试各中转站是否用的真实模型
+1.安装依赖
+	pip install openai requests
+2.执行
+	python ai_gateway_test.py
+3.看输出结果
+	理想情况：
+		[1] 模型列表检测
+		✅ 目标模型存在
+
+
+		[3] Stream
+		收到chunk: 120
+		✅ 支持流式
+
+
+		[4] Tool Calling
+		✅ 支持 Tool Calling
+
+
+		[5] Reasoning
+		reasoning_tokens: 2048
+		✅
+
+
+		[6] 长文本
+		✅
+
+
+		[7] 稳定性
+
+		成功 10 /10
+		平均耗时 1.8秒
