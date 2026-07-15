@@ -16,8 +16,13 @@ export type SessionLine = {
 };
 
 export function parseSessionContent(filePath: string, content: string): CodexSession | null {
-  const lines = content.split(/\r?\n/).filter(Boolean);
+  const parser = createSessionContentParser(filePath);
+  for (const line of content.split(/\r?\n/)) parser.push(line);
+  return parser.finish();
+}
 
+// 完整会话可逐行解析，避免大 JSONL 必须先整体读入内存。
+export function createSessionContentParser(filePath: string) {
   let id = "";
   let createdAt: string | undefined;
   let updatedAt: string | undefined;
@@ -28,9 +33,10 @@ export function parseSessionContent(filePath: string, content: string): CodexSes
   let usage: SessionUsage | undefined;
   const messages: CodexMessage[] = [];
 
-  for (const line of lines) {
+  function push(line: string) {
+    if (!line) return;
     const item = safeJsonParse<SessionLine>(line);
-    if (!item) continue;
+    if (!item) return;
 
     if (item.timestamp) {
       updatedAt = item.timestamp;
@@ -45,7 +51,7 @@ export function parseSessionContent(filePath: string, content: string): CodexSes
       model = stringField(payload.model) || model;
       modelStatus = mergeModelStatus(modelStatus, extractModelStatus(item));
       cliVersion = stringField(payload.cli_version) || cliVersion;
-      continue;
+      return;
     }
 
     modelStatus = mergeModelStatus(modelStatus, extractModelStatus(item));
@@ -58,28 +64,32 @@ export function parseSessionContent(filePath: string, content: string): CodexSes
     }
   }
 
-  if (!id) {
-    id = path.basename(filePath).replace(/^rollout-.+-([0-9a-f-]{36})\.jsonl$/, "$1");
+  function finish(): CodexSession | null {
+    if (!id) {
+      id = path.basename(filePath).replace(/^rollout-.+-([0-9a-f-]{36})\.jsonl$/, "$1");
+    }
+
+    if (!id || id === path.basename(filePath)) return null;
+
+    const userTitle = messages.find((message) => message.role === "user" && isTitleCandidate(message.text));
+
+    return {
+      id,
+      title: clampText(userTitle?.text || id, 88),
+      cwd,
+      createdAt,
+      updatedAt,
+      model,
+      modelStatus,
+      cliVersion,
+      filePath,
+      messageCount: messages.length,
+      preview: messages,
+      usage
+    };
   }
 
-  if (!id || id === path.basename(filePath)) return null;
-
-  const userTitle = messages.find((message) => message.role === "user" && isTitleCandidate(message.text));
-
-  return {
-    id,
-    title: clampText(userTitle?.text || id, 88),
-    cwd,
-    createdAt,
-    updatedAt,
-    model,
-    modelStatus,
-    cliVersion,
-    filePath,
-    messageCount: messages.length,
-    preview: messages,
-    usage
-  };
+  return { push, finish };
 }
 
 export function parseSessionListContent(file: CodexSessionFile, content: string): CodexSession | null {

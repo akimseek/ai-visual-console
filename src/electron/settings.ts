@@ -1,6 +1,15 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { CodexTarget, CompressionPrompt, CompressionPromptInput, WorkspacePreset, WorkspacePresetInput } from "./types";
+import {
+  deleteCompressionPromptRecord,
+  deleteWorkspacePresetRecord,
+  hasAppDatabase,
+  listCompressionPromptRecords,
+  listWorkspacePresetRecords,
+  saveCompressionPromptRecord,
+  saveWorkspacePresetRecord
+} from "./appDatabase";
 
 type AppSettings = {
   wslCodexHomes?: Record<string, string>;
@@ -34,9 +43,11 @@ const DEFAULT_COMPRESSION_PROMPT_CONTENT = `请生成“可恢复工作状态摘
 
 let settingsPath = "";
 let settingsQueue = Promise.resolve();
+let structuredSettingsMigration: Promise<void> | null = null;
 
 export function setSettingsPath(filePath: string) {
   settingsPath = filePath;
+  structuredSettingsMigration = null;
 }
 
 export async function getWslCodexHomeOverride(distro: string) {
@@ -78,6 +89,10 @@ export async function setCachedTargets(targets: CodexTarget[]) {
 }
 
 export async function listWorkspacePresets() {
+  if (hasAppDatabase()) {
+    await ensureStructuredSettingsMigrated();
+    return listWorkspacePresetRecords();
+  }
   const settings = await readSettings();
   return sortWorkspacePresets(settings.workspacePresets || []);
 }
@@ -90,6 +105,15 @@ export async function saveWorkspacePreset(input: WorkspacePresetInput) {
     ...normalized,
     updatedAt: now
   };
+
+  if (hasAppDatabase()) {
+    await ensureStructuredSettingsMigrated();
+    const existing = await listWorkspacePresetRecords();
+    const duplicate = existing.find((item) => item.id !== preset.id && item.cwd === preset.cwd && item.targetKind === preset.targetKind);
+    if (duplicate) await deleteWorkspacePresetRecord(duplicate.id);
+    await saveWorkspacePresetRecord(preset);
+    return preset;
+  }
 
   await updateSettings((settings) => {
     const existing = settings.workspacePresets || [];
@@ -104,6 +128,11 @@ export async function saveWorkspacePreset(input: WorkspacePresetInput) {
 }
 
 export async function deleteWorkspacePreset(presetId: string) {
+  if (hasAppDatabase()) {
+    await ensureStructuredSettingsMigrated();
+    await deleteWorkspacePresetRecord(presetId);
+    return { deleted: true };
+  }
   await updateSettings((settings) => ({
     ...settings,
     workspacePresets: (settings.workspacePresets || []).filter((preset) => preset.id !== presetId)
@@ -112,6 +141,14 @@ export async function deleteWorkspacePreset(presetId: string) {
 }
 
 export async function listCompressionPrompts() {
+  if (hasAppDatabase()) {
+    await ensureStructuredSettingsMigrated();
+    const prompts = await listCompressionPromptRecords();
+    if (prompts.length > 0) return sortCompressionPrompts(prompts);
+    const initial = [createDefaultCompressionPrompt()];
+    await saveCompressionPromptRecord(initial[0]);
+    return initial;
+  }
   const settings = await readSettings();
   if (!settings.compressionPrompts) {
     const initial = [createDefaultCompressionPrompt()];
@@ -129,6 +166,20 @@ export async function saveCompressionPrompt(input: CompressionPromptInput) {
   const normalized = normalizeCompressionPromptInput(input);
   const now = new Date().toISOString();
   let saved: CompressionPrompt | null = null;
+
+  if (hasAppDatabase()) {
+    await ensureStructuredSettingsMigrated();
+    const existing = (await listCompressionPromptRecords()).find((item) => item.id === normalized.id);
+    saved = {
+      id: existing?.id || normalized.id || crypto.randomUUID(),
+      name: normalized.name,
+      content: normalized.content,
+      createdAt: existing?.createdAt || now,
+      updatedAt: now
+    };
+    await saveCompressionPromptRecord(saved);
+    return saved;
+  }
 
   await updateSettings((settings) => {
     const existing = settings.compressionPrompts || [];
@@ -153,6 +204,11 @@ export async function saveCompressionPrompt(input: CompressionPromptInput) {
 }
 
 export async function deleteCompressionPrompt(promptId: string) {
+  if (hasAppDatabase()) {
+    await ensureStructuredSettingsMigrated();
+    await deleteCompressionPromptRecord(promptId);
+    return { deleted: true };
+  }
   await updateSettings((settings) => ({
     ...settings,
     compressionPrompts: (settings.compressionPrompts || []).filter((prompt) => prompt.id !== promptId)
@@ -202,6 +258,33 @@ function normalizeCompressionPromptInput(input: CompressionPromptInput) {
 
 function sortCompressionPrompts(prompts: CompressionPrompt[]) {
   return [...prompts].sort((left, right) => Date.parse(right.updatedAt) - Date.parse(left.updatedAt));
+}
+
+async function ensureStructuredSettingsMigrated() {
+  if (!structuredSettingsMigration) structuredSettingsMigration = migrateStructuredSettings();
+  await structuredSettingsMigration;
+}
+
+async function migrateStructuredSettings() {
+  const settings = await readSettings();
+  const legacyPresets = settings.workspacePresets || [];
+  const legacyPrompts = settings.compressionPrompts || [];
+  const currentPresets = await listWorkspacePresetRecords();
+  const currentPrompts = await listCompressionPromptRecords();
+
+  if (currentPresets.length === 0) {
+    for (const preset of legacyPresets) await saveWorkspacePresetRecord(preset);
+  }
+  if (currentPrompts.length === 0) {
+    for (const prompt of legacyPrompts) await saveCompressionPromptRecord(prompt);
+  }
+  if (legacyPresets.length === 0 && legacyPrompts.length === 0) return;
+
+  await updateSettings((current) => ({
+    ...current,
+    workspacePresets: undefined,
+    compressionPrompts: undefined
+  }));
 }
 
 function migrateCompressionPrompts(prompts: CompressionPrompt[]) {

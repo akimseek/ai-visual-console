@@ -3,11 +3,11 @@ export function NoticeToast({
   notice,
   onDismiss
 }: {
-  notice: { message: string; actionLabel?: string; onAction?: () => void };
+  notice: { message: string; tone?: "success" | "error"; actionLabel?: string; onAction?: () => void };
   onDismiss: () => void;
 }) {
   return (
-    <div className={`notice-toast ${notice.onAction ? "notice-toast-actionable" : ""}`}>
+    <div className={`notice-toast ${notice.tone === "error" ? "notice-toast-error" : ""} ${notice.onAction ? "notice-toast-actionable" : ""}`}>
       <span>{notice.message}</span>
       {notice.onAction && (
         <button

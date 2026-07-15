@@ -2,10 +2,12 @@ import { execFile, spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { createInterface } from "node:readline";
 import { promisify } from "node:util";
 import type { CodexSession, CodexSessionFile, CodexTarget, SessionBatchMutationResult, SessionFileRef, SessionMutationRef } from "./types";
 import {
   deleteSession as deleteLocalSession,
+  deleteSessions as deleteLocalSessions,
   getCodexHome,
   getCachePath,
   getTrashRoot,
@@ -16,7 +18,9 @@ import {
   listSessionsFromFiles,
   purgeSession as purgeLocalSession,
   readSessionFile,
+  readSessionFileLines,
   removeSessionFromCache,
+  removeSessionsFromCache,
   restoreSession as restoreLocalSession
 } from "./codexStore";
 import {
@@ -29,6 +33,7 @@ import {
 import { applySessionMetadata, applySessionMetadataList, setSessionBranchMetadata } from "./sessionMetadata";
 import { measure } from "./performance";
 import {
+  createSessionContentParser,
   extractMessage,
   parseSessionContent,
   safeJsonParse,
@@ -287,37 +292,31 @@ export async function deleteSessions(targetId: string, sessions: SessionMutation
     if (sessions.length === 0) return { processed: [] };
     const target = await resolveTarget(targetId);
     if (target.kind === "local") {
-      const processed = [];
-      for (const session of sessions) {
-        const result = await deleteLocalSession(session.id, session.filePath);
-        processed.push({ ...session, movedTo: result.movedTo });
-      }
-      return { processed };
+      return { processed: await deleteLocalSessions(sessions) };
     }
 
     const codexHome = target.codexHome || (await resolveWslCodexHome(target.distro!));
     const sessionsRoot = path.posix.join(codexHome, "sessions");
-    const entries = [];
-    for (const session of sessions) {
+    const entries = await Promise.all(sessions.map(async (session) => {
       const source = session.filePath || (await findWslActiveSessionFile(targetId, session.id));
       if (!isInsidePosixDir(source, sessionsRoot)) throw new Error("拒绝移动 sessions 目录之外的文件");
       await verifyWslSessionId(target.distro!, source, session.id);
       const relative = source.slice(codexHome.replace(/\/+$/, "").length + 1);
-      entries.push({
+      return {
         ...session,
         filePath: source,
         movedTo: path.posix.join(codexHome, ".visual-console-trash", relative)
-      });
-    }
+      };
+    }));
 
     const script = entries
       .map((entry) => `mkdir -p ${shellQuote(path.posix.dirname(entry.movedTo))} && mv -- ${shellQuote(entry.filePath)} ${shellQuote(entry.movedTo)}`)
       .join("\n");
     await wslRunShell(target.distro!, script, 1024 * 1024 * 4);
-    for (const entry of entries) {
-      await removeSessionFromCache(getWslCachePath(target.distro!), entry.filePath);
-      await removeSessionFromCache(getWslCachePath(target.distro!, "trash"), entry.movedTo);
-    }
+    await Promise.all([
+      removeSessionsFromCache(getWslCachePath(target.distro!), entries.map((entry) => entry.filePath)),
+      removeSessionsFromCache(getWslCachePath(target.distro!, "trash"), entries.map((entry) => entry.movedTo))
+    ]);
     return { processed: entries };
   });
 }
@@ -385,18 +384,15 @@ export async function purgeSessions(targetId: string, sessions: SessionMutationR
 
     const codexHome = target.codexHome || (await resolveWslCodexHome(target.distro!));
     const trashSessionsRoot = path.posix.join(codexHome, ".visual-console-trash", "sessions");
-    const entries = [];
-    for (const session of sessions) {
+    const entries = await Promise.all(sessions.map(async (session) => {
       const source = session.filePath || (await findWslTrashSessionFile(targetId, session.id));
       if (!isInsidePosixDir(source, trashSessionsRoot)) throw new Error("拒绝删除回收站目录之外的文件");
       await verifyWslSessionId(target.distro!, source, session.id);
-      entries.push({ ...session, filePath: source, deleted: source });
-    }
+      return { ...session, filePath: source, deleted: source };
+    }));
 
     await wslRun(target.distro!, "rm", ["-f", ...entries.map((entry) => entry.filePath)], 1024 * 1024 * 4);
-    for (const entry of entries) {
-      await removeSessionFromCache(getWslCachePath(target.distro!, "trash"), entry.filePath);
-    }
+    await removeSessionsFromCache(getWslCachePath(target.distro!, "trash"), entries.map((entry) => entry.filePath));
     return { processed: entries };
   });
 }
@@ -441,15 +437,17 @@ export async function clearWslCodexHome(distro: string) {
 }
 
 async function loadLocalSession(filePath: string) {
-  const content = await readSessionFile(filePath);
-  const session = parseSessionContent(filePath, content);
+  const parser = createSessionContentParser(filePath);
+  await readSessionFileLines(filePath, parser.push);
+  const session = parser.finish();
   if (!session) throw new Error(`未找到会话：${filePath}`);
   return session;
 }
 
 async function loadWslSession(distro: string, filePath: string) {
-  const content = await wslReadSessionFile(distro, filePath);
-  const session = parseSessionContent(filePath, content);
+  const parser = createSessionContentParser(filePath);
+  await wslReadSessionLines(distro, filePath, parser.push);
+  const session = parser.finish();
   if (!session) throw new Error(`未找到会话：${filePath}`);
   return session;
 }
@@ -851,6 +849,47 @@ async function wslReadSessionFile(distro: string, filePath: string) {
     throw new Error(`会话文件过大，拒绝一次性读取：${path.posix.basename(filePath)}`);
   }
   return wslReadFile(distro, filePath);
+}
+
+async function wslReadSessionLines(distro: string, filePath: string, onLine: (line: string) => void) {
+  const wslExe = await getWslExe();
+  if (!wslExe) throw new Error("未找到 wsl.exe。");
+
+  return new Promise<void>((resolve, reject) => {
+    const child = spawn(wslExe, ["-d", distro, "--", "cat", filePath], {
+      windowsHide: true,
+      stdio: ["ignore", "pipe", "pipe"]
+    });
+    const lines = createInterface({ input: child.stdout, crlfDelay: Infinity });
+    const stderr: Buffer[] = [];
+    let processClosed = false;
+    let linesClosed = false;
+    let exitCode: number | null = null;
+    let settled = false;
+    const settle = (error?: Error) => {
+      if (settled) return;
+      if (!error && (!processClosed || !linesClosed)) return;
+      settled = true;
+      clearTimer();
+      if (error) reject(error);
+      else if (exitCode === 0) resolve();
+      else reject(new Error(Buffer.concat(stderr).toString("utf8").trim() || `cat 退出码：${exitCode}`));
+    };
+    const clearTimer = attachSpawnTimeout(child, (error) => settle(error), `读取 ${filePath}`);
+
+    lines.on("line", onLine);
+    lines.on("close", () => {
+      linesClosed = true;
+      settle();
+    });
+    child.stderr.on("data", (chunk: Buffer) => stderr.push(chunk));
+    child.on("error", (error) => settle(error));
+    child.on("close", (code) => {
+      processClosed = true;
+      exitCode = code;
+      settle();
+    });
+  });
 }
 
 async function wslReadFileHead(distro: string, filePath: string) {

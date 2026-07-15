@@ -24,7 +24,7 @@ import {
   searchSessions,
   setWslCodexHome
 } from "./aiProviders";
-import { setSessionCacheRoot } from "./codexStore";
+import { setSessionCacheRoot, setSessionDatabasePath } from "./codexStore";
 import { exportSessionToFile } from "./sessionExport";
 import { setSessionMetadataPath } from "./sessionMetadata";
 import {
@@ -68,7 +68,7 @@ import {
   listApiVendors,
   readApiVendorConfigFiles,
   saveApiVendor,
-  setVendorStorePath
+  setVendorDatabasePath
 } from "./vendorManager";
 import {
   resizeTerminalSession,
@@ -262,9 +262,10 @@ app.whenReady().then(() => {
   setupApplicationMenu();
   applyContentSecurityPolicy();
   setSessionCacheRoot(path.join(app.getPath("userData"), "cache"));
+  setSessionDatabasePath(path.join(app.getPath("userData"), "app.db"));
   setSettingsPath(path.join(app.getPath("userData"), "settings.json"));
   setSessionMetadataPath(path.join(app.getPath("userData"), "session-metadata.json"));
-  setVendorStorePath(path.join(app.getPath("userData"), "vendors.json"), path.join(app.getPath("userData"), "vendor-backups"));
+  setVendorDatabasePath(path.join(app.getPath("userData"), "app.db"), path.join(app.getPath("userData"), "vendor-backups"));
   setPerformanceLogPath(path.join(getLogDir(), "performance.log"));
   void writePerformanceLog("app.ready", 0);
   void writePerformanceLog("app.whenReady", performance.now() - processStartedAt);

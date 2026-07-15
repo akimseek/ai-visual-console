@@ -1,8 +1,17 @@
+import { createReadStream } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import os from "node:os";
-import type { CodexSession, CodexSessionFile } from "./types";
+import { createInterface } from "node:readline";
+import type { CodexSession, CodexSessionFile, SessionMutationRef } from "./types";
 import { parseSessionContent, parseSessionListContent } from "../shared/sessionParser";
+import {
+  readSessionCache,
+  removeSessionCacheEntries,
+  replaceSessionCache,
+  setSessionDatabasePath as configureSessionDatabase,
+  type SessionCacheEntry
+} from "./appDatabase";
 
 const SESSION_FILE_RE = /^rollout-.+\.jsonl$/;
 const CACHE_VERSION = 4;
@@ -10,6 +19,7 @@ const LIST_READ_BYTES = 64 * 1024;
 const MAX_SESSION_READ_BYTES = 32 * 1024 * 1024;
 const LIST_PARSE_CONCURRENCY = 16;
 let sessionCacheRoot = process.env.CODEX_VISUAL_CONSOLE_CACHE_DIR || path.join(os.homedir(), ".codex-visual-console-cache");
+let sessionCacheDatabasePath = "";
 const cacheWriteQueues = new Map<string, Promise<void>>();
 
 type SessionCache = {
@@ -41,6 +51,11 @@ export function getTrashCachePath() {
 
 export function setSessionCacheRoot(cacheRoot: string) {
   sessionCacheRoot = cacheRoot;
+}
+
+export function setSessionDatabasePath(databasePath: string) {
+  sessionCacheDatabasePath = databasePath;
+  configureSessionDatabase(databasePath);
 }
 
 export async function listSessions(): Promise<CodexSession[]> {
@@ -116,8 +131,17 @@ export async function listSessionsFromFiles(
 }
 
 export async function removeSessionFromCache(cachePath: string, filePath: string) {
+  await removeSessionsFromCache(cachePath, [filePath]);
+}
+
+export async function removeSessionsFromCache(cachePath: string, filePaths: string[]) {
+  if (filePaths.length === 0) return;
+  if (sessionCacheDatabasePath) {
+    await removeSessionCacheEntries(cachePath, filePaths);
+    return;
+  }
   const cache = await readCache(cachePath);
-  delete cache.sessions[filePath];
+  for (const filePath of filePaths) delete cache.sessions[filePath];
   await writeCache(cachePath, cache);
 }
 
@@ -134,6 +158,27 @@ export async function deleteSession(sessionId: string, filePathHint?: string) {
   await removeSessionFromCache(getCachePath(), source);
 
   return { movedTo: target };
+}
+
+export async function deleteSessions(sessions: SessionMutationRef[]) {
+  const processed: Array<SessionMutationRef & { movedTo: string }> = [];
+  try {
+    for (const session of sessions) {
+      const codexHome = getCodexHome();
+      const sessionsRoot = path.join(codexHome, "sessions");
+      const source = await resolveLocalSource(session.id, session.filePath, sessionsRoot, findActiveSessionFile);
+      assertInsideDir(source, sessionsRoot, "拒绝将 sessions 目录之外的文件移动到回收站");
+      const relative = path.relative(codexHome, source);
+      const target = path.join(getTrashRoot(), relative);
+      await fs.mkdir(path.dirname(target), { recursive: true });
+      await fs.rename(source, target);
+      processed.push({ ...session, filePath: source, movedTo: target });
+    }
+  } finally {
+    await removeSessionsFromCache(getCachePath(), processed.map((session) => session.filePath!));
+  }
+
+  return processed;
 }
 
 export async function restoreSession(sessionId: string) {
@@ -241,7 +286,19 @@ export async function readSessionFile(filePath: string) {
   return fs.readFile(filePath, "utf8");
 }
 
+export async function readSessionFileLines(filePath: string, onLine: (line: string) => void) {
+  const input = createReadStream(filePath, { encoding: "utf8" });
+  const lines = createInterface({ input, crlfDelay: Infinity });
+  for await (const line of lines) onLine(line);
+}
+
 async function readCache(cachePath: string): Promise<SessionCache> {
+  if (sessionCacheDatabasePath) {
+    return {
+      version: CACHE_VERSION,
+      sessions: await readSessionCache(cachePath)
+    };
+  }
   try {
     const cache = JSON.parse(await fs.readFile(cachePath, "utf8")) as SessionCache;
     if (cache.version !== CACHE_VERSION || !cache.sessions) return emptyCache();
@@ -252,6 +309,18 @@ async function readCache(cachePath: string): Promise<SessionCache> {
 }
 
 async function writeCache(cachePath: string, cache: SessionCache) {
+  if (sessionCacheDatabasePath) {
+    const entries: Record<string, SessionCacheEntry> = Object.fromEntries(
+      Object.entries(cache.sessions).map(([filePath, entry]) => [filePath, {
+        filePath,
+        mtimeMs: entry.mtimeMs,
+        size: entry.size,
+        session: entry.session
+      }])
+    );
+    await replaceSessionCache(cachePath, entries);
+    return;
+  }
   await fs.mkdir(path.dirname(cachePath), { recursive: true });
   const previous = cacheWriteQueues.get(cachePath)?.catch(() => undefined) || Promise.resolve();
   const next = previous.then(() => writeJsonAtomic(cachePath, JSON.stringify(cache)));

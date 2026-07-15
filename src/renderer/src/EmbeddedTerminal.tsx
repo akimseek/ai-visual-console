@@ -18,6 +18,7 @@ type EmbeddedTerminalProps = {
   cliArgs?: string;
   title: string;
   active: boolean;
+  focusRequest?: number;
   requestedInputMode?: "composer" | "terminal";
   onReady?: (terminalId?: string) => void;
   onExit?: (exitCode: number) => void;
@@ -44,6 +45,7 @@ export function EmbeddedTerminal({
   prompt,
   cliArgs,
   active,
+  focusRequest,
   requestedInputMode,
   onReady,
   onExit,
@@ -304,7 +306,7 @@ export function EmbeddedTerminal({
       if (inputMode === "composer" && composerVisible) composerRef.current?.focus();
       else terminalRef.current?.focus();
     }, 0);
-  }, [active, inputMode, composerVisible]);
+  }, [active, inputMode, composerVisible, focusRequest]);
 
   useEffect(() => {
     lastSubmittedTextRef.current = lastSubmittedText;

@@ -1,6 +1,11 @@
 import fs from "node:fs/promises";
-import path from "node:path";
 import type { CodexSession, SessionBranchMetadata, SessionMetadata } from "./types";
+import {
+  importSessionMetadata,
+  readSessionMetadata,
+  readSessionMetadataMap,
+  saveSessionMetadata
+} from "./appDatabase";
 
 type MetadataStore = {
   version: number;
@@ -9,20 +14,23 @@ type MetadataStore = {
 
 const STORE_VERSION = 1;
 let metadataPath = "";
-let metadataQueue = Promise.resolve();
+let migrationPromise: Promise<void> | null = null;
 
 export function setSessionMetadataPath(filePath: string) {
   metadataPath = filePath;
+  migrationPromise = null;
 }
 
 export async function applySessionMetadata(targetId: string, session: CodexSession): Promise<CodexSession> {
-  const metadata = await getSessionMetadata(targetId, session.id);
+  await ensureLegacyMetadataMigrated();
+  const metadata = await readSessionMetadata(targetId, session.id);
   return attachMetadata(session, metadata);
 }
 
 export async function applySessionMetadataList(targetId: string, sessions: CodexSession[]): Promise<CodexSession[]> {
-  const store = await readStore();
-  return sessions.map((session) => attachMetadata(session, store.sessions[metadataKey(targetId, session.id)]));
+  await ensureLegacyMetadataMigrated();
+  const metadata = await readSessionMetadataMap(targetId);
+  return sessions.map((session) => attachMetadata(session, metadata[session.id]));
 }
 
 export async function setSessionBranchMetadata(
@@ -30,23 +38,15 @@ export async function setSessionBranchMetadata(
   sessionId: string,
   branch: SessionBranchMetadata
 ): Promise<SessionMetadata> {
-  return updateStore((store) => {
-    const key = metadataKey(targetId, sessionId);
-    const current = store.sessions[key] || {};
-    const next = normalizeMetadata({
-      ...current,
-      branch: normalizeBranch(branch),
-      updatedAt: new Date().toISOString()
-    });
-
-    store.sessions[key] = next;
-    return { store, metadata: next };
+  await ensureLegacyMetadataMigrated();
+  const current = await readSessionMetadata(targetId, sessionId);
+  const next = normalizeMetadata({
+    ...current,
+    branch: normalizeBranch(branch),
+    updatedAt: new Date().toISOString()
   });
-}
-
-async function getSessionMetadata(targetId: string, sessionId: string): Promise<SessionMetadata> {
-  const store = await readStore();
-  return store.sessions[metadataKey(targetId, sessionId)] || {};
+  await saveSessionMetadata(targetId, sessionId, next);
+  return next;
 }
 
 function attachMetadata(session: CodexSession, metadata?: SessionMetadata): CodexSession {
@@ -78,11 +78,7 @@ function isEmptyMetadata(metadata: SessionMetadata) {
   return !metadata.branch;
 }
 
-function metadataKey(targetId: string, sessionId: string) {
-  return JSON.stringify([targetId, sessionId]);
-}
-
-async function readStore(): Promise<MetadataStore> {
+async function readLegacyStore(): Promise<MetadataStore> {
   if (!metadataPath) return emptyStore();
   try {
     const store = JSON.parse(await fs.readFile(metadataPath, "utf8")) as MetadataStore;
@@ -95,20 +91,31 @@ async function readStore(): Promise<MetadataStore> {
   }
 }
 
-async function updateStore(updater: (store: MetadataStore) => { store: MetadataStore; metadata: SessionMetadata }) {
-  if (!metadataPath) return {};
+async function ensureLegacyMetadataMigrated() {
+  if (!migrationPromise) migrationPromise = migrateLegacyMetadata();
+  await migrationPromise;
+}
 
-  let result: SessionMetadata = {};
-  metadataQueue = metadataQueue.catch(() => undefined).then(async () => {
-    const next = updater(await readStore());
-    result = next.metadata;
-    await fs.mkdir(path.dirname(metadataPath), { recursive: true });
-    const tempPath = `${metadataPath}.${process.pid}.${Date.now()}.tmp`;
-    await fs.writeFile(tempPath, JSON.stringify(next.store, null, 2), "utf8");
-    await fs.rename(tempPath, metadataPath);
+async function migrateLegacyMetadata() {
+  const store = await readLegacyStore();
+  const entries = Object.entries(store.sessions).flatMap(([key, metadata]) => {
+    const identity = parseLegacyMetadataKey(key);
+    return identity ? [{ ...identity, metadata: normalizeMetadata(metadata) }] : [];
   });
-  await metadataQueue;
-  return result;
+  await importSessionMetadata(entries);
+  if (!metadataPath || entries.length === 0) return;
+  await fs.rename(metadataPath, `${metadataPath}.migrated`).catch(() => undefined);
+}
+
+function parseLegacyMetadataKey(key: string) {
+  try {
+    const value = JSON.parse(key) as unknown;
+    if (!Array.isArray(value) || value.length !== 2) return null;
+    const [targetId, sessionId] = value;
+    return typeof targetId === "string" && typeof sessionId === "string" ? { targetId, sessionId } : null;
+  } catch {
+    return null;
+  }
 }
 
 function emptyStore(): MetadataStore {

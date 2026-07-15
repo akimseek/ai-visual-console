@@ -74,6 +74,11 @@ export function prepareVendorDraftForSave(draft: ApiVendorDraft): ApiVendorDraft
   };
 }
 
+export function shouldApplyVendorConfigAfterSave(draft: ApiVendorDraft, existingVendors: ApiVendor[]) {
+  return draft.writeCommonConfig === true
+    || Boolean(draft.id && existingVendors.some((vendor) => vendor.id === draft.id && vendor.enabled));
+}
+
 export function validateVendorDraft(draft: ApiVendorDraft, existingVendors: ApiVendor[] = []): VendorFieldErrors {
   const errors: VendorFieldErrors = {};
   const name = draft.name.trim();

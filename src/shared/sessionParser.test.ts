@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  createSessionContentParser,
   extractMessage,
   extractModelStatus,
   extractUsage,
@@ -26,6 +27,16 @@ describe("safeJsonParse", () => {
 });
 
 describe("parseSessionContent", () => {
+  it("支持逐行解析完整会话", () => {
+    const parser = createSessionContentParser(FILE);
+    parser.push(JSON.stringify({ type: "session_meta", payload: { id: VALID_ID, cwd: "/work" } }));
+    parser.push(JSON.stringify({ type: "event_msg", payload: { type: "user_message", message: "流式加载" } }));
+    parser.push(JSON.stringify({ type: "event_msg", payload: { type: "agent_message", message: "完成" } }));
+
+    const session = parser.finish();
+    expect(session).toMatchObject({ id: VALID_ID, cwd: "/work", title: "流式加载", messageCount: 2 });
+  });
+
   it("解析 session_meta 与对话，并用首条用户消息作标题", () => {
     const content = jsonl(
       { type: "session_meta", timestamp: "2026-01-02T03:04:05Z", payload: { id: VALID_ID, cwd: "/work", cli_version: "1.2.3" } },

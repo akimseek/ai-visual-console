@@ -3,10 +3,11 @@ import {
   buildVendorConfigTemplateFromExisting,
   buildVendorDraft,
   renderVendorConfigPreview,
+  shouldApplyVendorConfigAfterSave,
   toVendorConfigTemplate,
   validateVendorDraft
 } from "./vendorConfig";
-import type { ApiVendorConfigTemplate } from "./types";
+import type { ApiVendor, ApiVendorConfigTemplate } from "./types";
 
 const DRAFT = buildVendorDraft({
   providerId: "codex",
@@ -46,6 +47,29 @@ describe("validateVendorDraft", () => {
 
   it("合法草稿无错误", () => {
     expect(validateVendorDraft(DRAFT)).toEqual({});
+  });
+});
+
+describe("shouldApplyVendorConfigAfterSave", () => {
+  it("已启用供应商即使未勾选写入通用配置，编辑保存也会重新应用配置", () => {
+    const enabledVendor: ApiVendor = {
+      id: "vendor-1",
+      providerId: "codex",
+      name: "MyVendor",
+      apiKey: "old-key",
+      apiBaseUrl: "https://old.example.com",
+      configs: [],
+      enabled: true,
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z"
+    };
+
+    expect(shouldApplyVendorConfigAfterSave({ ...DRAFT, id: enabledVendor.id }, [enabledVendor])).toBe(true);
+  });
+
+  it("未启用供应商仍由写入通用配置选项决定是否立即应用", () => {
+    expect(shouldApplyVendorConfigAfterSave(DRAFT, [])).toBe(false);
+    expect(shouldApplyVendorConfigAfterSave({ ...DRAFT, writeCommonConfig: true }, [])).toBe(true);
   });
 });
 

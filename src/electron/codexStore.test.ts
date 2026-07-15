@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { deleteSession, purgeSession, setSessionCacheRoot } from "./codexStore";
+import { deleteSession, deleteSessions, getCachePath, purgeSession, removeSessionsFromCache, setSessionCacheRoot } from "./codexStore";
 
 // D1 回归：本地删除/彻底删除接受渲染层提供的 filePath 快路径，
 // 但必须验证它落在 sessions / 回收站目录内，且文件确实属于该 sessionId。
@@ -61,6 +61,43 @@ describe("deleteSession 快路径", () => {
     const source = await writeRollout(path.join(codexHome, "sessions"), "rollout-b.jsonl", "other-id");
     await expect(deleteSession(SESSION_ID, source)).rejects.toThrow();
     expect(await exists(source)).toBe(true);
+  });
+});
+
+describe("deleteSessions 批量路径", () => {
+  it("一次移动多个会话到回收站", async () => {
+    const sessionsDir = path.join(codexHome, "sessions", "2026");
+    const first = await writeRollout(sessionsDir, "rollout-batch-a.jsonl", SESSION_ID);
+    const secondId = "66666666-7777-8888-9999-000000000000";
+    const second = await writeRollout(sessionsDir, "rollout-batch-b.jsonl", secondId);
+
+    const processed = await deleteSessions([
+      { id: SESSION_ID, filePath: first },
+      { id: secondId, filePath: second }
+    ]);
+
+    expect(processed).toHaveLength(2);
+    expect(await exists(first)).toBe(false);
+    expect(await exists(second)).toBe(false);
+    expect(await Promise.all(processed.map((session) => exists(session.movedTo)))).toEqual([true, true]);
+  });
+
+  it("批量移除缓存记录时保留未选中的会话", async () => {
+    const cachePath = getCachePath();
+    await fs.mkdir(path.dirname(cachePath), { recursive: true });
+    await fs.writeFile(cachePath, JSON.stringify({
+      version: 4,
+      sessions: {
+        "/a.jsonl": { mtimeMs: 1, size: 1, session: {} },
+        "/b.jsonl": { mtimeMs: 1, size: 1, session: {} },
+        "/keep.jsonl": { mtimeMs: 1, size: 1, session: {} }
+      }
+    }), "utf8");
+
+    await removeSessionsFromCache(cachePath, ["/a.jsonl", "/b.jsonl"]);
+
+    const cache = JSON.parse(await fs.readFile(cachePath, "utf8")) as { sessions: Record<string, unknown> };
+    expect(Object.keys(cache.sessions)).toEqual(["/keep.jsonl"]);
   });
 });
 

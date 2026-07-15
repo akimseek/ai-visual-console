@@ -1740,6 +1740,12 @@ select {
   min-width: 0;
 }
 
+.notice-toast-error {
+  border-color: #efbcbc;
+  background: #fff2f2;
+  color: #a63838;
+}
+
 .notice-toast-actionable {
   max-width: min(520px, calc(100vw - 40px));
   pointer-events: auto;

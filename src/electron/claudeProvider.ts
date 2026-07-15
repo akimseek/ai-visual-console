@@ -187,16 +187,13 @@ async function mutateClaudeSessionsBatch(
   return measure(`sessions.${view === "trash" ? "purge" : "delete"}.batch.${targetId}`, async () => {
     if (sessions.length === 0) return { processed: [] };
     const context = await resolveClaudeTargetContext(targetId);
-    const processed: SessionMutationEntry[] = [];
-
-    for (const sessionRef of sessions) {
+    const processed = await Promise.all(sessions.map(async (sessionRef): Promise<SessionMutationEntry> => {
       const session = await getClaudeSessionForMutation(targetId, context, sessionRef.id, view, sessionRef);
       if (view === "trash") {
-        processed.push({ ...sessionRef, filePath: session.filePath, deleted: session.filePath });
-      } else {
-        processed.push({ ...sessionRef, filePath: session.filePath, movedTo: buildClaudeTrashPath(context, session.filePath) });
+        return { ...sessionRef, filePath: session.filePath, deleted: session.filePath };
       }
-    }
+      return { ...sessionRef, filePath: session.filePath, movedTo: buildClaudeTrashPath(context, session.filePath) };
+    }));
 
     if (context.kind === "wsl") {
       const script = processed

@@ -5,6 +5,7 @@ import {
   buildVendorDraft,
   createEmptyVendorDraft,
   prepareVendorDraftForSave,
+  shouldApplyVendorConfigAfterSave,
   validateVendorDraft,
   vendorToDraft,
   type ApiVendorDraft,
@@ -76,7 +77,8 @@ export function useVendors({
     setVendorFieldErrors({});
     setVendorMessage("");
     try {
-      const shouldApplyConfig = vendorDraft.writeCommonConfig === true;
+      const wasEnabled = Boolean(vendorDraft.id && vendors.some((vendor) => vendor.id === vendorDraft.id && vendor.enabled));
+      const shouldApplyConfig = shouldApplyVendorConfigAfterSave(vendorDraft, vendors);
       const saved = await window.codexConsole.saveApiVendor(prepareVendorDraftForSave(vendorDraft));
       if (shouldApplyConfig) {
         await window.codexConsole.enableApiVendor({
@@ -89,7 +91,9 @@ export function useVendors({
       setVendorDraft(vendorToDraft(list.find((vendor) => vendor.id === saved.id) || saved));
       setVendorManagerMode("list");
       const encryptionAvailable = await window.codexConsole.isApiKeyEncryptionAvailable().catch(() => true);
-      const baseMessage = shouldApplyConfig ? "供应商已保存并启用。" : "供应商已保存。";
+      const baseMessage = wasEnabled
+        ? "供应商已保存并更新当前配置。"
+        : shouldApplyConfig ? "供应商已保存并启用。" : "供应商已保存。";
       setVendorMessage(
         encryptionAvailable
           ? baseMessage

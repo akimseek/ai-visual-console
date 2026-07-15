@@ -97,6 +97,7 @@ type SearchState = {
 };
 type NoticeState = {
   message: string;
+  tone?: "success" | "error";
   actionLabel?: string;
   onAction?: () => void;
 };
@@ -141,6 +142,7 @@ export function App() {
   const [searchState, setSearchState] = useState<SearchState | null>(null);
   const [branchPanel, setBranchPanel] = useState<BranchPanelState | null>(null);
   const [workspaceBusyMessage, setWorkspaceBusyMessage] = useState("");
+  const [workspaceFocusRequest, setWorkspaceFocusRequest] = useState(0);
   const [usageDetailsOpen, setUsageDetailsOpen] = useState(false);
   const [openAppMenu, setOpenAppMenu] = useState("");
   const [systemTerminalOpen, setSystemTerminalOpen] = useState(false);
@@ -150,8 +152,12 @@ export function App() {
   const providerIdRef = useRef<AiProviderId | "">("");
   const usageDetailsRef = useRef<HTMLDivElement | null>(null);
 
-  function setNotice(message: string, action?: { label: string; onClick: () => void }) {
-    setNoticeState(message ? { message, actionLabel: action?.label, onAction: action?.onClick } : null);
+  function setNotice(
+    message: string,
+    action?: { label: string; onClick: () => void },
+    tone: NoticeState["tone"] = "success"
+  ) {
+    setNoticeState(message ? { message, tone, actionLabel: action?.label, onAction: action?.onClick } : null);
   }
 
   useEffect(() => {
@@ -468,7 +474,7 @@ export function App() {
         applySessionSnapshot(targetId, session);
       })
       .catch((loadError: any) => {
-        if (!cancelled) setError(loadError?.message || "加载完整会话失败。");
+        if (!cancelled) setNotice(loadError?.message || "加载完整会话失败。", undefined, "error");
       })
       .finally(() => {
         if (!cancelled) setSelectedSessionLoading(false);
@@ -1095,9 +1101,7 @@ export function App() {
     if (!confirmed) return;
 
     await runWorkspaceAction("正在批量删除会话...", async () => {
-      for (const session of items) {
-        await closeOpenSessionTerminal(session);
-      }
+      await Promise.all(items.map((session) => closeOpenSessionTerminal(session)));
       await window.codexConsole.deleteSessions(
         targetId,
         items.map((session) => ({ id: session.id, filePath: session.filePath }))
@@ -1138,9 +1142,7 @@ export function App() {
     if (!confirmed) return;
 
     await runWorkspaceAction("正在批量彻底删除会话...", async () => {
-      for (const session of items) {
-        await closeOpenSessionTerminal(session);
-      }
+      await Promise.all(items.map((session) => closeOpenSessionTerminal(session)));
       await window.codexConsole.purgeSessions(
         targetId,
         items.map((session) => ({ id: session.id, filePath: session.filePath }))
@@ -1234,6 +1236,7 @@ export function App() {
       setError(actionError?.message || "操作失败。");
     } finally {
       setWorkspaceBusyMessage("");
+      setWorkspaceFocusRequest((current) => current + 1);
       window.setTimeout(() => focusActiveWorkspaceInput(workspaceRef.current), 0);
     }
   }
@@ -1396,6 +1399,7 @@ export function App() {
                       cliArgs={tab.cliArgs}
                       title={tab.session?.title || tab.title}
                       active={tab.key === activeTabKey}
+                      focusRequest={workspaceFocusRequest}
                       requestedInputMode={terminalInputStatesByTabKey[tab.key]?.mode}
                       onReady={(terminalId) => handleTerminalReady(tab.key, terminalId)}
                       onExit={(exitCode) => handleTerminalExit(tab.key, exitCode)}

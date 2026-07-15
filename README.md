@@ -74,6 +74,13 @@ pnpm dist:linux
 - `scripts` - 辅助脚本
 - `resources` - 应用图标与打包资源
 
+## 本地数据
+
+- 供应商管理数据、会话索引缓存、分支元数据、工作目录预设和压缩提示词保存在 Electron `userData/app.db`
+- API Key 会在系统支持时通过 Electron `safeStorage` 加密后写入 SQLite
+- 原始 AI 会话仍保存在各 CLI 自己的 JSONL 文件中，SQLite 只保存可重建的索引缓存
+- CLI 原生配置文件仍写入对应运行环境的 `~/.codex`、`~/.gemini`、`~/.claude`
+
 ## 新增 AI Provider
 
 新增 Provider 前请先阅读：

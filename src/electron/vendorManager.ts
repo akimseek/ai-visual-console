@@ -1,10 +1,12 @@
 import { safeStorage } from "electron";
 import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
+import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import type {
   ApiVendor,
+  ApiVendorConfigTemplate,
   ApiVendorConfigReadRequest,
   ApiVendorConfigReadResult,
   ApiVendorEnableRequest,
@@ -20,17 +22,60 @@ type StoredApiVendor = Omit<ApiVendor, "apiKey"> & {
   apiKeyEncrypted?: boolean;
 };
 
-type VendorStore = {
-  vendors?: StoredApiVendor[];
+type SqliteDatabase = {
+  exec(sql: string): void;
+  prepare(sql: string): SqliteStatement;
+  close(): void;
 };
 
-let vendorsPath = "";
+type SqliteStatement = {
+  all(...params: unknown[]): unknown[];
+  get(...params: unknown[]): unknown;
+  run(...params: unknown[]): { changes: number; lastInsertRowid: number | bigint };
+};
+
+type SqliteModule = {
+  DatabaseSync: new (location: string) => SqliteDatabase;
+};
+
+type VendorRow = {
+  id: string;
+  provider_id: ApiVendor["providerId"];
+  name: string;
+  api_key: string;
+  api_key_encrypted: number;
+  api_base_url: string;
+  write_common_config: number;
+  enabled: number | null;
+  created_at: string;
+  updated_at: string;
+  last_enabled_at: string | null;
+};
+
+type VendorConfigRow = {
+  id: string;
+  vendor_id: string;
+  provider_id: ApiVendor["providerId"];
+  label: string | null;
+  enabled: number;
+  target_path: string;
+  content: string;
+  sort_order: number;
+};
+
+let vendorDbPath = "";
 let vendorBackupRoot = "";
 let vendorQueue = Promise.resolve();
+let vendorDb: SqliteDatabase | null = null;
 const CODEX_DEFAULT_MODEL_PROVIDER = "akim";
+const requireFromHere = createRequire(__filename);
 
-export function setVendorStorePath(filePath: string, backupRoot: string) {
-  vendorsPath = filePath;
+export function setVendorDatabasePath(filePath: string, backupRoot: string) {
+  if (vendorDbPath !== filePath && vendorDb) {
+    vendorDb.close();
+    vendorDb = null;
+  }
+  vendorDbPath = filePath;
   vendorBackupRoot = backupRoot;
 }
 
@@ -41,11 +86,11 @@ export function isApiKeyEncryptionAvailable() {
 }
 
 export async function listApiVendors(target?: CodexTarget | null): Promise<ApiVendor[]> {
-  const store = await readVendorStore();
-  const stored = (store.vendors || []).map(decodeVendor);
-  if (!target) return sortVendors(stored);
-
-  return sortVendors(stored.filter((vendor) => vendor.providerId === target.provider));
+  const db = await getVendorDb();
+  const rows = target
+    ? db.prepare("SELECT * FROM api_vendors WHERE provider_id = ? ORDER BY updated_at DESC").all(target.provider)
+    : db.prepare("SELECT * FROM api_vendors ORDER BY updated_at DESC").all();
+  return (rows as VendorRow[]).map((row) => rowToVendor(db, row));
 }
 
 export async function saveApiVendor(input: ApiVendorInput): Promise<ApiVendor> {
@@ -53,12 +98,12 @@ export async function saveApiVendor(input: ApiVendorInput): Promise<ApiVendor> {
   const now = new Date().toISOString();
   let saved: ApiVendor | null = null;
 
-  await updateVendorStore((store) => {
-    const vendors = store.vendors || [];
-    const existing = normalized.id ? vendors.find((vendor) => vendor.id === normalized.id) : null;
-    const duplicate = vendors
-      .map(decodeVendor)
-      .find((vendor) => vendor.id !== existing?.id && sameVendorName(vendor.name, normalized.name));
+  await updateVendorDb((db) => {
+    const existing = normalized.id
+      ? db.prepare("SELECT * FROM api_vendors WHERE id = ?").get(normalized.id) as VendorRow | undefined
+      : undefined;
+    const duplicate = db.prepare("SELECT id FROM api_vendors WHERE name_norm = ? AND id <> ?")
+      .get(normalizeVendorName(normalized.name), existing?.id || "") as { id: string } | undefined;
     if (duplicate) throw new Error(`供应商名称已存在：${normalized.name}`);
     const next: ApiVendor = {
       id: existing?.id || crypto.randomUUID(),
@@ -68,27 +113,69 @@ export async function saveApiVendor(input: ApiVendorInput): Promise<ApiVendor> {
       apiBaseUrl: normalized.apiBaseUrl,
       writeCommonConfig: normalized.writeCommonConfig,
       configs: normalized.configs,
-      enabled: existing?.enabled,
-      createdAt: existing?.createdAt || now,
+      enabled: existing?.enabled === 1,
+      createdAt: existing?.created_at || now,
       updatedAt: now,
-      lastEnabledAt: existing?.lastEnabledAt
+      lastEnabledAt: existing?.last_enabled_at || undefined
     };
     saved = next;
-    return {
-      vendors: [
-        encodeVendor(next),
-        ...vendors.filter((vendor) => vendor.id !== next.id)
-      ]
-    };
+    const stored = encodeVendor(next);
+    db.prepare(`
+      INSERT INTO api_vendors (
+        id, provider_id, name, name_norm, api_key, api_key_encrypted, api_base_url,
+        write_common_config, enabled, created_at, updated_at, last_enabled_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(id) DO UPDATE SET
+        provider_id = excluded.provider_id,
+        name = excluded.name,
+        name_norm = excluded.name_norm,
+        api_key = excluded.api_key,
+        api_key_encrypted = excluded.api_key_encrypted,
+        api_base_url = excluded.api_base_url,
+        write_common_config = excluded.write_common_config,
+        enabled = excluded.enabled,
+        updated_at = excluded.updated_at,
+        last_enabled_at = excluded.last_enabled_at
+    `).run(
+      stored.id,
+      stored.providerId,
+      stored.name,
+      normalizeVendorName(stored.name),
+      stored.apiKey,
+      stored.apiKeyEncrypted ? 1 : 0,
+      stored.apiBaseUrl,
+      stored.writeCommonConfig ? 1 : 0,
+      stored.enabled ? 1 : 0,
+      stored.createdAt,
+      stored.updatedAt,
+      stored.lastEnabledAt || null
+    );
+    db.prepare("DELETE FROM api_vendor_configs WHERE vendor_id = ?").run(stored.id);
+    stored.configs.forEach((config, index) => {
+      db.prepare(`
+        INSERT INTO api_vendor_configs (
+          id, vendor_id, provider_id, label, enabled, target_path, content, sort_order
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        config.id || crypto.randomUUID(),
+        stored.id,
+        config.providerId,
+        config.label || null,
+        config.enabled ? 1 : 0,
+        config.targetPath,
+        config.content,
+        index
+      );
+    });
   });
 
   return saved!;
 }
 
 export async function deleteApiVendor(vendorId: string) {
-  await updateVendorStore((store) => ({
-    vendors: (store.vendors || []).filter((vendor) => vendor.id !== vendorId)
-  }));
+  await updateVendorDb((db) => {
+    db.prepare("DELETE FROM api_vendors WHERE id = ?").run(vendorId);
+  });
   return { deleted: true };
 }
 
@@ -116,14 +203,11 @@ export async function enableApiVendor(request: ApiVendorEnableRequest, target?: 
     written.push(config.targetPath);
   }
 
-  await updateVendorStore((store) => ({
-    vendors: (store.vendors || []).map((item) => ({
-      ...item,
-      enabled: item.id === vendor.id,
-      lastEnabledAt: item.id === vendor.id ? enabledAt : item.lastEnabledAt,
-      updatedAt: item.id === vendor.id ? enabledAt : item.updatedAt
-    }))
-  }));
+  await updateVendorDb((db) => {
+    db.prepare("UPDATE api_vendors SET enabled = 0").run();
+    db.prepare("UPDATE api_vendors SET enabled = 1, last_enabled_at = ?, updated_at = ? WHERE id = ?")
+      .run(enabledAt, enabledAt, vendor.id);
+  });
 
   return { vendorId: vendor.id, written, backupRoot };
 }
@@ -192,14 +276,6 @@ function decodeVendor(vendor: StoredApiVendor): ApiVendor {
   } catch {
     return { ...vendor, apiKey: "" };
   }
-}
-
-function sortVendors(vendors: ApiVendor[]) {
-  return [...vendors].sort((left, right) => Date.parse(right.updatedAt) - Date.parse(left.updatedAt));
-}
-
-function sameVendorName(left: string, right: string) {
-  return normalizeVendorName(left) === normalizeVendorName(right);
 }
 
 function normalizeVendorName(value: string) {
@@ -340,26 +416,111 @@ function getWslExe() {
   return process.platform === "win32" ? "wsl.exe" : "wsl";
 }
 
-async function readVendorStore(): Promise<VendorStore> {
-  if (!vendorsPath) return {};
+async function getVendorDb() {
+  if (!vendorDbPath) throw new Error("供应商数据库路径未初始化。");
+  if (vendorDb) return vendorDb;
+  await fs.mkdir(path.dirname(vendorDbPath), { recursive: true });
+  const { DatabaseSync } = loadSqlite();
+  vendorDb = new DatabaseSync(vendorDbPath);
+  initializeVendorDb(vendorDb);
+  return vendorDb;
+}
+
+function loadSqlite(): SqliteModule {
   try {
-    return JSON.parse(await fs.readFile(vendorsPath, "utf8")) as VendorStore;
+    return requireFromHere("node:sqlite") as SqliteModule;
   } catch (error: any) {
-    if (error?.code === "ENOENT") return {};
-    return {};
+    throw new Error(
+      `当前 Electron/Node 运行时不支持 node:sqlite，无法使用供应商数据库：${error?.message || error}`,
+      { cause: error }
+    );
   }
 }
 
-async function updateVendorStore(updater: (store: VendorStore) => VendorStore) {
-  if (!vendorsPath) return;
+function initializeVendorDb(db: SqliteDatabase) {
+  db.exec(`
+    PRAGMA journal_mode = WAL;
+    PRAGMA busy_timeout = 5000;
+    PRAGMA foreign_keys = ON;
+
+    CREATE TABLE IF NOT EXISTS api_vendors (
+      id TEXT PRIMARY KEY,
+      provider_id TEXT NOT NULL,
+      name TEXT NOT NULL,
+      name_norm TEXT NOT NULL,
+      api_key TEXT NOT NULL,
+      api_key_encrypted INTEGER NOT NULL DEFAULT 0,
+      api_base_url TEXT NOT NULL,
+      write_common_config INTEGER NOT NULL DEFAULT 0,
+      enabled INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      last_enabled_at TEXT
+    );
+
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_api_vendors_name_norm
+      ON api_vendors(name_norm);
+
+    CREATE TABLE IF NOT EXISTS api_vendor_configs (
+      id TEXT PRIMARY KEY,
+      vendor_id TEXT NOT NULL,
+      provider_id TEXT NOT NULL,
+      label TEXT,
+      enabled INTEGER NOT NULL DEFAULT 1,
+      target_path TEXT NOT NULL,
+      content TEXT NOT NULL,
+      sort_order INTEGER NOT NULL DEFAULT 0,
+      FOREIGN KEY (vendor_id) REFERENCES api_vendors(id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_api_vendor_configs_vendor_id
+      ON api_vendor_configs(vendor_id, sort_order);
+  `);
+}
+
+async function updateVendorDb(updater: (db: SqliteDatabase) => void) {
   vendorQueue = vendorQueue.catch(() => undefined).then(async () => {
-    const store = updater(await readVendorStore());
-    await fs.mkdir(path.dirname(vendorsPath), { recursive: true });
-    const tempPath = `${vendorsPath}.${process.pid}.${Date.now()}.tmp`;
-    await fs.writeFile(tempPath, JSON.stringify(store, null, 2), "utf8");
-    await fs.rename(tempPath, vendorsPath);
+    const db = await getVendorDb();
+    db.exec("BEGIN IMMEDIATE");
+    try {
+      updater(db);
+      db.exec("COMMIT");
+    } catch (error) {
+      db.exec("ROLLBACK");
+      throw error;
+    }
   });
   await vendorQueue;
+}
+
+function rowToVendor(db: SqliteDatabase, row: VendorRow): ApiVendor {
+  const stored: StoredApiVendor = {
+    id: row.id,
+    providerId: row.provider_id,
+    name: row.name,
+    apiKey: row.api_key,
+    apiKeyEncrypted: row.api_key_encrypted === 1,
+    apiBaseUrl: row.api_base_url,
+    writeCommonConfig: row.write_common_config === 1,
+    configs: listVendorConfigs(db, row.id),
+    enabled: row.enabled === 1,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    lastEnabledAt: row.last_enabled_at || undefined
+  };
+  return decodeVendor(stored);
+}
+
+function listVendorConfigs(db: SqliteDatabase, vendorId: string): ApiVendorConfigTemplate[] {
+  const rows = db.prepare("SELECT * FROM api_vendor_configs WHERE vendor_id = ? ORDER BY sort_order, id").all(vendorId);
+  return (rows as VendorConfigRow[]).map((row) => ({
+    id: row.id,
+    providerId: row.provider_id,
+    label: row.label || undefined,
+    enabled: row.enabled === 1,
+    targetPath: row.target_path,
+    content: row.content
+  }));
 }
 
 function safeName(value: string) {
