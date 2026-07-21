@@ -1847,6 +1847,7 @@ select {
 
 .new-session-dialog,
 .session-settings-dialog,
+.session-rename-dialog,
 .skill-manager-dialog {
   display: grid;
   width: min(560px, calc(100vw - 48px));
@@ -1894,6 +1895,8 @@ select {
 .new-session-dialog footer,
 .session-settings-dialog header,
 .session-settings-dialog footer,
+.session-rename-dialog header,
+.session-rename-dialog footer,
 .skill-manager-dialog header,
 .cli-installer-dialog header,
 .cli-installer-dialog footer,
@@ -1909,6 +1912,7 @@ select {
 
 .new-session-dialog h2,
 .session-settings-dialog h2,
+.session-rename-dialog h2,
 .skill-manager-dialog h2,
 .cli-installer-dialog h2,
 .vendor-manager-dialog h2,
@@ -1928,6 +1932,7 @@ select {
 
 .new-session-dialog header button,
 .session-settings-dialog header button,
+.session-rename-dialog header button,
 .skill-manager-dialog header button,
 .cli-installer-dialog header button,
 .vendor-manager-dialog header button,
@@ -3013,7 +3018,8 @@ select {
 
 .directory-field button,
 .new-session-dialog footer button,
-.session-settings-dialog footer button {
+.session-settings-dialog footer button,
+.session-rename-dialog footer button {
   height: 34px;
   border: 1px solid #3268d5;
   border-radius: 7px;
@@ -3057,15 +3063,52 @@ select {
 }
 
 .new-session-dialog footer,
-.session-settings-dialog footer {
+.session-settings-dialog footer,
+.session-rename-dialog footer {
   justify-content: flex-end;
 }
 
 .new-session-dialog footer .secondary,
-.session-settings-dialog footer .secondary {
+.session-settings-dialog footer .secondary,
+.session-rename-dialog footer .secondary {
   border-color: #c9d1dc;
   background: #ffffff;
   color: #2f3845;
+}
+
+.session-rename-dialog {
+  display: grid;
+  width: min(460px, calc(100vw - 48px));
+  gap: 16px;
+  border: 1px solid #d4dbe6;
+  border-radius: 8px;
+  background: #ffffff;
+  box-shadow: 0 24px 58px rgba(24, 32, 44, 0.22);
+  padding: 16px;
+}
+
+.session-rename-dialog form {
+  display: grid;
+  gap: 12px;
+}
+
+.session-rename-dialog footer {
+  display: grid;
+  grid-template-columns: auto 1fr auto auto;
+}
+
+.session-rename-source {
+  overflow: hidden;
+  margin: 0;
+  color: #68717f;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.form-field-error {
+  color: #b23838;
+  font-size: 12px;
 }
 
 .provider-status-dialog {

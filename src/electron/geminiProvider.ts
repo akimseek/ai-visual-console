@@ -89,6 +89,7 @@ export async function searchSessions(targetId: string, view: SessionView, query:
     const haystack = [
       session.id,
       session.title,
+      session.sourceTitle || "",
       session.cwd || "",
       session.model || "",
       ...session.preview.map((message) => message.text)

@@ -20,6 +20,7 @@ import type {
   OpenPathRequest,
   SessionExportFormat,
   SessionExportResult,
+  SessionMetadata,
   SystemTerminalStartRequest,
   TerminalStartParams,
   WorkspacePreset,
@@ -55,6 +56,7 @@ export type {
   InstalledSkill,
   SessionUsage,
   SessionBranchMetadata,
+  SessionMetadata,
   SessionExportFormat,
   SessionExportResult,
   OpenPathRequest,
@@ -86,6 +88,7 @@ export type CodexConsoleApi = {
   listTrashSessions: (targetId: string) => Promise<AiSession[]>;
   searchSessions: (targetId: string, view: "active" | "trash", query: string) => Promise<AiSession[]>;
   getSession: (targetId: string, sessionId: string) => Promise<AiSession>;
+  setSessionCustomTitle: (targetId: string, sessionId: string, title: string) => Promise<SessionMetadata>;
   listSessionChildren: (targetId: string, parentSessionId: string) => Promise<AiSession[]>;
   exportSession: (targetId: string, sessionId: string, format: SessionExportFormat) => Promise<SessionExportResult | null>;
   branchSession: (params: {

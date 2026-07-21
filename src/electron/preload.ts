@@ -65,6 +65,8 @@ const api = {
     ipcRenderer.invoke("codex:search-sessions", targetId, view, query) as Promise<AiSession[]>,
   getSession: (targetId: string, sessionId: string) =>
     ipcRenderer.invoke("codex:get-session", targetId, sessionId) as Promise<AiSession>,
+  setSessionCustomTitle: (targetId: string, sessionId: string, title: string) =>
+    ipcRenderer.invoke("codex:set-session-custom-title", targetId, sessionId, title) as Promise<import("./types").SessionMetadata>,
   listSessionChildren: (targetId: string, parentSessionId: string) =>
     ipcRenderer.invoke("codex:list-session-children", targetId, parentSessionId) as Promise<AiSession[]>,
   exportSession: (targetId: string, sessionId: string, format: SessionExportFormat) =>

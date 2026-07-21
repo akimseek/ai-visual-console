@@ -7,6 +7,7 @@ export type CodexMessage = {
 export type CodexSession = {
   id: string;
   title: string;
+  sourceTitle?: string;
   cwd?: string;
   createdAt?: string;
   updatedAt?: string;
@@ -70,6 +71,7 @@ export type SessionModelStatus = {
 
 export type SessionMetadata = {
   updatedAt?: string;
+  customTitle?: string;
   branch?: SessionBranchMetadata;
 };
 

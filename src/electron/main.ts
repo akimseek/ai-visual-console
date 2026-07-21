@@ -26,7 +26,7 @@ import {
 } from "./aiProviders";
 import { setSessionCacheRoot, setSessionDatabasePath } from "./codexStore";
 import { exportSessionToFile } from "./sessionExport";
-import { setSessionMetadataPath } from "./sessionMetadata";
+import { setSessionCustomTitle, setSessionMetadataPath } from "./sessionMetadata";
 import {
   deleteCompressionPrompt,
   deleteWorkspacePreset,
@@ -315,6 +315,13 @@ app.whenReady().then(() => {
   ipcMain.handle("codex:get-session", (_event, targetId: unknown, sessionId: unknown) =>
     getSession(requireString(targetId, "targetId"), requireString(sessionId, "sessionId"))
   );
+  ipcMain.handle("codex:set-session-custom-title", (_event, targetId: unknown, sessionId: unknown, title: unknown) =>
+    setSessionCustomTitle(
+      requireString(targetId, "targetId"),
+      requireString(sessionId, "sessionId"),
+      requireCustomTitle(title)
+    )
+  );
   ipcMain.handle("codex:list-session-children", (_event, targetId: unknown, parentSessionId: unknown) =>
     listSessionsByParent(requireString(targetId, "targetId"), requireString(parentSessionId, "parentSessionId"))
   );
@@ -510,6 +517,13 @@ function getLogDir() {
 function requireString(value: unknown, name: string) {
   if (typeof value !== "string" || !value.trim()) throw new Error(`参数无效：${name}`);
   return value;
+}
+
+function requireCustomTitle(value: unknown) {
+  if (typeof value !== "string") throw new Error("参数无效：title");
+  const title = value.trim();
+  if (title.length > 120) throw new Error("会话名称不能超过 120 个字符。");
+  return title;
 }
 
 function requireTerminalData(value: unknown) {

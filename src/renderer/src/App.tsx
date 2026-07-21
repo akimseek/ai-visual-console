@@ -35,6 +35,7 @@ import { SkillManagerDialog } from "./SkillManagerDialog";
 import { NewSessionDialog } from "./NewSessionDialog";
 import { SessionSettingsDialog } from "./SessionSettingsDialog";
 import { SessionDetailModal } from "./SessionDetailModal";
+import { SessionRenameDialog } from "./SessionRenameDialog";
 import { SessionContextMenu, TabContextMenu } from "./ContextMenus";
 import { StatusBar } from "./StatusBar";
 import { SessionList } from "./SessionList";
@@ -62,6 +63,9 @@ type TerminalTab = {
   useCodexCwdFlag?: boolean;
   prompt?: string;
   cliArgs?: string;
+  customTitle?: string;
+  knownSessionIds?: string[];
+  createdAt?: number;
 };
 
 type TerminalInputState = {
@@ -133,9 +137,14 @@ export function App() {
   const terminalTabsRef = useRef<HTMLDivElement | null>(null);
   const [newSessionDialogOpen, setNewSessionDialogOpen] = useState(false);
   const [newSessionCwd, setNewSessionCwd] = useState(DEFAULT_NEW_SESSION_CWD);
+  const [newSessionTitle, setNewSessionTitle] = useState("");
   const [newSessionPrompt, setNewSessionPrompt] = useState("");
   const [newSessionCliArgs, setNewSessionCliArgs] = useState("");
   const [pendingResumeSession, setPendingResumeSession] = useState<PendingResumeSession | null>(null);
+  const [renameSession, setRenameSession] = useState<AiSession | null>(null);
+  const [renameDraft, setRenameDraft] = useState("");
+  const [renameError, setRenameError] = useState("");
+  const [renameBusy, setRenameBusy] = useState(false);
   const [sessionSettingsOpen, setSessionSettingsOpen] = useState(false);
   const [providerStatusOpen, setProviderStatusOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
@@ -149,6 +158,7 @@ export function App() {
   const [systemTerminalMinimized, setSystemTerminalMinimized] = useState(false);
   const [systemTerminalCreateSignal, setSystemTerminalCreateSignal] = useState(0);
   const contextReminderKeys = useRef(new Set<string>());
+  const pendingNewSessionTitleTabs = useRef(new Set<string>());
   const providerIdRef = useRef<AiProviderId | "">("");
   const usageDetailsRef = useRef<HTMLDivElement | null>(null);
 
@@ -701,6 +711,39 @@ export function App() {
       )
     );
     setSelectedSessionDetails((current) => (current?.id === session.id ? session : current));
+    setDetailDialogSession((current) => (current?.id === session.id ? session : current));
+  }
+
+  function withCustomTitle(session: AiSession, metadata: AiSession["metadata"]): AiSession {
+    const sourceTitle = session.sourceTitle || session.title;
+    const hasMetadata = Boolean(metadata?.customTitle || metadata?.branch);
+    return {
+      ...session,
+      title: metadata?.customTitle || sourceTitle,
+      sourceTitle: metadata?.customTitle ? sourceTitle : undefined,
+      metadata: hasMetadata ? metadata : undefined
+    };
+  }
+
+  function applyCustomTitle(nextTargetId: string, sessionId: string, metadata: AiSession["metadata"]) {
+    const rename = (session: AiSession) => (session.id === sessionId ? withCustomTitle(session, metadata) : session);
+    updateCachedSessions(nextTargetId, "active", (current) => current.map(rename));
+    updateCachedSessions(nextTargetId, "trash", (current) => current.map(rename));
+    setOpenTabs((current) => current.map((tab) =>
+      tab.targetId === nextTargetId && tab.session?.id === sessionId
+        ? { ...tab, session: withCustomTitle(tab.session, metadata) }
+        : tab
+    ));
+    setSelectedSessionDetails((current) => (current?.id === sessionId ? withCustomTitle(current, metadata) : current));
+    setDetailDialogSession((current) => (current?.id === sessionId ? withCustomTitle(current, metadata) : current));
+    setBranchPanel((current) => current
+      ? {
+          ...current,
+          parent: current.parent?.id === sessionId ? withCustomTitle(current.parent, metadata) : current.parent,
+          children: current.children.map(rename)
+        }
+      : current
+    );
   }
 
   async function refreshSessionSnapshot(nextTargetId: string, sessionId: string) {
@@ -794,6 +837,7 @@ export function App() {
       if (!exists) {
         setPendingResumeSession({ session, missingCwd: sessionCwd });
         setNewSessionCwd(DEFAULT_NEW_SESSION_CWD);
+        setNewSessionTitle("");
         setNewSessionPrompt("");
         setNewSessionCliArgs("");
         setNewSessionDialogOpen(true);
@@ -832,6 +876,40 @@ export function App() {
     });
   }
 
+  function openRenameSession(session: AiSession) {
+    setRenameSession(session);
+    setRenameDraft(session.metadata?.customTitle || session.title);
+    setRenameError("");
+  }
+
+  function closeRenameSession() {
+    if (renameBusy) return;
+    setRenameSession(null);
+    setRenameError("");
+  }
+
+  async function saveCustomSessionTitle(value = renameDraft) {
+    if (!renameSession) return;
+    const title = value.trim();
+    if (!title && value !== "") {
+      setRenameError("请输入会话名称。");
+      return;
+    }
+
+    setRenameBusy(true);
+    setRenameError("");
+    try {
+      const metadata = await window.codexConsole.setSessionCustomTitle(targetId, renameSession.id, title);
+      applyCustomTitle(targetId, renameSession.id, metadata);
+      setNotice(title ? "会话名称已保存。" : "已恢复自动标题。");
+      setRenameSession(null);
+    } catch (saveError: any) {
+      setRenameError(saveError?.message || "保存会话名称失败。");
+    } finally {
+      setRenameBusy(false);
+    }
+  }
+
   async function chooseNewSessionDirectory() {
     const result = await window.codexConsole.chooseDirectory();
     if (!result.filePath) return;
@@ -841,6 +919,7 @@ export function App() {
   function resetNewSessionDialog() {
     setPendingResumeSession(null);
     setNewSessionCwd(DEFAULT_NEW_SESSION_CWD);
+    setNewSessionTitle("");
     setNewSessionPrompt("");
     setNewSessionCliArgs("");
     setNewSessionDialogOpen(true);
@@ -854,6 +933,7 @@ export function App() {
   function openNewSessionTab(
     nextTargetId = targetId,
     cwd = DEFAULT_NEW_SESSION_CWD,
+    customTitle = "",
     prompt = "",
     cliArgs = ""
   ) {
@@ -861,6 +941,7 @@ export function App() {
     const index = newSessionIndex;
     const key = `new:${nextTargetId}:${Date.now()}:${index}`;
     const usesDefaultCwd = cwd === DEFAULT_NEW_SESSION_CWD;
+    const displayTitle = customTitle.trim() || (index === 1 ? "新会话" : `新会话 ${index}`);
     setNewSessionIndex(index + 1);
     setSelectedId("");
     setPendingTerminalTabKey(key);
@@ -869,11 +950,14 @@ export function App() {
       {
         key,
         targetId: nextTargetId,
-        title: index === 1 ? "新会话" : `新会话 ${index}`,
+        title: displayTitle,
         cwd: usesDefaultCwd ? undefined : cwd,
         useCodexCwdFlag: !usesDefaultCwd,
         prompt: prompt.trim() || undefined,
-        cliArgs: cliArgs.trim() || undefined
+        cliArgs: cliArgs.trim() || undefined,
+        customTitle: customTitle.trim() || undefined,
+        knownSessionIds: sessions.map((session) => session.id),
+        createdAt: Date.now()
       }
     ]);
     setActiveTabKey(key);
@@ -1045,6 +1129,8 @@ export function App() {
     if (terminalId) {
       setTerminalIdsByTabKey((current) => ({ ...current, [tabKey]: terminalId }));
     }
+    const tab = openTabs.find((item) => item.key === tabKey);
+    if (tab?.customTitle) void finalizeNewSession(tab);
     if (pendingTerminalTabKey !== tabKey) return;
     setPendingTerminalTabKey("");
   }
@@ -1055,9 +1141,42 @@ export function App() {
     if (tab?.session) {
       void refreshSessionSnapshot(tab.targetId, tab.session.id);
     } else if (tab?.targetId) {
-      void loadSessions(tab.targetId, "active", true);
+      void finalizeNewSession(tab);
     }
     closeSessionTab(tabKey);
+  }
+
+  async function finalizeNewSession(tab: TerminalTab) {
+    if (pendingNewSessionTitleTabs.current.has(tab.key)) return;
+    pendingNewSessionTitleTabs.current.add(tab.key);
+    try {
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        const items = await window.codexConsole.listSessions(tab.targetId);
+        const rendered = preserveOpenActiveSessions(items, tab.targetId);
+        const activeCacheKey = sessionCacheKey(tab.targetId, "active");
+        setSessionCache((current) => ({ ...current, [activeCacheKey]: rendered }));
+        setLoadedViews((current) => ({ ...current, [activeCacheKey]: true }));
+
+        if (!tab.customTitle) return;
+        const candidates = rendered.filter((session) => {
+          if (tab.knownSessionIds?.includes(session.id)) return false;
+          if (tab.cwd && session.cwd && tab.cwd !== session.cwd) return false;
+          const updatedAt = Date.parse(session.updatedAt || session.createdAt || "");
+          return !tab.createdAt || (Number.isFinite(updatedAt) && updatedAt >= tab.createdAt - 10_000);
+        });
+        if (candidates.length === 1) {
+          const session = candidates[0];
+          const metadata = await window.codexConsole.setSessionCustomTitle(tab.targetId, session.id, tab.customTitle);
+          applyCustomTitle(tab.targetId, session.id, metadata);
+          return;
+        }
+        if (attempt < 2) await new Promise<void>((resolve) => window.setTimeout(resolve, 500));
+      }
+    } catch {
+      // 新会话标题关联失败不影响 CLI 会话；用户仍可从列表右键重命名。
+    } finally {
+      pendingNewSessionTitleTabs.current.delete(tab.key);
+    }
   }
 
   async function closeOpenSessionTerminal(session: AiSession) {
@@ -1440,6 +1559,7 @@ export function App() {
           <SessionContextMenu
             menu={contextMenu}
             supportsTrash={supportsTrash}
+            onRename={() => openRenameSession(contextMenu.session)}
             onOpenFolder={() =>
               void runWorkspaceAction("正在打开目录...", () =>
                 window.codexConsole.openSessionFolder(targetId, contextMenu.session.id)
@@ -1449,6 +1569,22 @@ export function App() {
             onPurge={() => void purgeSessionById(contextMenu.session)}
             onDelete={() => void deleteSessionById(contextMenu.session)}
             onClose={() => setContextMenu(null)}
+          />
+        )}
+
+        {renameSession && (
+          <SessionRenameDialog
+            session={renameSession}
+            value={renameDraft}
+            error={renameError}
+            busy={renameBusy}
+            onChange={(value) => {
+              setRenameDraft(value);
+              if (renameError) setRenameError("");
+            }}
+            onClose={closeRenameSession}
+            onRestore={() => void saveCustomSessionTitle("")}
+            onSave={() => void saveCustomSessionTitle()}
           />
         )}
 
@@ -1561,16 +1697,18 @@ export function App() {
           pendingResume={pendingResumeSession}
           supportsCustomCwd={supportsCustomCwd}
           cwd={newSessionCwd}
+          title={newSessionTitle}
           prompt={newSessionPrompt}
           cliArgs={newSessionCliArgs}
           onChooseDirectory={() => void chooseNewSessionDirectory()}
+          onTitleChange={setNewSessionTitle}
           onPromptChange={setNewSessionPrompt}
           onCliArgsChange={setNewSessionCliArgs}
           onClose={closeNewSessionDialog}
           onConfirm={() =>
             pendingResumeSession
               ? openResumeSessionWithDirectory(newSessionCwd)
-              : openNewSessionTab(targetId, newSessionCwd, newSessionPrompt, newSessionCliArgs)
+              : openNewSessionTab(targetId, newSessionCwd, newSessionTitle, newSessionPrompt, newSessionCliArgs)
           }
         />
       )}

@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import type { CodexSession, SessionBranchMetadata, SessionMetadata } from "./types";
 import {
+  deleteSessionMetadataRecord,
   importSessionMetadata,
   readSessionMetadata,
   readSessionMetadataMap,
@@ -49,16 +50,54 @@ export async function setSessionBranchMetadata(
   return next;
 }
 
+export async function setSessionCustomTitle(
+  targetId: string,
+  sessionId: string,
+  customTitle: string
+): Promise<SessionMetadata> {
+  await ensureLegacyMetadataMigrated();
+  const current = await readSessionMetadata(targetId, sessionId);
+  const next = normalizeMetadata({
+    ...current,
+    customTitle,
+    updatedAt: new Date().toISOString()
+  });
+  if (isEmptyMetadata(next)) {
+    await deleteSessionMetadataRecord(targetId, sessionId);
+    return next;
+  }
+  await saveSessionMetadata(targetId, sessionId, next);
+  return next;
+}
+
+export async function deleteSessionMetadata(targetId: string, sessionId: string) {
+  await ensureLegacyMetadataMigrated();
+  await deleteSessionMetadataRecord(targetId, sessionId);
+}
+
 function attachMetadata(session: CodexSession, metadata?: SessionMetadata): CodexSession {
   const normalized = normalizeMetadata(metadata || {});
-  return isEmptyMetadata(normalized) ? session : { ...session, metadata: normalized };
+  if (isEmptyMetadata(normalized)) return session;
+  const sourceTitle = session.sourceTitle || session.title;
+  return {
+    ...session,
+    title: normalized.customTitle || sourceTitle,
+    sourceTitle,
+    metadata: normalized
+  };
 }
 
 function normalizeMetadata(metadata: SessionMetadata): SessionMetadata {
   return {
+    customTitle: normalizeCustomTitle(metadata.customTitle),
     branch: normalizeBranch(metadata.branch),
     updatedAt: metadata.updatedAt
   };
+}
+
+function normalizeCustomTitle(value?: string) {
+  const title = value?.trim();
+  return title ? title : undefined;
 }
 
 function normalizeBranch(branch?: SessionBranchMetadata): SessionBranchMetadata | undefined {
@@ -75,7 +114,7 @@ function normalizeBranch(branch?: SessionBranchMetadata): SessionBranchMetadata 
 }
 
 function isEmptyMetadata(metadata: SessionMetadata) {
-  return !metadata.branch;
+  return !metadata.customTitle && !metadata.branch;
 }
 
 async function readLegacyStore(): Promise<MetadataStore> {

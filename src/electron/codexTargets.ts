@@ -200,7 +200,9 @@ export async function searchSessions(targetId: string, view: "active" | "trash",
             ? await readSessionFile(session.filePath)
             : await wslReadSessionFile(target.distro!, session.filePath);
         const fullSession = parseSessionContent(session.filePath, content);
-        const candidate = fullSession ? { ...fullSession, metadata: session.metadata } : null;
+        const candidate = fullSession
+          ? { ...fullSession, title: session.title, sourceTitle: session.sourceTitle, metadata: session.metadata }
+          : null;
         if (candidate && matchesSearch(candidate, terms)) return candidate;
       } catch {
         return null;
@@ -650,6 +652,7 @@ function normalizeSearchTerms(query: string) {
 function matchesSearch(session: CodexSession, terms: string[]) {
   const haystack = [
     session.title,
+    session.sourceTitle,
     session.id,
     session.cwd,
     session.model,

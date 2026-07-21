@@ -3,9 +3,11 @@ export function NewSessionDialog({
   pendingResume,
   supportsCustomCwd,
   cwd,
+  title,
   prompt,
   cliArgs,
   onChooseDirectory,
+  onTitleChange,
   onPromptChange,
   onCliArgsChange,
   onClose,
@@ -14,9 +16,11 @@ export function NewSessionDialog({
   pendingResume: { missingCwd: string } | null;
   supportsCustomCwd: boolean;
   cwd: string;
+  title: string;
   prompt: string;
   cliArgs: string;
   onChooseDirectory: () => void;
+  onTitleChange: (value: string) => void;
   onPromptChange: (value: string) => void;
   onCliArgsChange: (value: string) => void;
   onClose: () => void;
@@ -49,6 +53,15 @@ export function NewSessionDialog({
         )}
         {!pendingResume && (
           <>
+            <label className="session-template-field compact">
+              <span>会话标题</span>
+              <input
+                value={title}
+                maxLength={120}
+                onChange={(event) => onTitleChange(event.target.value)}
+                placeholder="可选，便于在历史列表中识别"
+              />
+            </label>
             <label className="session-template-field">
               <span>启动提示词</span>
               <textarea

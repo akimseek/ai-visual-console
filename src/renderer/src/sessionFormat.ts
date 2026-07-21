@@ -35,6 +35,7 @@ export function localFilterSessions(sessions: AiSession[], query: string) {
   return sessions.filter((session) => {
     const haystack = [
       session.title,
+      session.sourceTitle,
       session.id,
       session.cwd,
       session.model,

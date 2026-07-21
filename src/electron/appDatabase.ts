@@ -143,6 +143,12 @@ export async function saveSessionMetadata(targetId: string, sessionId: string, m
   });
 }
 
+export async function deleteSessionMetadataRecord(targetId: string, sessionId: string) {
+  await updateDatabase((db) => {
+    db.prepare("DELETE FROM session_metadata WHERE target_id = ? AND session_id = ?").run(targetId, sessionId);
+  });
+}
+
 export async function importSessionMetadata(
   entries: Array<{ targetId: string; sessionId: string; metadata: SessionMetadata }>
 ) {

@@ -6,7 +6,7 @@ import { promisify } from "node:util";
 import type { AiMessage, AiSession, AiTarget, SessionBatchMutationResult, SessionFileRef, SessionMutationRef, SessionUsage, TokenUsage } from "./types";
 import type { SessionView } from "./aiProviders";
 import { measure } from "./performance";
-import { setSessionBranchMetadata } from "./sessionMetadata";
+import { applySessionMetadataList, setSessionBranchMetadata } from "./sessionMetadata";
 import { getCachedTargets, setCachedTargets } from "./settings";
 
 const execFileAsync = promisify(execFile);
@@ -87,7 +87,7 @@ export async function searchSessions(targetId: string, view: SessionView, query:
   if (!normalized) return sessions;
 
   return sessions.filter((session) =>
-    [session.id, session.title, session.cwd || "", session.model || "", ...session.preview.map((message) => message.text)]
+    [session.id, session.title, session.sourceTitle || "", session.cwd || "", session.model || "", ...session.preview.map((message) => message.text)]
       .join("\n")
       .toLowerCase()
       .includes(normalized)
@@ -259,10 +259,11 @@ async function loadClaudeSessions(targetId: string, view: SessionView): Promise<
     : await listLocalSessionFiles(context, view);
   const contextHints = await loadClaudeContextHints(context);
 
-  return files
+  const sessions = files
     .map(parseClaudeSessionFile)
     .filter((session): session is AiSession => Boolean(session))
     .map((session) => applyClaudeContextHint(session, contextHints.get(session.id)));
+  return applySessionMetadataList(targetId, sessions);
 }
 
 async function resolveClaudeTargetContext(targetId: string): Promise<ClaudeTargetContext> {

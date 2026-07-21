@@ -3,6 +3,7 @@
 export function SessionContextMenu({
   menu,
   supportsTrash,
+  onRename,
   onOpenFolder,
   onRestore,
   onPurge,
@@ -11,6 +12,7 @@ export function SessionContextMenu({
 }: {
   menu: { x: number; y: number; view: "active" | "trash" };
   supportsTrash: boolean;
+  onRename: () => void;
   onOpenFolder: () => void;
   onRestore: () => void;
   onPurge: () => void;
@@ -24,6 +26,15 @@ export function SessionContextMenu({
       role="menu"
       onMouseDown={(event) => event.stopPropagation()}
     >
+      <button
+        role="menuitem"
+        onClick={() => {
+          onRename();
+          onClose();
+        }}
+      >
+        重命名
+      </button>
       <button
         role="menuitem"
         onClick={() => {

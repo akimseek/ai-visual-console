@@ -11,6 +11,7 @@ import type {
 import * as codexTargets from "./codexTargets";
 import * as geminiProvider from "./geminiProvider";
 import * as claudeProvider from "./claudeProvider";
+import { deleteSessionMetadata } from "./sessionMetadata";
 
 export type SessionView = "active" | "trash";
 
@@ -205,12 +206,16 @@ export function restoreSession(targetId: string, sessionId: string) {
   return getProviderForTarget(targetId).restoreSession(targetId, sessionId);
 }
 
-export function purgeSession(targetId: string, sessionId: string, ref?: SessionFileRef) {
-  return getProviderForTarget(targetId).purgeSession(targetId, sessionId, ref);
+export async function purgeSession(targetId: string, sessionId: string, ref?: SessionFileRef) {
+  const result = await getProviderForTarget(targetId).purgeSession(targetId, sessionId, ref);
+  await deleteSessionMetadata(targetId, sessionId).catch(() => undefined);
+  return result;
 }
 
-export function purgeSessions(targetId: string, sessions: SessionMutationRef[]) {
-  return getProviderForTarget(targetId).purgeSessions(targetId, sessions);
+export async function purgeSessions(targetId: string, sessions: SessionMutationRef[]) {
+  const result = await getProviderForTarget(targetId).purgeSessions(targetId, sessions);
+  await Promise.all(result.processed.map((session) => deleteSessionMetadata(targetId, session.id).catch(() => undefined)));
+  return result;
 }
 
 export const setWslCodexHome = codexTargets.setWslCodexHome;
