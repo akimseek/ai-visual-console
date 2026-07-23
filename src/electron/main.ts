@@ -82,11 +82,18 @@ import {
 } from "./terminalSessions";
 import { setPerformanceLogPath, writePerformanceLog } from "./performance";
 import { getAppDatabaseDiagnostics } from "./appDatabase";
+import { resolveRuntimeStorageRoot } from "./applicationPaths";
 
 const isDev = Boolean(process.env.VITE_DEV_SERVER_URL);
 const processStartedAt = performance.now();
 const sessionRequestQueue = new Map<string, Promise<unknown>>();
 const execFileAsync = promisify(execFile);
+const applicationRuntimeRoot = resolveRuntimeStorageRoot({
+  isPackaged: app.isPackaged,
+  executablePath: app.getPath("exe"),
+  cwd: process.cwd(),
+  platform: process.platform
+});
 const applicationUserDataPath = path.join(getApplicationDataDir(), "user-data");
 
 // Electron 自身的缓存、Local Storage 和设置也与应用一起存放，不写入系统用户目录。
@@ -545,13 +552,11 @@ async function executeAppCommand(window: BrowserWindow | null, command: AppComma
 }
 
 function getLogDir() {
-  const root = app.isPackaged ? path.dirname(app.getPath("exe")) : process.cwd();
-  return path.join(root, "logs");
+  return path.join(applicationRuntimeRoot, "logs");
 }
 
 function getApplicationDataDir() {
-  const root = app.isPackaged ? path.dirname(app.getPath("exe")) : process.cwd();
-  return path.join(root, "data");
+  return path.join(applicationRuntimeRoot, "data");
 }
 
 async function exportDiagnosticsReport() {

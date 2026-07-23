@@ -321,7 +321,7 @@ function SystemTerminalPane({ tab, active, hidden }: { tab: SystemTerminalTab; a
     const searchAddon = new SearchAddon();
     terminal.loadAddon(fitAddon);
     terminal.loadAddon(searchAddon);
-    const detachSearchAddon = search.attachAddon(searchAddon);
+    const detachSearchAddon = search.attachAddon(searchAddon, terminal);
     terminalRef.current = terminal;
     fitAddonRef.current = fitAddon;
     terminal.open(host);

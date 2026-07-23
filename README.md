@@ -79,7 +79,7 @@ pnpm dist:linux
 
 ## 本地数据
 
-- 应用运行数据统一保存在应用根目录的 `data/`（开发环境为项目根目录；打包后为 EXE 所在目录）：SQLite 为 `data/app.db`，Electron 缓存、Local Storage 和设置为 `data/user-data/`，供应商配置备份为 `data/vendor-backups/`
+- 应用运行数据统一保存在稳定的 `data/` 目录：开发环境为项目根目录；Windows/Linux unpacked 构建为 `release/data/`，避免重新构建时被清理；安装后的应用仍放在可执行文件目录。SQLite 为 `data/app.db`，Electron 缓存、Local Storage 和设置为 `data/user-data/`，供应商配置备份为 `data/vendor-backups/`
 - API Key 会在系统支持时通过 Electron `safeStorage` 加密后写入 SQLite
 - 原始 AI 会话仍保存在各 CLI 自己的 JSONL 文件中，SQLite 只保存可重建的索引缓存
 - CLI 原生配置文件仍写入对应运行环境的 `~/.codex`、`~/.gemini`、`~/.claude`
