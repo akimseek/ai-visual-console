@@ -12,6 +12,7 @@
 - 供应商管理：写入各 AI CLI 配置文件并切换启用状态
 - CLI 安装：检测 Node / nvm / CLI 状态并引导安装
 - 右侧终端区支持 AI 会话终端与系统终端
+- 终端内容搜索：`Ctrl + F` 打开搜索栏，支持前后匹配、区分大小写和全词匹配
 - WSL 会话目录手动设置与自动探测切换
 
 ## 环境要求
@@ -24,8 +25,10 @@
 ## 安装
 
 ```bash
-pnpm install
+pnpm install --frozen-lockfile
 ```
+
+仅使用 `pnpm` 管理依赖；不要与 `npm install` 混用。Windows、WSL、macOS 和 Linux 应分别在各自环境执行一次安装，以取得对应平台的原生可选依赖（例如 Rollup）。
 
 ## 开发
 
@@ -76,7 +79,7 @@ pnpm dist:linux
 
 ## 本地数据
 
-- 供应商管理数据、会话索引缓存、分支元数据、工作目录预设和压缩提示词保存在 Electron `userData/app.db`
+- 应用运行数据统一保存在应用根目录的 `data/`（开发环境为项目根目录；打包后为 EXE 所在目录）：SQLite 为 `data/app.db`，Electron 缓存、Local Storage 和设置为 `data/user-data/`，供应商配置备份为 `data/vendor-backups/`
 - API Key 会在系统支持时通过 Electron `safeStorage` 加密后写入 SQLite
 - 原始 AI 会话仍保存在各 CLI 自己的 JSONL 文件中，SQLite 只保存可重建的索引缓存
 - CLI 原生配置文件仍写入对应运行环境的 `~/.codex`、`~/.gemini`、`~/.claude`

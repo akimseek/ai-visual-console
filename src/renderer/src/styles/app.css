@@ -816,6 +816,7 @@ select {
   align-items: center;
   gap: 6px;
   flex: 0 0 auto;
+  max-width: 360px;
   min-width: max-content;
   height: 32px;
   border: 0;
@@ -833,7 +834,9 @@ select {
 }
 
 .terminal-tabs span {
-  min-width: max-content;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
   white-space: nowrap;
   text-align: left;
   font-variant-numeric: tabular-nums;
@@ -1420,6 +1423,80 @@ select {
   box-shadow: 0 12px 28px rgba(0, 0, 0, 0.28);
 }
 
+.terminal-search {
+  position: absolute;
+  top: 10px;
+  right: 18px;
+  z-index: 70;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  max-width: calc(100% - 36px);
+  height: 36px;
+  border: 1px solid #374151;
+  border-radius: 7px;
+  background: #111827;
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.32);
+  padding: 4px;
+}
+
+.terminal-search input {
+  width: clamp(150px, 24vw, 280px);
+  min-width: 80px;
+  height: 26px;
+  border: 1px solid #334155;
+  border-radius: 5px;
+  background: #0f172a;
+  color: #f3f4f6;
+  font: 12px Consolas, "Cascadia Mono", "Courier New", monospace;
+  outline: none;
+  padding: 0 8px;
+}
+
+.terminal-search input:focus {
+  border-color: #4f75d8;
+  box-shadow: 0 0 0 2px rgba(79, 117, 216, 0.2);
+}
+
+.terminal-search-count {
+  min-width: 38px;
+  color: #9ca3af;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+}
+
+.terminal-search button {
+  display: grid;
+  place-items: center;
+  min-width: 27px;
+  height: 27px;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  background: transparent;
+  color: #d1d5db;
+  cursor: pointer;
+  font-size: 12px;
+  padding: 0 6px;
+}
+
+.terminal-search button:hover:not(:disabled),
+.terminal-search button.active {
+  border-color: #475569;
+  background: #1f2937;
+  color: #ffffff;
+}
+
+.terminal-search button.active {
+  border-color: #4f75d8;
+  color: #bfdbfe;
+}
+
+.terminal-search button:disabled {
+  color: #4b5563;
+  cursor: not-allowed;
+}
+
 .terminal-context-menu button {
   height: 30px;
   border: 0;
@@ -1767,20 +1844,23 @@ select {
   background: #e6f6ec;
 }
 
-.workspace-overlay {
+.workspace-action-indicator {
   position: fixed;
   inset: 0;
-  z-index: 100;
+  z-index: 1000;
   display: grid;
   place-items: center;
   background: rgba(246, 247, 249, 0.78);
   color: #1e2329;
   font-size: 14px;
   font-weight: 700;
-  pointer-events: none;
+  cursor: progress;
+  pointer-events: auto;
+  user-select: none;
 }
 
-.workspace-overlay span {
+.workspace-action-indicator span {
+  display: block;
   padding: 10px 14px;
   border: 1px solid #d4dbe6;
   border-radius: 8px;
@@ -1848,6 +1928,7 @@ select {
 .new-session-dialog,
 .session-settings-dialog,
 .session-rename-dialog,
+.session-duplicate-dialog,
 .skill-manager-dialog {
   display: grid;
   width: min(560px, calc(100vw - 48px));
@@ -1897,6 +1978,8 @@ select {
 .session-settings-dialog footer,
 .session-rename-dialog header,
 .session-rename-dialog footer,
+.session-duplicate-dialog header,
+.session-duplicate-dialog footer,
 .skill-manager-dialog header,
 .cli-installer-dialog header,
 .cli-installer-dialog footer,
@@ -1913,6 +1996,7 @@ select {
 .new-session-dialog h2,
 .session-settings-dialog h2,
 .session-rename-dialog h2,
+.session-duplicate-dialog h2,
 .skill-manager-dialog h2,
 .cli-installer-dialog h2,
 .vendor-manager-dialog h2,
@@ -1933,6 +2017,7 @@ select {
 .new-session-dialog header button,
 .session-settings-dialog header button,
 .session-rename-dialog header button,
+.session-duplicate-dialog header button,
 .skill-manager-dialog header button,
 .cli-installer-dialog header button,
 .vendor-manager-dialog header button,
@@ -3019,7 +3104,8 @@ select {
 .directory-field button,
 .new-session-dialog footer button,
 .session-settings-dialog footer button,
-.session-rename-dialog footer button {
+.session-rename-dialog footer button,
+.session-duplicate-dialog footer button {
   height: 34px;
   border: 1px solid #3268d5;
   border-radius: 7px;
@@ -3064,13 +3150,15 @@ select {
 
 .new-session-dialog footer,
 .session-settings-dialog footer,
-.session-rename-dialog footer {
+.session-rename-dialog footer,
+.session-duplicate-dialog footer {
   justify-content: flex-end;
 }
 
 .new-session-dialog footer .secondary,
 .session-settings-dialog footer .secondary,
-.session-rename-dialog footer .secondary {
+.session-rename-dialog footer .secondary,
+.session-duplicate-dialog footer .secondary {
   border-color: #c9d1dc;
   background: #ffffff;
   color: #2f3845;
@@ -3085,6 +3173,26 @@ select {
   background: #ffffff;
   box-shadow: 0 24px 58px rgba(24, 32, 44, 0.22);
   padding: 16px;
+}
+
+.session-duplicate-dialog {
+  display: grid;
+  width: min(460px, calc(100vw - 48px));
+  gap: 16px;
+  border: 1px solid #d4dbe6;
+  border-radius: 8px;
+  background: #ffffff;
+  box-shadow: 0 24px 58px rgba(24, 32, 44, 0.22);
+  padding: 16px;
+}
+
+.session-duplicate-dialog form {
+  display: grid;
+  gap: 12px;
+}
+
+.session-duplicate-dialog footer {
+  justify-content: flex-end;
 }
 
 .session-rename-dialog form {

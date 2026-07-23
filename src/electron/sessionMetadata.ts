@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import type { CodexSession, SessionBranchMetadata, SessionMetadata } from "./types";
 import {
   deleteSessionMetadataRecord,
+  hasAppDatabase,
   importSessionMetadata,
   readSessionMetadata,
   readSessionMetadataMap,
@@ -23,12 +24,14 @@ export function setSessionMetadataPath(filePath: string) {
 }
 
 export async function applySessionMetadata(targetId: string, session: CodexSession): Promise<CodexSession> {
+  if (!hasAppDatabase()) return session;
   await ensureLegacyMetadataMigrated();
   const metadata = await readSessionMetadata(targetId, session.id);
   return attachMetadata(session, metadata);
 }
 
 export async function applySessionMetadataList(targetId: string, sessions: CodexSession[]): Promise<CodexSession[]> {
+  if (!hasAppDatabase()) return sessions;
   await ensureLegacyMetadataMigrated();
   const metadata = await readSessionMetadataMap(targetId);
   return sessions.map((session) => attachMetadata(session, metadata[session.id]));

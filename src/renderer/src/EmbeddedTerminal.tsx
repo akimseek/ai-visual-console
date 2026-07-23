@@ -5,8 +5,11 @@ import type {
   MouseEvent as ReactMouseEvent
 } from "react";
 import { FitAddon } from "@xterm/addon-fit";
+import { SearchAddon } from "@xterm/addon-search";
 import { Terminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
+import { TerminalSearchBar } from "./TerminalSearchBar";
+import { useTerminalSearch } from "./useTerminalSearch";
 
 type EmbeddedTerminalProps = {
   targetId: string;
@@ -74,6 +77,12 @@ export function EmbeddedTerminal({
   const [lastSubmittedText, setLastSubmittedText] = useState("");
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; canCopy: boolean } | null>(null);
   const [pasteDialog, setPasteDialog] = useState<{ text: string } | null>(null);
+  const search = useTerminalSearch({
+    restoreFocus: () => {
+      if (inputModeRef.current === "composer" && composerVisibleRef.current) composerRef.current?.focus();
+      else terminalRef.current?.focus();
+    }
+  });
 
   function copyCurrentSelection() {
     const selection = terminalRef.current?.getSelection();
@@ -368,7 +377,7 @@ export function EmbeddedTerminal({
       fontFamily: 'Consolas, "Cascadia Mono", "Courier New", monospace',
       fontSize: 13,
       lineHeight: 1.25,
-      scrollback: 20000,
+      scrollback: 10000,
       theme: {
         background: "#111827",
         foreground: "#e5e7eb",
@@ -376,7 +385,10 @@ export function EmbeddedTerminal({
       }
     });
     const fitAddon = new FitAddon();
+    const searchAddon = new SearchAddon();
     terminal.loadAddon(fitAddon);
+    terminal.loadAddon(searchAddon);
+    const detachSearchAddon = search.attachAddon(searchAddon);
     terminalRef.current = terminal;
     fitAddonRef.current = fitAddon;
     terminal.open(host);
@@ -450,6 +462,23 @@ export function EmbeddedTerminal({
       submitInput();
     }
 
+    let outputBuffer = "";
+    let outputFrame = 0;
+    let resizeFrame = 0;
+
+    function flushOutput() {
+      outputFrame = 0;
+      if (!outputBuffer) return;
+      const data = outputBuffer;
+      outputBuffer = "";
+      terminal.write(data);
+    }
+
+    function writeTerminalOutput(data: string) {
+      outputBuffer += data;
+      if (!outputFrame) outputFrame = requestAnimationFrame(flushOutput);
+    }
+
     function fitTerminal() {
       fitAddon.fit();
       if (terminalIdRef.current) {
@@ -457,8 +486,16 @@ export function EmbeddedTerminal({
       }
     }
 
+    function scheduleFitTerminal() {
+      if (resizeFrame) return;
+      resizeFrame = requestAnimationFrame(() => {
+        resizeFrame = 0;
+        fitTerminal();
+      });
+    }
+
     const resizeObserver = new ResizeObserver(() => {
-      requestAnimationFrame(fitTerminal);
+      scheduleFitTerminal();
     });
     resizeObserver.observe(host);
 
@@ -492,14 +529,15 @@ export function EmbeddedTerminal({
     });
     const removeDataListener = window.codexConsole.onTerminalData((terminalId, data) => {
       if (terminalId !== terminalIdRef.current) return;
-      terminal.write(data);
+      writeTerminalOutput(data);
       if (!composerVisibleRef.current && data) {
         revealComposer();
-        requestAnimationFrame(fitTerminal);
+        scheduleFitTerminal();
       }
     });
     const removeExitListener = window.codexConsole.onTerminalExit((terminalId, exitCode) => {
       if (terminalId !== terminalIdRef.current) return;
+      flushOutput();
       if (exitCode === 0) {
         terminalIdRef.current = "";
         resetComposerSubmitted();
@@ -552,10 +590,14 @@ export function EmbeddedTerminal({
       removeExitListener();
       dataDisposable.dispose();
       resizeObserver.disconnect();
+      if (outputFrame) cancelAnimationFrame(outputFrame);
+      if (resizeFrame) cancelAnimationFrame(resizeFrame);
       host.removeEventListener("contextmenu", onContextMenu);
       host.removeEventListener("paste", onPaste);
       host.removeEventListener("mousedown", onMouseDown);
       host.removeEventListener("keydown", onTerminalKeyDown, true);
+      detachSearchAddon();
+      searchAddon.dispose();
       fitAddon.dispose();
       terminal.dispose();
       terminalRef.current = null;
@@ -580,8 +622,23 @@ export function EmbeddedTerminal({
   }, [active, inputMode, composerVisible]);
 
   return (
-    <section className={`terminal-panel ${active ? "active" : ""}`}>
+    <section className={`terminal-panel ${active ? "active" : ""}`} onKeyDownCapture={search.onPanelKeyDownCapture}>
       <div className="terminal-host" ref={hostRef} />
+      {search.open && (
+        <TerminalSearchBar
+          inputRef={search.inputRef}
+          query={search.query}
+          caseSensitive={search.caseSensitive}
+          wholeWord={search.wholeWord}
+          result={search.result}
+          onQueryChange={search.setQuery}
+          onCaseSensitiveChange={search.setCaseSensitive}
+          onWholeWordChange={search.setWholeWord}
+          onNext={search.findNext}
+          onPrevious={search.findPrevious}
+          onClose={search.closeSearch}
+        />
+      )}
       {composerVisible && (
         <div className={`terminal-composer ${inputMode === "composer" ? "active" : ""}`}>
           <div

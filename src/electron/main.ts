@@ -9,6 +9,7 @@ import {
   clearWslCodexHome,
   deleteSession,
   deleteSessions,
+  duplicateSession,
   getSession,
   getSessionFolderPath,
   listCachedSessions,
@@ -72,6 +73,7 @@ import {
 } from "./vendorManager";
 import {
   resizeTerminalSession,
+  getTerminalSessionCount,
   startSystemTerminalSession,
   startTerminalSession,
   stopAllTerminalSessions,
@@ -79,10 +81,16 @@ import {
   writeTerminalSession
 } from "./terminalSessions";
 import { setPerformanceLogPath, writePerformanceLog } from "./performance";
+import { getAppDatabaseDiagnostics } from "./appDatabase";
 
 const isDev = Boolean(process.env.VITE_DEV_SERVER_URL);
 const processStartedAt = performance.now();
+const sessionRequestQueue = new Map<string, Promise<unknown>>();
 const execFileAsync = promisify(execFile);
+const applicationUserDataPath = path.join(getApplicationDataDir(), "user-data");
+
+// Electron 自身的缓存、Local Storage 和设置也与应用一起存放，不写入系统用户目录。
+app.setPath("userData", applicationUserDataPath);
 
 function getApplicationIconPath() {
   const iconRelativePath = process.platform === "win32" ? ["icon.ico"] : ["icon.png"];
@@ -259,13 +267,15 @@ function applyContentSecurityPolicy() {
 }
 
 app.whenReady().then(() => {
+  const applicationDataDir = getApplicationDataDir();
+  const applicationDatabasePath = path.join(applicationDataDir, "app.db");
   setupApplicationMenu();
   applyContentSecurityPolicy();
-  setSessionCacheRoot(path.join(app.getPath("userData"), "cache"));
-  setSessionDatabasePath(path.join(app.getPath("userData"), "app.db"));
+  setSessionCacheRoot(path.join(applicationDataDir, "cache"));
+  setSessionDatabasePath(applicationDatabasePath);
   setSettingsPath(path.join(app.getPath("userData"), "settings.json"));
   setSessionMetadataPath(path.join(app.getPath("userData"), "session-metadata.json"));
-  setVendorDatabasePath(path.join(app.getPath("userData"), "app.db"), path.join(app.getPath("userData"), "vendor-backups"));
+  setVendorDatabasePath(applicationDatabasePath, path.join(applicationDataDir, "vendor-backups"));
   setPerformanceLogPath(path.join(getLogDir(), "performance.log"));
   void writePerformanceLog("app.ready", 0);
   void writePerformanceLog("app.whenReady", performance.now() - processStartedAt);
@@ -299,22 +309,39 @@ app.whenReady().then(() => {
   ipcMain.handle("codex:list-cached-targets", (_event, providerId: unknown) =>
     listCachedTargets(providerId === undefined || providerId === null || providerId === "" ? undefined : requireProviderId(providerId))
   );
-  ipcMain.handle("codex:list-cached-sessions", (_event, targetId: unknown, view: unknown) =>
-    listCachedSessions(requireString(targetId, "targetId"), requireView(view))
-  );
+  ipcMain.handle("codex:list-cached-sessions", (_event, targetId: unknown, view: unknown) => {
+    const checkedTargetId = requireString(targetId, "targetId");
+    const checkedView = requireView(view);
+    return coalesceSessionRequest(`cached:${checkedTargetId}:${checkedView}`, () =>
+      listCachedSessions(checkedTargetId, checkedView)
+    );
+  });
   ipcMain.handle("codex:list-targets", (_event, providerId: unknown) =>
     listTargets(providerId === undefined || providerId === null || providerId === "" ? undefined : requireProviderId(providerId))
   );
-  ipcMain.handle("codex:list-sessions", (_event, targetId: unknown) => listSessions(requireString(targetId, "targetId")));
-  ipcMain.handle("codex:list-trash-sessions", (_event, targetId: unknown) =>
-    listTrashSessions(requireString(targetId, "targetId"))
-  );
-  ipcMain.handle("codex:search-sessions", (_event, targetId: unknown, view: unknown, query: unknown) =>
-    searchSessions(requireString(targetId, "targetId"), requireView(view), requireString(query, "query"))
-  );
-  ipcMain.handle("codex:get-session", (_event, targetId: unknown, sessionId: unknown) =>
-    getSession(requireString(targetId, "targetId"), requireString(sessionId, "sessionId"))
-  );
+  ipcMain.handle("codex:list-sessions", (_event, targetId: unknown) => {
+    const checkedTargetId = requireString(targetId, "targetId");
+    return coalesceSessionRequest(`list:${checkedTargetId}:active`, () => listSessions(checkedTargetId));
+  });
+  ipcMain.handle("codex:list-trash-sessions", (_event, targetId: unknown) => {
+    const checkedTargetId = requireString(targetId, "targetId");
+    return coalesceSessionRequest(`list:${checkedTargetId}:trash`, () => listTrashSessions(checkedTargetId));
+  });
+  ipcMain.handle("codex:search-sessions", (_event, targetId: unknown, view: unknown, query: unknown) => {
+    const checkedTargetId = requireString(targetId, "targetId");
+    const checkedView = requireView(view);
+    const checkedQuery = requireString(query, "query");
+    return coalesceSessionRequest(`search:${checkedTargetId}:${checkedView}:${checkedQuery}`, () =>
+      searchSessions(checkedTargetId, checkedView, checkedQuery)
+    );
+  });
+  ipcMain.handle("codex:get-session", (_event, targetId: unknown, sessionId: unknown) => {
+    const checkedTargetId = requireString(targetId, "targetId");
+    const checkedSessionId = requireString(sessionId, "sessionId");
+    return coalesceSessionRequest(`get:${checkedTargetId}:${checkedSessionId}`, () =>
+      getSession(checkedTargetId, checkedSessionId)
+    );
+  });
   ipcMain.handle("codex:set-session-custom-title", (_event, targetId: unknown, sessionId: unknown, title: unknown) =>
     setSessionCustomTitle(
       requireString(targetId, "targetId"),
@@ -343,6 +370,13 @@ app.whenReady().then(() => {
         requireString(sessionId, "sessionId"),
         requireNonNegativeInteger(messageIndex, "messageIndex")
       )
+  );
+  ipcMain.handle("codex:duplicate-session", (_event, targetId: unknown, sessionId: unknown, title: unknown) =>
+    duplicateSession(
+      requireString(targetId, "targetId"),
+      requireString(sessionId, "sessionId"),
+      requireCustomTitle(title)
+    )
   );
   ipcMain.handle("codex:delete-session", (_event, targetId: unknown, sessionId: unknown, ref: unknown) =>
     deleteSession(requireString(targetId, "targetId"), requireString(sessionId, "sessionId"), requireSessionFileRef(ref))
@@ -454,6 +488,7 @@ app.whenReady().then(() => {
       typeof status === "string" ? status : undefined
     )
   );
+  ipcMain.handle("diagnostics:export", () => exportDiagnosticsReport());
   ipcMain.handle("shell:open-session-folder", async (_event, targetId: unknown, sessionId: unknown) => {
     const checkedTargetId = requireString(targetId, "targetId");
     const folderPath = await getSessionFolderPath(checkedTargetId, requireString(sessionId, "sessionId"));
@@ -514,6 +549,56 @@ function getLogDir() {
   return path.join(root, "logs");
 }
 
+function getApplicationDataDir() {
+  const root = app.isPackaged ? path.dirname(app.getPath("exe")) : process.cwd();
+  return path.join(root, "data");
+}
+
+async function exportDiagnosticsReport() {
+  const dataDir = getApplicationDataDir();
+  const logDir = getLogDir();
+  const databasePath = path.join(dataDir, "app.db");
+  const [database, databaseWal, performanceLog, appDatabase] = await Promise.all([
+    fileSize(databasePath),
+    fileSize(`${databasePath}-wal`),
+    fileSize(path.join(logDir, "performance.log")),
+    getAppDatabaseDiagnostics().catch(() => null)
+  ]);
+  const generatedAt = new Date().toISOString();
+  const payload = {
+    generatedAt,
+    app: {
+      name: app.getName(),
+      version: app.getVersion(),
+      packaged: app.isPackaged,
+      platform: process.platform,
+      arch: process.arch,
+      electron: process.versions.electron,
+      node: process.versions.node
+    },
+    storage: {
+      applicationDataDir: dataDir,
+      databaseBytes: database,
+      databaseWalBytes: databaseWal,
+      performanceLogBytes: performanceLog
+    },
+    database: appDatabase,
+    runtime: {
+      activeTerminalSessions: getTerminalSessionCount()
+    },
+    privacy: "未包含 API Key、供应商配置内容、会话正文或终端输出。"
+  };
+  const fileName = `diagnostics-${generatedAt.replace(/[:.]/g, "-")}.json`;
+  const filePath = path.join(logDir, fileName);
+  await fs.mkdir(logDir, { recursive: true });
+  await fs.writeFile(filePath, `${JSON.stringify(payload, null, 2)}\n`, "utf8");
+  return { filePath };
+}
+
+async function fileSize(filePath: string) {
+  return (await fs.stat(filePath).catch(() => null))?.size || 0;
+}
+
 function requireString(value: unknown, name: string) {
   if (typeof value !== "string" || !value.trim()) throw new Error(`参数无效：${name}`);
   return value;
@@ -524,6 +609,17 @@ function requireCustomTitle(value: unknown) {
   const title = value.trim();
   if (title.length > 120) throw new Error("会话名称不能超过 120 个字符。");
   return title;
+}
+
+function coalesceSessionRequest<T>(key: string, action: () => Promise<T>): Promise<T> {
+  const existing = sessionRequestQueue.get(key) as Promise<T> | undefined;
+  if (existing) return existing;
+
+  const request = action().finally(() => {
+    if (sessionRequestQueue.get(key) === request) sessionRequestQueue.delete(key);
+  });
+  sessionRequestQueue.set(key, request);
+  return request;
 }
 
 function requireTerminalData(value: unknown) {

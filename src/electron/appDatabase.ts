@@ -1,5 +1,4 @@
 import fs from "node:fs/promises";
-import { createRequire } from "node:module";
 import path from "node:path";
 import type {
   CompressionPrompt,
@@ -8,14 +7,15 @@ import type {
   WorkspacePreset
 } from "./types";
 
-type SqliteDatabase = {
+export type SqliteDatabase = {
   exec(sql: string): void;
   prepare(sql: string): SqliteStatement;
   close(): void;
 };
 
-type SqliteStatement = {
+export type SqliteStatement = {
   all(...params: unknown[]): unknown[];
+  get(...params: unknown[]): unknown;
   run(...params: unknown[]): { changes: number; lastInsertRowid: number | bigint };
 };
 
@@ -36,6 +36,28 @@ type SessionCacheRow = {
   size: number;
   session_json: string;
 };
+
+type SessionCacheStatsRow = {
+  entry_count: number;
+  cache_key_count: number;
+  payload_bytes: number;
+};
+
+type SessionCachePruneRow = {
+  rowid: number;
+  payload_bytes: number;
+};
+
+export type AppDatabaseDiagnostics = {
+  sessionCacheEntries: number;
+  sessionCacheKeys: number;
+  sessionCacheBytes: number;
+  sessionMetadataEntries: number;
+};
+
+const MAX_SESSION_CACHE_ENTRIES = 4_000;
+const MAX_SESSION_CACHE_BYTES = 64 * 1024 * 1024;
+const MAX_SESSION_CACHE_ENTRY_BYTES = 1024 * 1024;
 
 type SessionMetadataRow = {
   session_id: string;
@@ -63,7 +85,6 @@ type CompressionPromptRow = {
 let databasePath = "";
 let database: SqliteDatabase | null = null;
 let writeQueue = Promise.resolve();
-const requireFromHere = createRequire(__filename);
 
 export function setSessionDatabasePath(filePath: string) {
   if (databasePath !== filePath && database) {
@@ -98,12 +119,16 @@ export async function replaceSessionCache(cacheKey: string, entries: Record<stri
   await updateDatabase((db) => {
     db.prepare("DELETE FROM session_cache WHERE cache_key = ?").run(cacheKey);
     const insert = db.prepare(`
-      INSERT INTO session_cache (cache_key, file_path, mtime_ms, size, session_json)
-      VALUES (?, ?, ?, ?, ?)
+      INSERT INTO session_cache (cache_key, file_path, mtime_ms, size, session_json, cached_at)
+      VALUES (?, ?, ?, ?, ?, ?)
     `);
+    const cachedAt = new Date().toISOString();
     for (const entry of Object.values(entries)) {
-      insert.run(cacheKey, entry.filePath, entry.mtimeMs, entry.size, JSON.stringify(entry.session));
+      const sessionJson = JSON.stringify(entry.session);
+      if (Buffer.byteLength(sessionJson, "utf8") > MAX_SESSION_CACHE_ENTRY_BYTES) continue;
+      insert.run(cacheKey, entry.filePath, entry.mtimeMs, entry.size, sessionJson, cachedAt);
     }
+    pruneSessionCache(db);
   });
 }
 
@@ -171,6 +196,25 @@ export async function importSessionMetadata(
 
 export function hasAppDatabase() {
   return Boolean(databasePath);
+}
+
+export async function getAppDatabaseDiagnostics(): Promise<AppDatabaseDiagnostics> {
+  return readAppDatabase((db) => {
+    const cacheStats = db.prepare(`
+      SELECT
+        COUNT(*) AS entry_count,
+        COUNT(DISTINCT cache_key) AS cache_key_count,
+        COALESCE(SUM(LENGTH(session_json)), 0) AS payload_bytes
+      FROM session_cache
+    `).get() as SessionCacheStatsRow | undefined;
+    const metadata = db.prepare("SELECT COUNT(*) AS entry_count FROM session_metadata").get() as { entry_count: number } | undefined;
+    return {
+      sessionCacheEntries: Number(cacheStats?.entry_count || 0),
+      sessionCacheKeys: Number(cacheStats?.cache_key_count || 0),
+      sessionCacheBytes: Number(cacheStats?.payload_bytes || 0),
+      sessionMetadataEntries: Number(metadata?.entry_count || 0)
+    };
+  });
 }
 
 export async function listWorkspacePresetRecords(): Promise<WorkspacePreset[]> {
@@ -252,7 +296,7 @@ async function getDatabase() {
   if (!databasePath) throw new Error("会话数据库路径未初始化。");
   if (database) return database;
   await fs.mkdir(path.dirname(databasePath), { recursive: true });
-  const { DatabaseSync } = loadSqlite();
+  const { DatabaseSync } = await loadSqlite();
   database = new DatabaseSync(databasePath);
   database.exec(`
     PRAGMA journal_mode = WAL;
@@ -264,6 +308,7 @@ async function getDatabase() {
       mtime_ms REAL NOT NULL,
       size INTEGER NOT NULL,
       session_json TEXT NOT NULL,
+      cached_at TEXT NOT NULL DEFAULT '',
       PRIMARY KEY (cache_key, file_path)
     );
 
@@ -305,7 +350,62 @@ async function getDatabase() {
     CREATE INDEX IF NOT EXISTS idx_compression_prompts_updated_at
       ON compression_prompts(updated_at);
   `);
+  try {
+    database.exec("ALTER TABLE session_cache ADD COLUMN cached_at TEXT NOT NULL DEFAULT ''");
+  } catch {
+    // 已存在的数据库已完成迁移。
+  }
   return database;
+}
+
+function pruneSessionCache(db: SqliteDatabase) {
+  const stats = db.prepare(`
+    SELECT COUNT(*) AS entry_count, 0 AS cache_key_count, COALESCE(SUM(LENGTH(session_json)), 0) AS payload_bytes
+    FROM session_cache
+  `).get() as SessionCacheStatsRow | undefined;
+  let entries = Number(stats?.entry_count || 0);
+  let bytes = Number(stats?.payload_bytes || 0);
+  if (entries <= MAX_SESSION_CACHE_ENTRIES && bytes <= MAX_SESSION_CACHE_BYTES) return;
+
+  const rows = db.prepare(`
+    SELECT rowid, LENGTH(session_json) AS payload_bytes
+    FROM session_cache
+    ORDER BY cached_at ASC, rowid ASC
+  `).all() as SessionCachePruneRow[];
+  const remove = db.prepare("DELETE FROM session_cache WHERE rowid = ?");
+  for (const row of rows) {
+    if (entries <= MAX_SESSION_CACHE_ENTRIES && bytes <= MAX_SESSION_CACHE_BYTES) break;
+    remove.run(row.rowid);
+    entries -= 1;
+    bytes -= Number(row.payload_bytes || 0);
+  }
+}
+
+/** Read through the process-wide application SQLite connection. */
+export async function readAppDatabase<T>(reader: (db: SqliteDatabase) => T): Promise<T> {
+  return reader(await getDatabase());
+}
+
+/**
+ * Serialize every write to app.db. Keeping this queue shared prevents separate
+ * feature modules from contending for SQLite's write lock.
+ */
+export async function updateAppDatabase<T>(updater: (db: SqliteDatabase) => T): Promise<T> {
+  let result!: T;
+  const queued = writeQueue.catch(() => undefined).then(async () => {
+    const db = await getDatabase();
+    db.exec("BEGIN IMMEDIATE");
+    try {
+      result = updater(db);
+      db.exec("COMMIT");
+      return result;
+    } catch (error) {
+      db.exec("ROLLBACK");
+      throw error;
+    }
+  });
+  writeQueue = queued.then(() => undefined, () => undefined);
+  return queued;
 }
 
 function parseMetadata(content: string): SessionMetadata {
@@ -316,9 +416,9 @@ function parseMetadata(content: string): SessionMetadata {
   }
 }
 
-function loadSqlite(): SqliteModule {
+async function loadSqlite(): Promise<SqliteModule> {
   try {
-    return requireFromHere("node:sqlite") as SqliteModule;
+    return await import("node:sqlite") as unknown as SqliteModule;
   } catch (error: any) {
     throw new Error(
       `当前 Electron/Node 运行时不支持 node:sqlite，无法使用会话数据库：${error?.message || error}`,
@@ -328,16 +428,5 @@ function loadSqlite(): SqliteModule {
 }
 
 async function updateDatabase(updater: (db: SqliteDatabase) => void) {
-  writeQueue = writeQueue.catch(() => undefined).then(async () => {
-    const db = await getDatabase();
-    db.exec("BEGIN IMMEDIATE");
-    try {
-      updater(db);
-      db.exec("COMMIT");
-    } catch (error) {
-      db.exec("ROLLBACK");
-      throw error;
-    }
-  });
-  await writeQueue;
+  await updateAppDatabase(updater);
 }

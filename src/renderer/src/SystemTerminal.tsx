@@ -1,8 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { FitAddon } from "@xterm/addon-fit";
+import { SearchAddon } from "@xterm/addon-search";
 import { Terminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
+import { TerminalSearchBar } from "./TerminalSearchBar";
 import type { SystemTerminalKind } from "./types";
+import { useTerminalSearch } from "./useTerminalSearch";
 
 type SystemTerminalTab = {
   key: string;
@@ -279,6 +282,7 @@ function SystemTerminalPane({ tab, active, hidden }: { tab: SystemTerminalTab; a
   const fitAddonRef = useRef<FitAddon | null>(null);
   const terminalIdRef = useRef("");
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; canCopy: boolean } | null>(null);
+  const search = useTerminalSearch({ restoreFocus: () => terminalRef.current?.focus() });
 
   function copyCurrentSelection() {
     const selection = terminalRef.current?.getSelection();
@@ -306,7 +310,7 @@ function SystemTerminalPane({ tab, active, hidden }: { tab: SystemTerminalTab; a
       fontFamily: 'Consolas, "Cascadia Mono", "Courier New", monospace',
       fontSize: 13,
       lineHeight: 1.25,
-      scrollback: 20000,
+      scrollback: 10000,
       theme: {
         background: "#111827",
         foreground: "#e5e7eb",
@@ -314,7 +318,10 @@ function SystemTerminalPane({ tab, active, hidden }: { tab: SystemTerminalTab; a
       }
     });
     const fitAddon = new FitAddon();
+    const searchAddon = new SearchAddon();
     terminal.loadAddon(fitAddon);
+    terminal.loadAddon(searchAddon);
+    const detachSearchAddon = search.attachAddon(searchAddon);
     terminalRef.current = terminal;
     fitAddonRef.current = fitAddon;
     terminal.open(host);
@@ -342,6 +349,23 @@ function SystemTerminalPane({ tab, active, hidden }: { tab: SystemTerminalTab; a
       return true;
     });
 
+    let outputBuffer = "";
+    let outputFrame = 0;
+    let resizeFrame = 0;
+
+    function flushOutput() {
+      outputFrame = 0;
+      if (!outputBuffer) return;
+      const data = outputBuffer;
+      outputBuffer = "";
+      terminal.write(data);
+    }
+
+    function writeTerminalOutput(data: string) {
+      outputBuffer += data;
+      if (!outputFrame) outputFrame = requestAnimationFrame(flushOutput);
+    }
+
     function fitTerminal() {
       fitAddon.fit();
       if (terminalIdRef.current) {
@@ -349,7 +373,15 @@ function SystemTerminalPane({ tab, active, hidden }: { tab: SystemTerminalTab; a
       }
     }
 
-    const resizeObserver = new ResizeObserver(() => requestAnimationFrame(fitTerminal));
+    function scheduleFitTerminal() {
+      if (resizeFrame) return;
+      resizeFrame = requestAnimationFrame(() => {
+        resizeFrame = 0;
+        fitTerminal();
+      });
+    }
+
+    const resizeObserver = new ResizeObserver(scheduleFitTerminal);
     resizeObserver.observe(host);
 
     const onContextMenu = (event: Event) => {
@@ -368,10 +400,11 @@ function SystemTerminalPane({ tab, active, hidden }: { tab: SystemTerminalTab; a
     });
     const removeDataListener = window.codexConsole.onTerminalData((terminalId, data) => {
       if (terminalId !== terminalIdRef.current) return;
-      terminal.write(data);
+      writeTerminalOutput(data);
     });
     const removeExitListener = window.codexConsole.onTerminalExit((terminalId, exitCode) => {
       if (terminalId !== terminalIdRef.current) return;
+      flushOutput();
       terminal.writeln("");
       terminal.writeln(`终端已退出，退出码 ${exitCode}`);
       terminalIdRef.current = "";
@@ -406,7 +439,11 @@ function SystemTerminalPane({ tab, active, hidden }: { tab: SystemTerminalTab; a
       removeExitListener();
       dataDisposable.dispose();
       resizeObserver.disconnect();
+      if (outputFrame) cancelAnimationFrame(outputFrame);
+      if (resizeFrame) cancelAnimationFrame(resizeFrame);
       host.removeEventListener("contextmenu", onContextMenu);
+      detachSearchAddon();
+      searchAddon.dispose();
       fitAddon.dispose();
       terminal.dispose();
       terminalRef.current = null;
@@ -425,8 +462,23 @@ function SystemTerminalPane({ tab, active, hidden }: { tab: SystemTerminalTab; a
   }, [active]);
 
   return (
-    <div className={`system-terminal-pane ${hidden ? "hidden" : ""}`}>
+    <div className={`system-terminal-pane ${hidden ? "hidden" : ""}`} onKeyDownCapture={search.onPanelKeyDownCapture}>
       <div className="system-terminal-host" ref={hostRef} />
+      {search.open && !hidden && (
+        <TerminalSearchBar
+          inputRef={search.inputRef}
+          query={search.query}
+          caseSensitive={search.caseSensitive}
+          wholeWord={search.wholeWord}
+          result={search.result}
+          onQueryChange={search.setQuery}
+          onCaseSensitiveChange={search.setCaseSensitive}
+          onWholeWordChange={search.setWholeWord}
+          onNext={search.findNext}
+          onPrevious={search.findPrevious}
+          onClose={search.closeSearch}
+        />
+      )}
       {contextMenu && !hidden && (
         <div
           className="terminal-context-menu"

@@ -8,6 +8,11 @@ import type { SessionView } from "./aiProviders";
 import { measure } from "./performance";
 import { applySessionMetadataList, setSessionBranchMetadata } from "./sessionMetadata";
 import { getCachedTargets, setCachedTargets } from "./settings";
+import {
+  findCachedProviderSession,
+  listCachedProviderSessions,
+  loadProviderSessionCache
+} from "./providerSessionCache";
 
 const execFileAsync = promisify(execFile);
 const INTERNAL_WSL_DISTROS = new Set(["docker-desktop", "docker-desktop-data"]);
@@ -22,10 +27,14 @@ type GeminiTargetContext = {
 
 type GeminiSessionFile = {
   filePath: string;
-  content: string;
   projectKey: string;
   cwd?: string;
   mtimeMs?: number;
+  size?: number;
+};
+
+type GeminiSessionContentFile = GeminiSessionFile & {
+  content: string;
 };
 
 type SessionMutationEntry = SessionMutationRef & {
@@ -63,7 +72,10 @@ export async function listTargets(): Promise<CodexTarget[]> {
 }
 
 export async function listCachedSessions(_targetId: string, _view: SessionView): Promise<CodexSession[]> {
-  return [];
+  return (await applySessionMetadataList(
+    _targetId,
+    await listCachedProviderSessions<CodexSession>(getGeminiCacheKey(_targetId, _view))
+  )).sort(sortSessionDesc);
 }
 
 export async function listSessions(targetId: string): Promise<CodexSession[]> {
@@ -101,6 +113,21 @@ export async function searchSessions(targetId: string, view: SessionView, query:
 }
 
 export async function getSession(targetId: string, sessionId: string): Promise<CodexSession> {
+  const context = await resolveGeminiTargetContext(targetId);
+  const cached = await findCachedGeminiSession(targetId, sessionId);
+  if (cached) {
+    try {
+      const file = await readGeminiSessionContent(context, {
+        filePath: cached.filePath,
+        projectKey: getGeminiProjectKey(cached.filePath, context.kind),
+        cwd: cached.cwd
+      });
+      const session = parseGeminiSessionFile(file);
+      if (session?.id === sessionId) return (await applySessionMetadataList(targetId, [session]))[0];
+    } catch {
+      // 缓存命中但文件已移动或失效，回退到完整发现流程。
+    }
+  }
   const session = [
     ...(await loadGeminiSessions(targetId, "active")),
     ...(await loadGeminiSessions(targetId, "trash"))
@@ -164,6 +191,35 @@ export async function branchSession(targetId: string, sessionId: string, message
       createdBy: "branch"
     });
     return branch;
+  });
+}
+
+export async function duplicateSession(targetId: string, sessionId: string): Promise<CodexSession> {
+  return measure(`sessions.duplicate.${targetId}`, async () => {
+    const context = await resolveGeminiTargetContext(targetId);
+    const session = await findGeminiSession(targetId, sessionId, "active");
+    const duplicateId = crypto.randomUUID();
+    const sourceText = context.kind === "wsl"
+      ? await wslReadFile(context.distro!, session.filePath)
+      : await fs.readFile(session.filePath, "utf8");
+    const duplicateText = buildGeminiDuplicateSessionText(sourceText, duplicateId);
+    const duplicatePath = buildGeminiBranchPath(context, session.filePath, duplicateId);
+
+    if (context.kind === "wsl") {
+      await wslWriteFile(context.distro!, duplicatePath, duplicateText);
+    } else {
+      await fs.mkdir(path.dirname(duplicatePath), { recursive: true });
+      await fs.writeFile(duplicatePath, duplicateText, "utf8");
+    }
+
+    const duplicated = parseGeminiSessionFile({
+      filePath: duplicatePath,
+      content: duplicateText,
+      projectKey: extractProjectKey(duplicatePath, context.kind),
+      cwd: session.cwd
+    });
+    if (!duplicated) throw new Error("复制 Gemini 会话失败。");
+    return duplicated;
   });
 }
 
@@ -289,10 +345,10 @@ async function probeLocalTarget(): Promise<CodexTarget | null> {
 async function loadGeminiSessions(targetId: string, view: SessionView): Promise<CodexSession[]> {
   const context = await resolveGeminiTargetContext(targetId);
   const files = context.kind === "wsl" ? await listWslSessionFiles(context, view) : await listLocalSessionFiles(context, view);
-
-  const sessions = files
-    .map((file) => parseGeminiSessionFile(file))
-    .filter((session): session is CodexSession => Boolean(session));
+  const cacheKey = getGeminiCacheKey(targetId, view);
+  const sessions = await loadProviderSessionCache(cacheKey, files, async (file) =>
+    parseGeminiSessionFile(await readGeminiSessionContent(context, file))
+  );
   return applySessionMetadataList(targetId, sessions);
 }
 
@@ -300,6 +356,33 @@ async function findGeminiSession(targetId: string, sessionId: string, view: Sess
   const session = (await loadGeminiSessions(targetId, view)).find((item) => item.id === sessionId);
   if (!session) throw new Error(view === "trash" ? `未在 Gemini 回收站找到会话：${sessionId}` : `未找到 Gemini 会话：${sessionId}`);
   return session;
+}
+
+function getGeminiCacheKey(targetId: string, view: SessionView) {
+  return `sessions:gemini:${targetId}:${view}`;
+}
+
+async function findCachedGeminiSession(targetId: string, sessionId: string): Promise<CodexSession | null> {
+  return findCachedProviderSession<CodexSession>(
+    [getGeminiCacheKey(targetId, "active"), getGeminiCacheKey(targetId, "trash")],
+    sessionId
+  );
+}
+
+async function readGeminiSessionContent(
+  context: GeminiTargetContext,
+  file: GeminiSessionFile
+): Promise<GeminiSessionContentFile> {
+  const content = context.kind === "wsl"
+    ? await wslReadFile(context.distro!, file.filePath)
+    : await fs.readFile(file.filePath, "utf8");
+  return { ...file, content };
+}
+
+function getGeminiProjectKey(filePath: string, kind: GeminiTargetContext["kind"]) {
+  return kind === "wsl"
+    ? path.posix.basename(path.posix.dirname(path.posix.dirname(filePath)))
+    : path.basename(path.dirname(path.dirname(filePath)));
 }
 
 async function getGeminiSessionForMutation(
@@ -368,17 +451,14 @@ async function listLocalSessionFiles(context: GeminiTargetContext, view: Session
     for (const name of names) {
       if (!isGeminiSessionFile(name)) continue;
       const filePath = path.join(chatsDir, name);
-      const [content, stat] = await Promise.all([
-        fs.readFile(filePath, "utf8").catch(() => ""),
-        fs.stat(filePath).catch(() => null)
-      ]);
-      if (!content) continue;
+      const stat = await fs.stat(filePath).catch(() => null);
+      if (!stat) continue;
       files.push({
         filePath,
-        content,
         projectKey,
         cwd: projects.get(projectKey),
-        mtimeMs: stat?.mtimeMs
+        mtimeMs: stat.mtimeMs,
+        size: stat.size
       });
     }
   }
@@ -395,20 +475,26 @@ async function listWslSessionFiles(context: GeminiTargetContext, view: SessionVi
     "-path",
     "*/chats/session-*.jsonl",
     "-type",
-    "f"
+    "f",
+    "-printf",
+    "%p\\t%T@\\t%s\\n"
   ]).catch(() => ({ stdout: "" }));
-  const paths = stdout.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  const paths = stdout.split(/\r?\n/).map((line) => line.trim()).filter(Boolean).map((line) => {
+    const [filePath, mtime, size] = line.split("\t");
+    return { filePath, mtimeMs: Number.parseFloat(mtime) * 1000, size: Number.parseInt(size, 10) };
+  });
   const files: GeminiSessionFile[] = [];
 
-  for (const filePath of paths) {
-    const content = await wslReadFile(context.distro, filePath).catch(() => "");
-    if (!content) continue;
+  for (const file of paths) {
+    if (!file.filePath) continue;
+    const filePath = file.filePath;
     const projectKey = path.posix.basename(path.posix.dirname(path.posix.dirname(filePath)));
     files.push({
       filePath,
-      content,
       projectKey,
-      cwd: projects.get(projectKey)
+      cwd: projects.get(projectKey),
+      mtimeMs: Number.isFinite(file.mtimeMs) ? file.mtimeMs : 0,
+      size: Number.isFinite(file.size) ? file.size : 0
     });
   }
 
@@ -435,7 +521,7 @@ function parseProjects(content: string) {
   return projects;
 }
 
-function parseGeminiSessionFile(file: GeminiSessionFile): CodexSession | null {
+function parseGeminiSessionFile(file: GeminiSessionContentFile): CodexSession | null {
   const lines = file.content.split(/\r?\n/).filter(Boolean);
   let id = "";
   let createdAt: string | undefined;
@@ -760,6 +846,41 @@ function buildGeminiBranchSessionText(sourceText: string, branchId: string, keep
   if (!rewrittenMeta) throw new Error("Gemini 源会话缺少 session 元数据。");
   if (visibleMessages < keepCount) throw new Error("Gemini 源会话上下文不足，无法创建分支。");
 
+  lines.push(JSON.stringify({ $set: { lastUpdated: now } }));
+  return `${lines.join("\n")}\n`;
+}
+
+function buildGeminiDuplicateSessionText(sourceText: string, duplicateId: string) {
+  const now = new Date().toISOString();
+  const lines: string[] = [];
+  let rewrittenMeta = false;
+
+  for (const rawLine of sourceText.split(/\r?\n/)) {
+    if (!rawLine.trim()) {
+      lines.push(rawLine);
+      continue;
+    }
+    const item = safeJsonParse<Record<string, unknown>>(rawLine);
+    if (!item) {
+      lines.push(rawLine);
+      continue;
+    }
+    if (!isGeminiMetadataRecord(item)) {
+      lines.push(rawLine);
+      continue;
+    }
+    lines.push(JSON.stringify({
+      ...item,
+      sessionId: duplicateId,
+      startTime: now,
+      lastUpdated: now,
+      kind: stringField(item.kind) || "main"
+    }));
+    rewrittenMeta = true;
+  }
+
+  if (!rewrittenMeta) throw new Error("复制 Gemini 会话失败：缺少会话元数据。");
+  // Gemini 按 lastUpdated 排序；复制时显式更新它，避免刷新后回到源会话的旧位置。
   lines.push(JSON.stringify({ $set: { lastUpdated: now } }));
   return `${lines.join("\n")}\n`;
 }

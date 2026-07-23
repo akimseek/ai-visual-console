@@ -1,7 +1,6 @@
 import { safeStorage } from "electron";
 import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
-import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import type {
@@ -16,26 +15,16 @@ import type {
 } from "./types";
 import { assertAllowedConfigPath } from "../shared/shellArgs";
 import { attachSpawnTimeout } from "./wslProcess";
+import {
+  readAppDatabase,
+  setSessionDatabasePath,
+  type SqliteDatabase,
+  updateAppDatabase
+} from "./appDatabase";
 
 type StoredApiVendor = Omit<ApiVendor, "apiKey"> & {
   apiKey: string;
   apiKeyEncrypted?: boolean;
-};
-
-type SqliteDatabase = {
-  exec(sql: string): void;
-  prepare(sql: string): SqliteStatement;
-  close(): void;
-};
-
-type SqliteStatement = {
-  all(...params: unknown[]): unknown[];
-  get(...params: unknown[]): unknown;
-  run(...params: unknown[]): { changes: number; lastInsertRowid: number | bigint };
-};
-
-type SqliteModule = {
-  DatabaseSync: new (location: string) => SqliteDatabase;
 };
 
 type VendorRow = {
@@ -63,20 +52,17 @@ type VendorConfigRow = {
   sort_order: number;
 };
 
-let vendorDbPath = "";
 let vendorBackupRoot = "";
-let vendorQueue = Promise.resolve();
-let vendorDb: SqliteDatabase | null = null;
+let vendorDatabasePath = "";
+let vendorSchemaPath = "";
+let vendorSchemaPromise: Promise<void> | null = null;
 const CODEX_DEFAULT_MODEL_PROVIDER = "akim";
-const requireFromHere = createRequire(__filename);
 
 export function setVendorDatabasePath(filePath: string, backupRoot: string) {
-  if (vendorDbPath !== filePath && vendorDb) {
-    vendorDb.close();
-    vendorDb = null;
-  }
-  vendorDbPath = filePath;
+  setSessionDatabasePath(filePath);
+  vendorDatabasePath = filePath;
   vendorBackupRoot = backupRoot;
+  if (vendorSchemaPath !== filePath) vendorSchemaPromise = null;
 }
 
 // 当系统不可用 OS 级加密（如无 keyring 的 Linux）时，API Key 只能明文落盘。
@@ -86,11 +72,13 @@ export function isApiKeyEncryptionAvailable() {
 }
 
 export async function listApiVendors(target?: CodexTarget | null): Promise<ApiVendor[]> {
-  const db = await getVendorDb();
-  const rows = target
-    ? db.prepare("SELECT * FROM api_vendors WHERE provider_id = ? ORDER BY updated_at DESC").all(target.provider)
-    : db.prepare("SELECT * FROM api_vendors ORDER BY updated_at DESC").all();
-  return (rows as VendorRow[]).map((row) => rowToVendor(db, row));
+  await ensureVendorSchema();
+  return readAppDatabase((db) => {
+    const rows = target
+      ? db.prepare("SELECT * FROM api_vendors WHERE provider_id = ? ORDER BY updated_at DESC").all(target.provider)
+      : db.prepare("SELECT * FROM api_vendors ORDER BY updated_at DESC").all();
+    return (rows as VendorRow[]).map((row) => rowToVendor(db, row));
+  });
 }
 
 export async function saveApiVendor(input: ApiVendorInput): Promise<ApiVendor> {
@@ -98,7 +86,8 @@ export async function saveApiVendor(input: ApiVendorInput): Promise<ApiVendor> {
   const now = new Date().toISOString();
   let saved: ApiVendor | null = null;
 
-  await updateVendorDb((db) => {
+  await ensureVendorSchema();
+  await updateAppDatabase((db) => {
     const existing = normalized.id
       ? db.prepare("SELECT * FROM api_vendors WHERE id = ?").get(normalized.id) as VendorRow | undefined
       : undefined;
@@ -173,7 +162,8 @@ export async function saveApiVendor(input: ApiVendorInput): Promise<ApiVendor> {
 }
 
 export async function deleteApiVendor(vendorId: string) {
-  await updateVendorDb((db) => {
+  await ensureVendorSchema();
+  await updateAppDatabase((db) => {
     db.prepare("DELETE FROM api_vendors WHERE id = ?").run(vendorId);
   });
   return { deleted: true };
@@ -203,7 +193,8 @@ export async function enableApiVendor(request: ApiVendorEnableRequest, target?: 
     written.push(config.targetPath);
   }
 
-  await updateVendorDb((db) => {
+  await ensureVendorSchema();
+  await updateAppDatabase((db) => {
     db.prepare("UPDATE api_vendors SET enabled = 0").run();
     db.prepare("UPDATE api_vendors SET enabled = 1, last_enabled_at = ?, updated_at = ? WHERE id = ?")
       .run(enabledAt, enabledAt, vendor.id);
@@ -416,25 +407,18 @@ function getWslExe() {
   return process.platform === "win32" ? "wsl.exe" : "wsl";
 }
 
-async function getVendorDb() {
-  if (!vendorDbPath) throw new Error("供应商数据库路径未初始化。");
-  if (vendorDb) return vendorDb;
-  await fs.mkdir(path.dirname(vendorDbPath), { recursive: true });
-  const { DatabaseSync } = loadSqlite();
-  vendorDb = new DatabaseSync(vendorDbPath);
-  initializeVendorDb(vendorDb);
-  return vendorDb;
-}
-
-function loadSqlite(): SqliteModule {
-  try {
-    return requireFromHere("node:sqlite") as SqliteModule;
-  } catch (error: any) {
-    throw new Error(
-      `当前 Electron/Node 运行时不支持 node:sqlite，无法使用供应商数据库：${error?.message || error}`,
-      { cause: error }
-    );
+async function ensureVendorSchema() {
+  if (!vendorDatabasePath) throw new Error("供应商数据库路径未初始化。");
+  if (vendorSchemaPath === vendorDatabasePath) return;
+  if (!vendorSchemaPromise) {
+    const expectedPath = vendorDatabasePath;
+    vendorSchemaPromise = updateAppDatabase((db) => initializeVendorDb(db)).then(() => {
+      vendorSchemaPath = expectedPath;
+    }).finally(() => {
+      vendorSchemaPromise = null;
+    });
   }
+  await vendorSchemaPromise;
 }
 
 function initializeVendorDb(db: SqliteDatabase) {
@@ -476,21 +460,6 @@ function initializeVendorDb(db: SqliteDatabase) {
     CREATE INDEX IF NOT EXISTS idx_api_vendor_configs_vendor_id
       ON api_vendor_configs(vendor_id, sort_order);
   `);
-}
-
-async function updateVendorDb(updater: (db: SqliteDatabase) => void) {
-  vendorQueue = vendorQueue.catch(() => undefined).then(async () => {
-    const db = await getVendorDb();
-    db.exec("BEGIN IMMEDIATE");
-    try {
-      updater(db);
-      db.exec("COMMIT");
-    } catch (error) {
-      db.exec("ROLLBACK");
-      throw error;
-    }
-  });
-  await vendorQueue;
 }
 
 function rowToVendor(db: SqliteDatabase, row: VendorRow): ApiVendor {

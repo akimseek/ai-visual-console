@@ -8,6 +8,11 @@ import type { SessionView } from "./aiProviders";
 import { measure } from "./performance";
 import { applySessionMetadataList, setSessionBranchMetadata } from "./sessionMetadata";
 import { getCachedTargets, setCachedTargets } from "./settings";
+import {
+  findCachedProviderSession,
+  listCachedProviderSessions,
+  loadProviderSessionCache
+} from "./providerSessionCache";
 
 const execFileAsync = promisify(execFile);
 const INTERNAL_WSL_DISTROS = new Set(["docker-desktop", "docker-desktop-data"]);
@@ -23,8 +28,12 @@ type ClaudeTargetContext = {
 
 type ClaudeSessionFile = {
   filePath: string;
-  content: string;
   mtimeMs?: number;
+  size?: number;
+};
+
+type ClaudeSessionContentFile = ClaudeSessionFile & {
+  content: string;
 };
 
 type ClaudeContextHint = {
@@ -43,6 +52,9 @@ type ClaudeUsageAccumulator = {
   last?: TokenUsage;
   updatedAt?: string;
 };
+
+const CLAUDE_TELEMETRY_CACHE_TTL_MS = 15_000;
+const claudeTelemetryCache = new Map<string, { expiresAt: number; hints: Map<string, ClaudeContextHint> }>();
 
 export async function listCachedTargets(): Promise<AiTarget[]> {
   return (await getCachedTargets()).filter((target) => target.provider === "claude");
@@ -64,7 +76,10 @@ export async function listTargets(): Promise<AiTarget[]> {
 }
 
 export async function listCachedSessions(_targetId: string, _view: SessionView): Promise<AiSession[]> {
-  return [];
+  return (await applySessionMetadataList(
+    _targetId,
+    await listCachedProviderSessions<AiSession>(getClaudeCacheKey(_targetId, _view))
+  )).sort(sortSessionDesc);
 }
 
 export async function listSessions(targetId: string): Promise<AiSession[]> {
@@ -95,6 +110,16 @@ export async function searchSessions(targetId: string, view: SessionView, query:
 }
 
 export async function getSession(targetId: string, sessionId: string): Promise<AiSession> {
+  const context = await resolveClaudeTargetContext(targetId);
+  const cached = await findCachedClaudeSession(targetId, sessionId);
+  if (cached) {
+    try {
+      const session = parseClaudeSessionFile(await readClaudeSessionContent(context, { filePath: cached.filePath }));
+      if (session?.id === sessionId) return (await applySessionMetadataList(targetId, [session]))[0];
+    } catch {
+      // 缓存命中但会话已被移动或删除，回退到完整发现流程。
+    }
+  }
   const session = [
     ...(await loadClaudeSessions(targetId, "active")),
     ...(await loadClaudeSessions(targetId, "trash"))
@@ -150,6 +175,30 @@ export async function branchSession(targetId: string, sessionId: string, message
       createdBy: "branch"
     });
     return branch;
+  });
+}
+
+export async function duplicateSession(targetId: string, sessionId: string): Promise<AiSession> {
+  return measure(`sessions.duplicate.${targetId}`, async () => {
+    const context = await resolveClaudeTargetContext(targetId);
+    const session = await findClaudeSession(targetId, sessionId, "active");
+    const duplicateId = crypto.randomUUID();
+    const sourceText = context.kind === "wsl"
+      ? await wslReadFile(context.distro!, session.filePath)
+      : await fs.readFile(session.filePath, "utf8");
+    const duplicateText = buildClaudeDuplicateText(sourceText, duplicateId);
+    const duplicatePath = buildClaudeBranchPath(context, session.filePath, duplicateId);
+
+    if (context.kind === "wsl") {
+      await wslWriteFile(context.distro!, duplicatePath, duplicateText);
+    } else {
+      await fs.mkdir(path.dirname(duplicatePath), { recursive: true });
+      await fs.writeFile(duplicatePath, duplicateText, "utf8");
+    }
+
+    const duplicated = parseClaudeSessionFile({ filePath: duplicatePath, content: duplicateText });
+    if (!duplicated) throw new Error("复制 Claude Code 会话失败。");
+    return duplicated;
   });
 }
 
@@ -257,13 +306,13 @@ async function loadClaudeSessions(targetId: string, view: SessionView): Promise<
   const files = context.kind === "wsl"
     ? await listWslSessionFiles(context, view)
     : await listLocalSessionFiles(context, view);
-  const contextHints = await loadClaudeContextHints(context);
-
-  const sessions = files
-    .map(parseClaudeSessionFile)
-    .filter((session): session is AiSession => Boolean(session))
-    .map((session) => applyClaudeContextHint(session, contextHints.get(session.id)));
-  return applySessionMetadataList(targetId, sessions);
+  const cacheKey = getClaudeCacheKey(targetId, view);
+  const sessions = await loadProviderSessionCache(cacheKey, files, async (file) =>
+    parseClaudeSessionFile(await readClaudeSessionContent(context, file))
+  );
+  const contextHints = view === "active" ? await loadClaudeContextHints(context) : new Map<string, ClaudeContextHint>();
+  const parsed = sessions.map((session) => applyClaudeContextHint(session, contextHints.get(session.id)));
+  return applySessionMetadataList(targetId, parsed);
 }
 
 async function resolveClaudeTargetContext(targetId: string): Promise<ClaudeTargetContext> {
@@ -293,6 +342,27 @@ async function findClaudeSession(targetId: string, sessionId: string, view: Sess
   const session = (await loadClaudeSessions(targetId, view)).find((item) => item.id === sessionId);
   if (!session) throw new Error(view === "trash" ? `未在 Claude 回收站找到会话：${sessionId}` : `未找到 Claude 会话：${sessionId}`);
   return session;
+}
+
+function getClaudeCacheKey(targetId: string, view: SessionView) {
+  return `sessions:claude:${targetId}:${view}`;
+}
+
+async function findCachedClaudeSession(targetId: string, sessionId: string): Promise<AiSession | null> {
+  return findCachedProviderSession<AiSession>(
+    [getClaudeCacheKey(targetId, "active"), getClaudeCacheKey(targetId, "trash")],
+    sessionId
+  );
+}
+
+async function readClaudeSessionContent(
+  context: ClaudeTargetContext,
+  file: ClaudeSessionFile
+): Promise<ClaudeSessionContentFile> {
+  const content = context.kind === "wsl"
+    ? await wslReadFile(context.distro!, file.filePath)
+    : await fs.readFile(file.filePath, "utf8");
+  return { ...file, content };
 }
 
 async function getClaudeSessionForMutation(
@@ -412,11 +482,8 @@ async function listLocalSessionFiles(context: ClaudeTargetContext, view: Session
     for (const entry of entries) {
       if (!entry.isFile() || !entry.name.endsWith(".jsonl")) continue;
       const filePath = path.join(projectDir, entry.name);
-      const [content, stat] = await Promise.all([
-        fs.readFile(filePath, "utf8").catch(() => ""),
-        fs.stat(filePath).catch(() => null)
-      ]);
-      if (content) files.push({ filePath, content, mtimeMs: stat?.mtimeMs });
+      const stat = await fs.stat(filePath).catch(() => null);
+      if (stat) files.push({ filePath, mtimeMs: stat.mtimeMs, size: stat.size });
     }
   }
 
@@ -443,7 +510,7 @@ async function listWslSessionFiles(context: ClaudeTargetContext, view: SessionVi
     "-name",
     "*.jsonl",
     "-printf",
-    "%p\t%T@\n"
+    "%p\t%T@\t%s\n"
   ]).catch(() => ({ stdout: "" }));
 
   const files = stdout
@@ -451,22 +518,20 @@ async function listWslSessionFiles(context: ClaudeTargetContext, view: SessionVi
     .map((line) => line.trim())
     .filter(Boolean)
     .map((line) => {
-      const [filePath, mtime] = line.split("\t");
+      const [filePath, mtime, size] = line.split("\t");
       return {
         filePath,
-        mtimeMs: Number.parseFloat(mtime) * 1000 || undefined
+        mtimeMs: Number.parseFloat(mtime) * 1000 || 0,
+        size: Number.parseInt(size, 10) || 0
       };
     });
-
-  return Promise.all(
-    files.map(async (file) => ({
-      ...file,
-      content: await wslReadFile(context.distro!, file.filePath).catch(() => "")
-    }))
-  );
+  return files;
 }
 
 async function loadClaudeContextHints(context: ClaudeTargetContext): Promise<Map<string, ClaudeContextHint>> {
+  const cacheKey = context.targetId;
+  const cached = claudeTelemetryCache.get(cacheKey);
+  if (cached && cached.expiresAt > Date.now()) return cached.hints;
   const files = context.kind === "wsl"
     ? await listWslTelemetryFiles(context)
     : await listLocalTelemetryFiles(context);
@@ -480,6 +545,7 @@ async function loadClaudeContextHints(context: ClaudeTargetContext): Promise<Map
     collectClaudeContextHints(content, hints);
   }
 
+  claudeTelemetryCache.set(cacheKey, { hints, expiresAt: Date.now() + CLAUDE_TELEMETRY_CACHE_TTL_MS });
   return hints;
 }
 
@@ -529,7 +595,7 @@ function collectClaudeContextHints(content: string, hints: Map<string, ClaudeCon
   }
 }
 
-function parseClaudeSessionFile(file: ClaudeSessionFile): AiSession | null {
+function parseClaudeSessionFile(file: ClaudeSessionContentFile): AiSession | null {
   const records = file.content
     .split(/\r?\n/)
     .map((line) => line.trim())
@@ -612,6 +678,30 @@ function buildClaudeBranchText(sourceText: string, branchId: string, keepMessage
     throw new Error("创建 Claude 分支失败：原始 jsonl 中可保留消息不足。");
   }
 
+  return `${output.join("\n")}\n`;
+}
+
+function buildClaudeDuplicateText(sourceText: string, duplicateId: string) {
+  const output: string[] = [];
+  let rewritten = false;
+
+  for (const line of sourceText.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed) {
+      output.push(line);
+      continue;
+    }
+    const record = safeJsonParse(trimmed);
+    if (!record || typeof record !== "object") {
+      output.push(line);
+      continue;
+    }
+    const next = rewriteClaudeSessionId(record as Record<string, any>, duplicateId);
+    rewritten ||= next.sessionId === duplicateId;
+    output.push(JSON.stringify(next));
+  }
+
+  if (!rewritten) throw new Error("复制 Claude Code 会话失败：缺少会话编号。");
   return `${output.join("\n")}\n`;
 }
 

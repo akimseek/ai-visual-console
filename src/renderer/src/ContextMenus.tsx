@@ -3,6 +3,8 @@
 export function SessionContextMenu({
   menu,
   supportsTrash,
+  canDuplicate,
+  onDuplicate,
   onRename,
   onOpenFolder,
   onRestore,
@@ -12,6 +14,8 @@ export function SessionContextMenu({
 }: {
   menu: { x: number; y: number; view: "active" | "trash" };
   supportsTrash: boolean;
+  canDuplicate: boolean;
+  onDuplicate: () => void;
   onRename: () => void;
   onOpenFolder: () => void;
   onRestore: () => void;
@@ -35,6 +39,17 @@ export function SessionContextMenu({
       >
         重命名
       </button>
+      {canDuplicate && (
+        <button
+          role="menuitem"
+          onClick={() => {
+            onDuplicate();
+            onClose();
+          }}
+        >
+          复制
+        </button>
+      )}
       <button
         role="menuitem"
         onClick={() => {

@@ -78,6 +78,8 @@ const api = {
       params.sessionId,
       params.messageIndex
     ) as Promise<AiSession>,
+  duplicateSession: (targetId: string, sessionId: string, title: string) =>
+    ipcRenderer.invoke("codex:duplicate-session", targetId, sessionId, title) as Promise<AiSession>,
   deleteSession: (targetId: string, sessionId: string, ref?: SessionFileRef) =>
     ipcRenderer.invoke("codex:delete-session", targetId, sessionId, ref) as Promise<{ movedTo: string }>,
   deleteSessions: (targetId: string, sessions: SessionMutationRef[]) =>
@@ -126,6 +128,7 @@ const api = {
   readText: () => ipcRenderer.invoke("clipboard:read-text") as Promise<string>,
   logPerformance: (label: string, durationMs: number, status?: string) =>
     ipcRenderer.invoke("performance:log", label, durationMs, status) as Promise<void>,
+  exportDiagnostics: () => ipcRenderer.invoke("diagnostics:export") as Promise<{ filePath: string }>,
   onTerminalData: (handler: (terminalId: string, data: string) => void) => {
     const listener = (_event: Electron.IpcRendererEvent, terminalId: string, data: string) => handler(terminalId, data);
     ipcRenderer.on("terminal:data", listener);

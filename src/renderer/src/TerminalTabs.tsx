@@ -29,35 +29,43 @@ export function TerminalTabs({
       aria-label="已打开会话"
       onWheel={onWheel}
     >
-      {tabs.map((tab) => (
-        <button
-          key={tab.key}
-          className={tab.key === activeTabKey ? "active" : ""}
-          role="tab"
-          onContextMenu={(event) => onContextMenu(event, tab.key)}
-          onClick={() => onSelect(tab.key, tab.session?.id || "")}
-          title={tab.session?.id || tab.title}
-        >
-          <span>{tab.session ? tab.session.id : tab.title}</span>
-          <strong
-            role="button"
-            tabIndex={0}
-            title="关闭"
-            onClick={(event) => {
-              event.stopPropagation();
-              onClose(tab.key);
-            }}
-            onKeyDown={(event) => {
-              if (event.key !== "Enter" && event.key !== " ") return;
-              event.preventDefault();
-              event.stopPropagation();
-              onClose(tab.key);
-            }}
+      {tabs.map((tab) => {
+        const label = truncateTabTitle(tab.title);
+        return (
+          <button
+            key={tab.key}
+            className={tab.key === activeTabKey ? "active" : ""}
+            role="tab"
+            onContextMenu={(event) => onContextMenu(event, tab.key)}
+            onClick={() => onSelect(tab.key, tab.session?.id || "")}
+            title={tab.title}
           >
-            x
-          </strong>
-        </button>
-      ))}
+            <span>{label}</span>
+            <strong
+              role="button"
+              tabIndex={0}
+              title="关闭"
+              onClick={(event) => {
+                event.stopPropagation();
+                onClose(tab.key);
+              }}
+              onKeyDown={(event) => {
+                if (event.key !== "Enter" && event.key !== " ") return;
+                event.preventDefault();
+                event.stopPropagation();
+                onClose(tab.key);
+              }}
+            >
+              x
+            </strong>
+          </button>
+        );
+      })}
     </div>
   );
+}
+
+function truncateTabTitle(value: string, maxLength = 40) {
+  const characters = Array.from(value);
+  return characters.length > maxLength ? `${characters.slice(0, maxLength).join("")}...` : value;
 }

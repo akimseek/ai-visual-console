@@ -96,6 +96,7 @@ export type CodexConsoleApi = {
     sessionId: string;
     messageIndex: number;
   }) => Promise<AiSession>;
+  duplicateSession: (targetId: string, sessionId: string, title: string) => Promise<AiSession>;
   deleteSession: (targetId: string, sessionId: string, ref?: { filePath?: string }) => Promise<{ movedTo: string }>;
   deleteSessions: (targetId: string, sessions: Array<{ id: string; filePath?: string }>) => Promise<{ processed: Array<{ id: string; filePath?: string }> }>;
   restoreSession: (targetId: string, sessionId: string) => Promise<{ restoredTo: string }>;
@@ -123,6 +124,7 @@ export type CodexConsoleApi = {
   copyText: (text: string) => Promise<void>;
   readText: () => Promise<string>;
   logPerformance: (label: string, durationMs: number, status?: string) => Promise<void>;
+  exportDiagnostics: () => Promise<{ filePath: string }>;
   onTerminalData: (handler: (terminalId: string, data: string) => void) => () => void;
   onTerminalExit: (handler: (terminalId: string, exitCode: number) => void) => () => void;
   onOpenSessionSettings: (handler: () => void) => () => void;

@@ -265,6 +265,35 @@ export async function branchSession(targetId: string, sessionId: string, message
   });
 }
 
+export async function duplicateSession(targetId: string, sessionId: string) {
+  return measure(`sessions.duplicate.${targetId}`, async () => {
+    const session = await getSession(targetId, sessionId);
+    const target = await resolveTarget(targetId);
+    const effectiveTarget =
+      target.kind === "wsl" && !target.codexHome
+        ? { ...target, codexHome: await resolveWslCodexHome(target.distro!) }
+        : target;
+    const duplicateId = crypto.randomUUID();
+    const sourceText = effectiveTarget.kind === "local"
+      ? await readSessionFile(session.filePath)
+      : await wslReadSessionFile(effectiveTarget.distro!, session.filePath);
+    const duplicateText = buildDuplicateSessionText(sourceText, duplicateId);
+    const duplicatePath = buildBranchSessionPath(effectiveTarget, session.filePath, duplicateId);
+
+    if (effectiveTarget.kind === "local") {
+      await fs.mkdir(path.dirname(duplicatePath), { recursive: true });
+      await fs.writeFile(duplicatePath, duplicateText, "utf8");
+    } else {
+      await wslWriteFile(effectiveTarget.distro!, duplicatePath, duplicateText);
+    }
+
+    const duplicated = parseSessionContent(duplicatePath, duplicateText);
+    if (!duplicated) throw new Error("复制会话失败。");
+    await appendHistoryEntry(effectiveTarget, duplicated);
+    return duplicated;
+  });
+}
+
 export async function deleteSession(targetId: string, sessionId: string, ref?: SessionFileRef) {
   return measure(`sessions.delete.${targetId}`, async () => {
     const target = await resolveTarget(targetId);
@@ -528,6 +557,37 @@ function buildBranchSessionText(
     lines.push(rawLine);
   }
 
+  return `${lines.join("\n")}\n`;
+}
+
+function buildDuplicateSessionText(sourceText: string, duplicateId: string) {
+  const now = new Date().toISOString();
+  const lines: string[] = [];
+  let rewrittenMeta = false;
+
+  for (const rawLine of sourceText.split(/\r?\n/)) {
+    if (!rawLine.trim()) {
+      lines.push(rawLine);
+      continue;
+    }
+    const item = safeJsonParse<SessionLine>(rawLine);
+    if (!item) {
+      lines.push(rawLine);
+      continue;
+    }
+    if (item.type !== "session_meta") {
+      lines.push(rawLine);
+      continue;
+    }
+    lines.push(JSON.stringify({
+      ...item,
+      timestamp: now,
+      payload: { ...(item.payload || {}), id: duplicateId, timestamp: now }
+    }));
+    rewrittenMeta = true;
+  }
+
+  if (!rewrittenMeta) throw new Error("复制会话失败：缺少 session_meta 记录。");
   return `${lines.join("\n")}\n`;
 }
 

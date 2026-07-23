@@ -16,6 +16,9 @@ import { getWslDistroFromTargetId, wslMountPathToWindowsPath } from "../shared/w
 type TerminalSession = {
   id: string;
   pty: import("node-pty").IPty;
+  window: BrowserWindow;
+  outputBuffer: string;
+  outputTimer?: NodeJS.Timeout;
 };
 
 type TerminalCommand = {
@@ -83,12 +86,14 @@ async function startPtySession(window: BrowserWindow, command: TerminalCommand, 
     }
   });
 
-  sessions.set(terminalId, { id: terminalId, pty: child });
+  const session: TerminalSession = { id: terminalId, pty: child, window, outputBuffer: "" };
+  sessions.set(terminalId, session);
 
   child.onData((data) => {
-    sendToWindow(window, "terminal:data", terminalId, data);
+    queueTerminalOutput(session, data);
   });
   child.onExit(({ exitCode }) => {
+    flushTerminalOutput(session);
     sessions.delete(terminalId);
     sendToWindow(window, "terminal:exit", terminalId, exitCode);
   });
@@ -184,19 +189,46 @@ export function resizeTerminalSession(terminalId: string, cols: number, rows: nu
 export function stopTerminalSession(terminalId: string) {
   const session = sessions.get(terminalId);
   if (!session) return;
+  if (session.outputTimer) clearTimeout(session.outputTimer);
+  session.outputTimer = undefined;
+  session.outputBuffer = "";
   session.pty.kill();
   sessions.delete(terminalId);
+}
+
+function queueTerminalOutput(session: TerminalSession, data: string) {
+  session.outputBuffer += data;
+  if (session.outputTimer) return;
+  session.outputTimer = setTimeout(() => flushTerminalOutput(session), 16);
+}
+
+function flushTerminalOutput(session: TerminalSession) {
+  if (session.outputTimer) {
+    clearTimeout(session.outputTimer);
+    session.outputTimer = undefined;
+  }
+  if (!session.outputBuffer) return;
+  const data = session.outputBuffer;
+  session.outputBuffer = "";
+  sendToWindow(session.window, "terminal:data", session.id, data);
 }
 
 export function stopAllTerminalSessions() {
   for (const session of sessions.values()) {
     try {
+      if (session.outputTimer) clearTimeout(session.outputTimer);
+      session.outputTimer = undefined;
+      session.outputBuffer = "";
       session.pty.kill();
     } catch {
       // 进程可能已经退出。
     }
   }
   sessions.clear();
+}
+
+export function getTerminalSessionCount() {
+  return sessions.size;
 }
 
 function sendToWindow(window: BrowserWindow, channel: string, ...args: unknown[]) {
@@ -359,4 +391,3 @@ async function buildClaudeCommand(params: TerminalStartParams) {
     cwd
   };
 }
-

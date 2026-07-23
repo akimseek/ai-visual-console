@@ -11,7 +11,7 @@ import type {
 import * as codexTargets from "./codexTargets";
 import * as geminiProvider from "./geminiProvider";
 import * as claudeProvider from "./claudeProvider";
-import { deleteSessionMetadata } from "./sessionMetadata";
+import { applySessionMetadata, deleteSessionMetadata, setSessionCustomTitle } from "./sessionMetadata";
 
 export type SessionView = "active" | "trash";
 
@@ -29,6 +29,7 @@ export type AiProvider = {
   listSessionsByParent: (targetId: string, parentSessionId: string) => Promise<AiSession[]>;
   getSessionFolderPath: (targetId: string, sessionId: string) => Promise<string>;
   branchSession: (targetId: string, sessionId: string, messageIndex: number) => Promise<AiSession>;
+  duplicateSession: (targetId: string, sessionId: string) => Promise<AiSession>;
   deleteSession: (targetId: string, sessionId: string, ref?: SessionFileRef) => Promise<{ movedTo: string }>;
   deleteSessions: (targetId: string, sessions: SessionMutationRef[]) => Promise<SessionBatchMutationResult>;
   restoreSession: (targetId: string, sessionId: string) => Promise<{ restoredTo: string }>;
@@ -59,6 +60,7 @@ const codexProvider: AiProvider = {
   listSessionsByParent: codexTargets.listSessionsByParent,
   getSessionFolderPath: codexTargets.getSessionFolderPath,
   branchSession: codexTargets.branchSession,
+  duplicateSession: codexTargets.duplicateSession,
   deleteSession: codexTargets.deleteSession,
   deleteSessions: codexTargets.deleteSessions,
   restoreSession: codexTargets.restoreSession,
@@ -89,6 +91,7 @@ const geminiAiProvider: AiProvider = {
   listSessionsByParent: geminiProvider.listSessionsByParent,
   getSessionFolderPath: geminiProvider.getSessionFolderPath,
   branchSession: geminiProvider.branchSession,
+  duplicateSession: geminiProvider.duplicateSession,
   deleteSession: geminiProvider.deleteSession,
   deleteSessions: geminiProvider.deleteSessions,
   restoreSession: geminiProvider.restoreSession,
@@ -119,6 +122,7 @@ const claudeAiProvider: AiProvider = {
   listSessionsByParent: claudeProvider.listSessionsByParent,
   getSessionFolderPath: claudeProvider.getSessionFolderPath,
   branchSession: claudeProvider.branchSession,
+  duplicateSession: claudeProvider.duplicateSession,
   deleteSession: claudeProvider.deleteSession,
   deleteSessions: claudeProvider.deleteSessions,
   restoreSession: claudeProvider.restoreSession,
@@ -192,6 +196,13 @@ export function getSessionFolderPath(targetId: string, sessionId: string) {
 
 export function branchSession(targetId: string, sessionId: string, messageIndex: number) {
   return getProviderForTarget(targetId).branchSession(targetId, sessionId, messageIndex);
+}
+
+export async function duplicateSession(targetId: string, sessionId: string, title = "") {
+  const duplicated = await getProviderForTarget(targetId).duplicateSession(targetId, sessionId);
+  if (!title.trim()) return duplicated;
+  await setSessionCustomTitle(targetId, duplicated.id, title);
+  return applySessionMetadata(targetId, duplicated);
 }
 
 export function deleteSession(targetId: string, sessionId: string, ref?: SessionFileRef) {
