@@ -1,4 +1,5 @@
 import { execFile, spawn } from "node:child_process";
+import { once } from "node:events";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -240,20 +241,12 @@ export async function branchSession(targetId: string, sessionId: string, message
         ? { ...target, codexHome: await resolveWslCodexHome(target.distro!) }
         : target;
     const branchId = crypto.randomUUID();
-    const sourceText = effectiveTarget.kind === "local" ? await readSessionFile(session.filePath) : await wslReadSessionFile(effectiveTarget.distro!, session.filePath);
-    const sourceMeta = findSessionMetaLine(sourceText);
-    const branchText = buildBranchSessionText(session, keepCount, sourceMeta, sourceText, branchId);
     const branchPath = buildBranchSessionPath(effectiveTarget, session.filePath, branchId);
+    await writeBranchSession(effectiveTarget, session, keepCount, branchId, branchPath);
 
-    if (effectiveTarget.kind === "local") {
-      await fs.mkdir(path.dirname(branchPath), { recursive: true });
-      await fs.writeFile(branchPath, branchText, "utf8");
-    } else {
-      await wslWriteFile(effectiveTarget.distro!, branchPath, branchText);
-    }
-
-    const branch = parseSessionContent(branchPath, branchText);
-    if (!branch) throw new Error("创建分支失败。");
+    const branch = effectiveTarget.kind === "local"
+      ? await loadLocalSession(branchPath)
+      : await loadWslSession(effectiveTarget.distro!, branchPath);
     branch.metadata = await setSessionBranchMetadata(effectiveTarget.id, branch.id, {
       parentTargetId: targetId,
       parentSessionId: session.id,
@@ -499,65 +492,169 @@ async function findWslAnySessionFile(targetId: string, sessionId: string) {
   return session.filePath;
 }
 
-function buildBranchSessionText(
+type SessionLineWriter = {
+  write: (line: string) => Promise<void>;
+  close: () => Promise<void>;
+  abort: () => Promise<void>;
+};
+
+async function writeBranchSession(
+  target: CodexTarget,
   session: CodexSession,
   keepCount: number,
-  sourceMeta: SessionLine | null | undefined,
-  sourceText: string,
-  branchId: string
+  branchId: string,
+  branchPath: string
 ) {
-  const now = new Date();
-  const metaTimestamp = now.toISOString();
-  const lines: string[] = [];
+  const writer = target.kind === "local"
+    ? await createLocalSessionLineWriter(branchPath)
+    : await createWslSessionLineWriter(target.distro!, branchPath);
+  const metaTimestamp = new Date().toISOString();
   let rewrittenMeta = false;
   let uniqueMessages = 0;
   let currentMessageKey = "";
   let cutoffKey = "";
+  let complete = false;
 
-  for (const rawLine of sourceText.split(/\r?\n/)) {
-    if (!rawLine.trim()) continue;
+  const writeLine = async (rawLine: string): Promise<boolean> => {
+    if (complete) return false;
+    if (!rawLine.trim()) return true;
     const item = safeJsonParse<SessionLine>(rawLine);
-    if (!item) continue;
+    if (!item) return true;
 
     if (item.type === "session_meta") {
-      if (rewrittenMeta) continue;
-      const metaPayload = {
-        ...(sourceMeta?.payload || item.payload || {}),
-        id: branchId,
-        timestamp: metaTimestamp,
-        cwd: session.cwd,
-        model: session.model,
-        cli_version: session.cliVersion
-      };
-      lines.push(
-        JSON.stringify({
-          timestamp: metaTimestamp,
-          type: "session_meta",
-          payload: metaPayload
-        })
-      );
+      if (rewrittenMeta) return true;
       rewrittenMeta = true;
-      continue;
+      await writer.write(JSON.stringify({
+        timestamp: metaTimestamp,
+        type: "session_meta",
+        payload: {
+          ...(item.payload || {}),
+          id: branchId,
+          timestamp: metaTimestamp,
+          cwd: session.cwd,
+          model: session.model,
+          cli_version: session.cliVersion
+        }
+      }));
+      return true;
     }
 
     const message = extractMessage(item);
     const messageKey = message && shouldKeepMessage(message) ? `${message.role}\u0000${message.text}` : "";
-
     if (cutoffKey && messageKey !== cutoffKey) {
-      break;
+      complete = true;
+      return false;
     }
-
     if (messageKey && messageKey !== currentMessageKey) {
       uniqueMessages += 1;
       currentMessageKey = messageKey;
-      if (uniqueMessages > keepCount) break;
+      if (uniqueMessages > keepCount) {
+        complete = true;
+        return false;
+      }
       if (uniqueMessages === keepCount) cutoffKey = messageKey;
     }
+    await writer.write(rawLine);
+    return true;
+  };
 
-    lines.push(rawLine);
+  try {
+    if (target.kind === "local") await readSessionFileLines(session.filePath, writeLine);
+    else await wslReadSessionLines(target.distro!, session.filePath, writeLine);
+    if (!rewrittenMeta) throw new Error("创建分支失败：缺少 session_meta 记录。");
+    await writer.close();
+  } catch (error) {
+    await writer.abort();
+    throw error;
+  }
+}
+
+async function createLocalSessionLineWriter(filePath: string): Promise<SessionLineWriter> {
+  const temporaryPath = `${filePath}.tmp-${process.pid}-${crypto.randomUUID()}`;
+  await fs.mkdir(path.dirname(filePath), { recursive: true });
+  const handle = await fs.open(temporaryPath, "w");
+  let closed = false;
+  return {
+    write: async (line) => {
+      if (closed) throw new Error("分支文件写入已关闭。");
+      await handle.write(`${line}\n`, undefined, "utf8");
+    },
+    close: async () => {
+      if (closed) return;
+      closed = true;
+      await handle.close();
+      await fs.rename(temporaryPath, filePath);
+    },
+    abort: async () => {
+      if (!closed) {
+        closed = true;
+        await handle.close().catch(() => undefined);
+      }
+      await fs.rm(temporaryPath, { force: true }).catch(() => undefined);
+    }
+  };
+}
+
+async function createWslSessionLineWriter(distro: string, filePath: string): Promise<SessionLineWriter> {
+  const wslExe = await getWslExe();
+  if (!wslExe) throw new Error("未找到 wsl.exe。");
+  const temporaryPath = `${filePath}.tmp-${process.pid}-${crypto.randomUUID()}`;
+  const script = `mkdir -p ${shellQuote(path.posix.dirname(filePath))} && cat > ${shellQuote(temporaryPath)}`;
+  const child = spawn(wslExe, ["-d", distro, "--", "bash", "-lc", script], {
+    windowsHide: true,
+    stdio: ["pipe", "ignore", "pipe"]
+  });
+  const stderr: Buffer[] = [];
+  let timeoutError: Error | null = null;
+  let writeError: Error | null = null;
+  const exit = new Promise<number | null>((resolve, reject) => {
+    child.on("error", reject);
+    child.on("close", resolve);
+  });
+  const clearTimer = attachSpawnTimeout(child, (error) => {
+    timeoutError = error;
+  }, `写入 ${filePath}`);
+  child.stderr.on("data", (chunk: Buffer) => stderr.push(chunk));
+  child.stdin.on("error", (error) => {
+    writeError = error;
+  });
+  let closed = false;
+
+  async function finish() {
+    child.stdin.end();
+    const code = await exit;
+    clearTimer();
+    if (timeoutError) throw timeoutError;
+    if (writeError) throw writeError;
+    if (code !== 0) {
+      throw new Error(Buffer.concat(stderr).toString("utf8").trim() || `写入文件失败：${code}`);
+    }
   }
 
-  return `${lines.join("\n")}\n`;
+  return {
+    write: async (line) => {
+      if (closed) throw new Error("分支文件写入已关闭。");
+      if (writeError) throw writeError;
+      if (!child.stdin.write(`${line}\n`, "utf8")) await once(child.stdin, "drain");
+      if (writeError) throw writeError;
+    },
+    close: async () => {
+      if (closed) return;
+      closed = true;
+      await finish();
+      await wslRunShell(distro, `mv -f ${shellQuote(temporaryPath)} ${shellQuote(filePath)}`);
+    },
+    abort: async () => {
+      if (!closed) {
+        closed = true;
+        child.stdin.destroy();
+        child.kill("SIGKILL");
+      }
+      clearTimer();
+      await exit.catch(() => undefined);
+      await wslRunShell(distro, `rm -f ${shellQuote(temporaryPath)}`).catch(() => undefined);
+    }
+  };
 }
 
 function buildDuplicateSessionText(sourceText: string, duplicateId: string) {
@@ -621,15 +718,6 @@ function buildBranchSessionPath(target: CodexTarget, sourcePath: string, branchI
     return path.posix.join(activeRoot, relativeDir, branchName);
   }
   throw new Error("分支只能从会话目录或回收站内的会话生成。");
-}
-
-function findSessionMetaLine(content: string) {
-  for (const line of content.split(/\r?\n/)) {
-    if (!line.trim()) continue;
-    const parsed = safeJsonParse<SessionLine>(line);
-    if (parsed?.type === "session_meta") return parsed;
-  }
-  return null;
 }
 
 async function wslWriteFile(distro: string, filePath: string, content: string) {
@@ -914,45 +1002,58 @@ async function wslReadSessionFile(distro: string, filePath: string) {
   return wslReadFile(distro, filePath);
 }
 
-async function wslReadSessionLines(distro: string, filePath: string, onLine: (line: string) => void) {
+async function wslReadSessionLines(
+  distro: string,
+  filePath: string,
+  onLine: (line: string) => void | boolean | Promise<void | boolean>
+) {
   const wslExe = await getWslExe();
   if (!wslExe) throw new Error("未找到 wsl.exe。");
 
-  return new Promise<void>((resolve, reject) => {
-    const child = spawn(wslExe, ["-d", distro, "--", "cat", filePath], {
-      windowsHide: true,
-      stdio: ["ignore", "pipe", "pipe"]
-    });
-    const lines = createInterface({ input: child.stdout, crlfDelay: Infinity });
-    const stderr: Buffer[] = [];
-    let processClosed = false;
-    let linesClosed = false;
-    let exitCode: number | null = null;
-    let settled = false;
-    const settle = (error?: Error) => {
-      if (settled) return;
-      if (!error && (!processClosed || !linesClosed)) return;
-      settled = true;
-      clearTimer();
-      if (error) reject(error);
-      else if (exitCode === 0) resolve();
-      else reject(new Error(Buffer.concat(stderr).toString("utf8").trim() || `cat 退出码：${exitCode}`));
-    };
-    const clearTimer = attachSpawnTimeout(child, (error) => settle(error), `读取 ${filePath}`);
-
-    lines.on("line", onLine);
-    lines.on("close", () => {
-      linesClosed = true;
-      settle();
-    });
-    child.stderr.on("data", (chunk: Buffer) => stderr.push(chunk));
-    child.on("error", (error) => settle(error));
+  const child = spawn(wslExe, ["-d", distro, "--", "cat", filePath], {
+    windowsHide: true,
+    stdio: ["ignore", "pipe", "pipe"]
+  });
+  const lines = createInterface({ input: child.stdout, crlfDelay: Infinity });
+  const stderr: Buffer[] = [];
+  let timeoutError: Error | null = null;
+  let processClosed = false;
+  const exit = new Promise<number | null>((resolve, reject) => {
+    child.on("error", reject);
     child.on("close", (code) => {
       processClosed = true;
-      exitCode = code;
-      settle();
+      resolve(code);
     });
   });
+  const clearTimer = attachSpawnTimeout(child, (error) => {
+    timeoutError = error;
+  }, `读取 ${filePath}`);
+  child.stderr.on("data", (chunk: Buffer) => stderr.push(chunk));
+
+  try {
+    for await (const line of lines) {
+      if ((await onLine(line)) === false) {
+        lines.close();
+        child.stdout.destroy();
+        child.kill("SIGKILL");
+        await exit.catch(() => undefined);
+        return;
+      }
+    }
+    const code = await exit;
+    if (timeoutError) throw timeoutError;
+    if (code !== 0) throw new Error(Buffer.concat(stderr).toString("utf8").trim() || `cat 退出码：${code}`);
+  } catch (error) {
+    if (!processClosed) {
+      lines.close();
+      child.stdout.destroy();
+      child.kill("SIGKILL");
+      await exit.catch(() => undefined);
+    }
+    throw error;
+  } finally {
+    clearTimer();
+  }
 }
 
 async function wslReadFileHead(distro: string, filePath: string) {

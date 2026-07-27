@@ -98,6 +98,7 @@ export function App() {
   } = useSystemTerminal();
   const { workspaceBusyMessage, workspaceFocusRequest, runWorkspaceAction } = useWorkspaceAction({
     setError,
+    setNotice,
     focusActiveInput: () => focusActiveWorkspaceInput(workspaceRef.current)
   });
 

@@ -286,10 +286,19 @@ export async function readSessionFile(filePath: string) {
   return fs.readFile(filePath, "utf8");
 }
 
-export async function readSessionFileLines(filePath: string, onLine: (line: string) => void) {
+export async function readSessionFileLines(
+  filePath: string,
+  onLine: (line: string) => void | boolean | Promise<void | boolean>
+) {
   const input = createReadStream(filePath, { encoding: "utf8" });
   const lines = createInterface({ input, crlfDelay: Infinity });
-  for await (const line of lines) onLine(line);
+  try {
+    for await (const line of lines) {
+      if ((await onLine(line)) === false) break;
+    }
+  } finally {
+    input.destroy();
+  }
 }
 
 async function readCache(cachePath: string): Promise<SessionCache> {

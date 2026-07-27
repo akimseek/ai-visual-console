@@ -15,7 +15,11 @@ export function createSessionBranchActions({
   clearPendingTerminalTab
 }: {
   targetId: string;
-  runWorkspaceAction: (message: string, action: () => Promise<unknown>) => Promise<void>;
+  runWorkspaceAction: (
+    message: string,
+    action: () => Promise<unknown>,
+    options?: { errorAsNotice?: boolean }
+  ) => Promise<void>;
   loadActiveSessions: () => Promise<void>;
   setBranchPanel: Dispatch<SetStateAction<BranchPanelState | null>>;
   openDerivedSession: (session: AiSession) => void;
@@ -39,7 +43,7 @@ export function createSessionBranchActions({
             : current
         );
         openDerivedSession(branch);
-      });
+      }, { errorAsNotice: true });
     } finally {
       clearPendingTerminalTab();
     }

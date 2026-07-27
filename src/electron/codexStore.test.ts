@@ -2,7 +2,15 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { deleteSession, deleteSessions, getCachePath, purgeSession, removeSessionsFromCache, setSessionCacheRoot } from "./codexStore";
+import {
+  deleteSession,
+  deleteSessions,
+  getCachePath,
+  purgeSession,
+  readSessionFileLines,
+  removeSessionsFromCache,
+  setSessionCacheRoot
+} from "./codexStore";
 
 // D1 回归：本地删除/彻底删除接受渲染层提供的 filePath 快路径，
 // 但必须验证它落在 sessions / 回收站目录内，且文件确实属于该 sessionId。
@@ -114,5 +122,20 @@ describe("purgeSession 快路径", () => {
     const source = await writeRollout(path.join(codexHome, "sessions"), "rollout-d.jsonl", SESSION_ID);
     await expect(purgeSession(SESSION_ID, source)).rejects.toThrow();
     expect(await exists(source)).toBe(true);
+  });
+});
+
+describe("readSessionFileLines", () => {
+  it("回调返回 false 时停止读取后续行", async () => {
+    const source = path.join(workDir, "stream.jsonl");
+    await fs.writeFile(source, "first\nsecond\nthird\n", "utf8");
+    const received: string[] = [];
+
+    await readSessionFileLines(source, async (line) => {
+      received.push(line);
+      return line !== "second";
+    });
+
+    expect(received).toEqual(["first", "second"]);
   });
 });
