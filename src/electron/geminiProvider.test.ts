@@ -2,9 +2,18 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+
+vi.mock("./sessionMetadata", () => ({
+  applySessionMetadataList: async (_targetId: string, sessions: unknown[]) => sessions,
+  findSessionIdsByParent: async () => null,
+  setSessionBranchMetadata: async (_targetId: string, _sessionId: string, branch: unknown) => ({ branch })
+}));
+
 import {
   deleteSession,
+  branchSession,
   getSession,
+  getSessionMessagesPage,
   listSessions,
   purgeSession,
   restoreSession,
@@ -100,11 +109,55 @@ describe("searchSessions", () => {
     const hits = await searchSessions("gemini:local", "active", "DOGS");
     expect(hits.map((session) => session.id)).toEqual([SESSION_A]);
   });
+
+  it("列表仅缓存有限预览，但全文搜索仍可命中后续消息", async () => {
+    await writeGeminiSession("projA", "session-2024-01-01T12-00-eeeeeeee.jsonl", [
+      { sessionId: "gem-preview", projectHash: "projA", startTime: "2024-01-01T12:00:00Z", lastUpdated: "2024-01-01T12:10:00Z", kind: "main" },
+      { type: "user", timestamp: "2024-01-01T12:00:00Z", content: "Preview question" },
+      ...Array.from({ length: 10 }, (_, index) => ({
+        type: "gemini",
+        timestamp: `2024-01-01T12:${String(index + 1).padStart(2, "0")}:00Z`,
+        content: `Later answer ${index + 1}`
+      }))
+    ]);
+
+    const preview = (await listSessions("gemini:local")).find((session) => session.id === "gem-preview");
+    expect(preview?.preview).toHaveLength(8);
+    expect(preview?.messageCount).toBe(11);
+    expect((await searchSessions("gemini:local", "active", "Later answer 10")).map((session) => session.id)).toContain("gem-preview");
+    await expect(getSessionMessagesPage("gemini:local", "gem-preview", 8, 2)).resolves.toMatchObject({
+      offset: 8,
+      messages: [{ text: "Later answer 8" }, { text: "Later answer 9" }],
+      hasMore: true
+    });
+    await expect(getSessionMessagesPage("gemini:local", "gem-preview", -1, 2)).resolves.toMatchObject({
+      offset: 9,
+      messages: [{ text: "Later answer 9" }, { text: "Later answer 10" }],
+      hasMore: true
+    });
+  });
 });
 
 describe("getSession", () => {
   it("找不到会话时抛错", async () => {
     await expect(getSession("gemini:local", "missing")).rejects.toThrow("未找到 Gemini");
+  });
+
+  it("携带 filePath 时直接读取指定会话", async () => {
+    const filePath = path.join(tmpRoot, "projA", "chats", FILE_A);
+    await expect(getSession("gemini:local", SESSION_A, { filePath })).resolves.toMatchObject({ id: SESSION_A });
+  });
+});
+
+describe("branchSession", () => {
+  it("可从列表预览之外的绝对消息位置创建分支", async () => {
+    await writeGeminiSession("projA", "session-2024-01-01T12-00-cccccccc.jsonl", [
+      { sessionId: "gem-long", projectHash: "projA", startTime: "2024-01-01T12:00:00Z", lastUpdated: "2024-01-01T12:12:00Z", kind: "main" },
+      { type: "user", timestamp: "2024-01-01T12:00:00Z", content: "Start" },
+      ...Array.from({ length: 12 }, (_, index) => ({ type: "gemini", timestamp: `2024-01-01T12:${String(index + 1).padStart(2, "0")}:00Z`, content: `Answer ${index + 1}` }))
+    ]);
+
+    await expect(branchSession("gemini:local", "gem-long", 10)).resolves.toMatchObject({ messageCount: 10 });
   });
 });
 

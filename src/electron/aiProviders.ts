@@ -6,6 +6,7 @@ import type {
   AiTarget,
   SessionBatchMutationResult,
   SessionFileRef,
+  SessionMessagePage,
   SessionMutationRef
 } from "./types";
 import * as codexTargets from "./codexTargets";
@@ -25,7 +26,9 @@ export type AiProvider = {
   listSessions: (targetId: string) => Promise<AiSession[]>;
   listTrashSessions: (targetId: string) => Promise<AiSession[]>;
   searchSessions: (targetId: string, view: SessionView, query: string) => Promise<AiSession[]>;
-  getSession: (targetId: string, sessionId: string) => Promise<AiSession>;
+  getSession: (targetId: string, sessionId: string, ref?: SessionFileRef) => Promise<AiSession>;
+  getSessionMessagesPage: (targetId: string, sessionId: string, offset: number, limit: number) => Promise<SessionMessagePage>;
+  getSessionSummary: (targetId: string, sessionId: string) => Promise<AiSession>;
   listSessionsByParent: (targetId: string, parentSessionId: string) => Promise<AiSession[]>;
   getSessionFolderPath: (targetId: string, sessionId: string) => Promise<string>;
   branchSession: (targetId: string, sessionId: string, messageIndex: number) => Promise<AiSession>;
@@ -57,6 +60,8 @@ const codexProvider: AiProvider = {
   listTrashSessions: codexTargets.listTrashSessions,
   searchSessions: codexTargets.searchSessions,
   getSession: codexTargets.getSession,
+  getSessionMessagesPage: codexTargets.getSessionMessagesPage,
+  getSessionSummary: codexTargets.getSessionSummary,
   listSessionsByParent: codexTargets.listSessionsByParent,
   getSessionFolderPath: codexTargets.getSessionFolderPath,
   branchSession: codexTargets.branchSession,
@@ -88,6 +93,8 @@ const geminiAiProvider: AiProvider = {
   listTrashSessions: geminiProvider.listTrashSessions,
   searchSessions: geminiProvider.searchSessions,
   getSession: geminiProvider.getSession,
+  getSessionMessagesPage: geminiProvider.getSessionMessagesPage,
+  getSessionSummary: geminiProvider.getSessionSummary,
   listSessionsByParent: geminiProvider.listSessionsByParent,
   getSessionFolderPath: geminiProvider.getSessionFolderPath,
   branchSession: geminiProvider.branchSession,
@@ -119,6 +126,8 @@ const claudeAiProvider: AiProvider = {
   listTrashSessions: claudeProvider.listTrashSessions,
   searchSessions: claudeProvider.searchSessions,
   getSession: claudeProvider.getSession,
+  getSessionMessagesPage: claudeProvider.getSessionMessagesPage,
+  getSessionSummary: claudeProvider.getSessionSummary,
   listSessionsByParent: claudeProvider.listSessionsByParent,
   getSessionFolderPath: claudeProvider.getSessionFolderPath,
   branchSession: claudeProvider.branchSession,
@@ -182,8 +191,16 @@ export function searchSessions(targetId: string, view: SessionView, query: strin
   return getProviderForTarget(targetId).searchSessions(targetId, view, query);
 }
 
-export function getSession(targetId: string, sessionId: string) {
-  return getProviderForTarget(targetId).getSession(targetId, sessionId);
+export function getSession(targetId: string, sessionId: string, ref?: SessionFileRef) {
+  return getProviderForTarget(targetId).getSession(targetId, sessionId, ref);
+}
+
+export function getSessionMessagesPage(targetId: string, sessionId: string, offset: number, limit: number) {
+  return getProviderForTarget(targetId).getSessionMessagesPage(targetId, sessionId, offset, limit);
+}
+
+export function getSessionSummary(targetId: string, sessionId: string) {
+  return getProviderForTarget(targetId).getSessionSummary(targetId, sessionId);
 }
 
 export function listSessionsByParent(targetId: string, parentSessionId: string) {

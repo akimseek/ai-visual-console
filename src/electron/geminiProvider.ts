@@ -3,10 +3,12 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
-import type { CodexMessage, CodexSession, CodexTarget, SessionBatchMutationResult, SessionFileRef, SessionMutationRef, SessionUsage, TokenUsage } from "./types";
+import type { CodexMessage, CodexSession, CodexTarget, SessionBatchMutationResult, SessionFileRef, SessionMessagePage, SessionMutationRef, SessionUsage, TokenUsage } from "./types";
 import type { SessionView } from "./aiProviders";
 import { measure } from "./performance";
-import { applySessionMetadataList, setSessionBranchMetadata } from "./sessionMetadata";
+import { hasAppDatabase, readSessionMessageIndex, saveSessionMessageIndex } from "./appDatabase";
+import { applySessionMetadataList, findSessionIdsByParent, setSessionBranchMetadata } from "./sessionMetadata";
+import { readLocalLines, readWslLines } from "./wslProcess";
 import { getCachedTargets, setCachedTargets } from "./settings";
 import {
   findCachedProviderSession,
@@ -17,6 +19,7 @@ import {
 const execFileAsync = promisify(execFile);
 const INTERNAL_WSL_DISTROS = new Set(["docker-desktop", "docker-desktop-data"]);
 const GEMINI_SESSION_PREFIX = "session-";
+const GEMINI_LIST_PREVIEW_LIMIT = 8;
 
 type GeminiTargetContext = {
   targetId: string;
@@ -97,23 +100,28 @@ export async function searchSessions(targetId: string, view: SessionView, query:
   const source = view === "trash" ? await listTrashSessions(targetId) : await listSessions(targetId);
   if (!normalized) return source;
 
-  return source.filter((session) => {
-    const haystack = [
-      session.id,
-      session.title,
-      session.sourceTitle || "",
-      session.cwd || "",
-      session.model || "",
-      ...session.preview.map((message) => message.text)
-    ]
-      .join("\n")
-      .toLowerCase();
-    return haystack.includes(normalized);
-  });
+  const context = await resolveGeminiTargetContext(targetId);
+  const matches: CodexSession[] = [];
+  for (const session of source) {
+    if (matchesGeminiSessionSummary(session, normalized) || await geminiSessionContains(context, session.filePath, normalized)) {
+      matches.push(session);
+    }
+  }
+  return matches;
 }
 
-export async function getSession(targetId: string, sessionId: string): Promise<CodexSession> {
+export async function getSession(targetId: string, sessionId: string, ref?: SessionFileRef): Promise<CodexSession> {
   const context = await resolveGeminiTargetContext(targetId);
+  if (ref?.filePath) {
+    assertGeminiSessionPath(context, ref.filePath, "active");
+    await verifyGeminiSessionId(context, ref.filePath, sessionId);
+    const session = await readGeminiSessionLines(context, {
+      filePath: ref.filePath,
+      projectKey: getGeminiProjectKey(ref.filePath, context.kind)
+    });
+    if (!session || session.id !== sessionId) throw new Error(`会话文件与会话编号不匹配：${sessionId}`);
+    return (await applySessionMetadataList(targetId, [session]))[0];
+  }
   const cached = await findCachedGeminiSession(targetId, sessionId);
   if (cached) {
     try {
@@ -136,8 +144,93 @@ export async function getSession(targetId: string, sessionId: string): Promise<C
   return session;
 }
 
+export async function getSessionMessagesPage(targetId: string, sessionId: string, offset: number, limit: number): Promise<SessionMessagePage> {
+  return measure(`sessions.page.${targetId}`, async () => {
+    const context = await resolveGeminiTargetContext(targetId);
+    const session = await getSessionSummary(targetId, sessionId);
+    const latest = offset === -1;
+    const pageOffset = latest ? 0 : Math.max(0, Math.floor(offset));
+    const pageLimit = Math.max(1, Math.floor(limit));
+    const messages: CodexMessage[] = [];
+    let previous: CodexMessage | null = null;
+    let hasMore = false;
+    const fileMtimeMs = session.fileMtimeMs || Date.parse(session.updatedAt || "") || 0;
+    const fileSize = session.fileSize || 0;
+    const anchor = !latest && hasAppDatabase() ? await readSessionMessageIndex({ targetId, sessionId, filePath: session.filePath, mtimeMs: fileMtimeMs, size: fileSize }, pageOffset) : null;
+    const anchors: Array<{ messageOffset: number; lineNumber: number }> = [];
+    let visibleIndex = anchor?.messageOffset || 0;
+    const pushMessage = (value: unknown, lineNumber: number, canAnchor: boolean) => {
+      const message = toGeminiMessage(value);
+      if (!message || !shouldKeepGeminiMessage(message)) return true;
+      if (previous?.role === message.role && previous.text === message.text) return true;
+      previous = message;
+      if (!latest && visibleIndex >= pageOffset + pageLimit) {
+        hasMore = true;
+        return false;
+      }
+      if (canAnchor && visibleIndex % 100 === 0) anchors.push({ messageOffset: visibleIndex, lineNumber });
+      if (latest) {
+        messages.push(message);
+        if (messages.length > pageLimit) messages.shift();
+        visibleIndex += 1;
+        return true;
+      }
+      if (visibleIndex >= pageOffset) messages.push(message);
+      visibleIndex += 1;
+      return true;
+    };
+    const push = (line: string, lineNumber: number) => {
+      const item = safeJsonParse<Record<string, unknown>>(line);
+      if (!item) return true;
+      const patch = objectField(item.$set);
+      if (Array.isArray(patch.messages)) {
+        for (const [messageIndex, message] of patch.messages.entries()) {
+          if (!pushMessage(message, lineNumber, messageIndex === 0)) return false;
+        }
+      }
+      return typeof item.type === "string" ? pushMessage(item, lineNumber, true) : true;
+    };
+    const startLine = latest ? 1 : anchor?.lineNumber || 1;
+    if (context.kind === "wsl") await readWslLines(context.distro!, session.filePath, push, startLine);
+    else await readLocalLines(session.filePath, push, startLine);
+    if (hasAppDatabase()) await saveSessionMessageIndex({
+      targetId,
+      sessionId,
+      filePath: session.filePath,
+      mtimeMs: fileMtimeMs,
+      size: fileSize,
+      anchors,
+      messageCount: Math.max(session.messageCount, anchor?.messageCount || 0, hasMore ? 0 : visibleIndex)
+    });
+    return { offset: latest ? Math.max(0, visibleIndex - messages.length) : pageOffset, messages, hasMore: latest ? visibleIndex > messages.length : hasMore };
+  });
+}
+
+export async function getSessionSummary(targetId: string, sessionId: string): Promise<CodexSession> {
+  const cached = [
+    ...(await listCachedSessions(targetId, "active")),
+    ...(await listCachedSessions(targetId, "trash"))
+  ].find((session) => session.id === sessionId);
+  if (cached) return cached;
+
+  const session = [
+    ...(await listSessions(targetId)),
+    ...(await listTrashSessions(targetId))
+  ].find((item) => item.id === sessionId);
+  if (!session) throw new Error(`未找到 Gemini 会话：${sessionId}`);
+  return session;
+}
+
 export async function listSessionsByParent(targetId: string, parentSessionId: string): Promise<CodexSession[]> {
   return measure(`sessions.children.${targetId}`, async () => {
+    const childIds = await findSessionIdsByParent(targetId, parentSessionId);
+    if (childIds) {
+      if (childIds.length === 0) return [];
+      const idSet = new Set(childIds);
+      const cached = (await listCachedSessions(targetId, "active")).filter((session) => idSet.has(session.id));
+      if (cached.length === childIds.length) return cached;
+    }
+
     const sessions = await listSessions(targetId);
     return sessions.filter((session) => session.metadata?.branch?.parentSessionId === parentSessionId);
   });
@@ -156,18 +249,15 @@ export async function branchSession(targetId: string, sessionId: string, message
       throw new Error("请选择至少一条前置上下文后再创建分支。");
     }
 
-    const session = await getSession(targetId, sessionId);
-    const keepCount = Math.min(messageIndex, session.preview.length);
+    const session = await getSessionSummary(targetId, sessionId);
+    const keepCount = Math.min(messageIndex, session.messageCount);
     if (keepCount <= 0) {
       throw new Error("当前 Gemini 会话没有可保留的上下文。");
     }
 
     const context = await resolveGeminiTargetContext(targetId);
     const branchId = crypto.randomUUID();
-    const sourceText = context.kind === "wsl"
-      ? await wslReadFile(context.distro!, session.filePath)
-      : await fs.readFile(session.filePath, "utf8");
-    const branchText = buildGeminiBranchSessionText(sourceText, branchId, keepCount);
+    const branchText = await readGeminiBranchText(context, session.filePath, branchId, keepCount);
     const branchPath = buildGeminiBranchPath(context, session.filePath, branchId);
 
     if (context.kind === "wsl") {
@@ -347,7 +437,7 @@ async function loadGeminiSessions(targetId: string, view: SessionView): Promise<
   const files = context.kind === "wsl" ? await listWslSessionFiles(context, view) : await listLocalSessionFiles(context, view);
   const cacheKey = getGeminiCacheKey(targetId, view);
   const sessions = await loadProviderSessionCache(cacheKey, files, async (file) =>
-    parseGeminiSessionFile(await readGeminiSessionContent(context, file))
+    readGeminiSessionLines(context, file, { maxMessages: GEMINI_LIST_PREVIEW_LIMIT })
   );
   return applySessionMetadataList(targetId, sessions);
 }
@@ -359,7 +449,7 @@ async function findGeminiSession(targetId: string, sessionId: string, view: Sess
 }
 
 function getGeminiCacheKey(targetId: string, view: SessionView) {
-  return `sessions:gemini:${targetId}:${view}`;
+  return `sessions:gemini:${targetId}:${view}:v3`;
 }
 
 async function findCachedGeminiSession(targetId: string, sessionId: string): Promise<CodexSession | null> {
@@ -414,6 +504,27 @@ async function getGeminiSessionForMutation(
   });
   if (!session || session.id !== sessionId) throw new Error(`会话文件与会话编号不匹配：${sessionId}`);
   return session;
+}
+
+function assertGeminiSessionPath(context: GeminiTargetContext, filePath: string, view: SessionView) {
+  const root = view === "trash" ? getGeminiTrashSessionRoot(context) : getGeminiActiveSessionRoot(context);
+  if (context.kind === "wsl") assertInsidePosix(filePath, root, "拒绝操作 Gemini 会话目录之外的文件");
+  else assertInsideLocal(filePath, root, "拒绝操作 Gemini 会话目录之外的文件");
+}
+
+async function verifyGeminiSessionId(context: GeminiTargetContext, filePath: string, sessionId: string) {
+  let found = false;
+  const inspect = (line: string) => {
+    const value = safeJsonParse<Record<string, unknown>>(line);
+    const candidate = stringField(value?.sessionId);
+    if (!candidate) return true;
+    found = true;
+    if (candidate !== sessionId) throw new Error(`会话文件与会话编号不匹配：${sessionId}`);
+    return false;
+  };
+  if (context.kind === "wsl") await readWslLines(context.distro!, filePath, inspect);
+  else await readLocalLines(filePath, inspect);
+  if (!found) throw new Error(`会话文件与会话编号不匹配：${sessionId}`);
 }
 
 async function resolveGeminiTargetContext(targetId: string): Promise<GeminiTargetContext> {
@@ -522,19 +633,35 @@ function parseProjects(content: string) {
 }
 
 function parseGeminiSessionFile(file: GeminiSessionContentFile): CodexSession | null {
-  const lines = file.content.split(/\r?\n/).filter(Boolean);
+  const parser = createGeminiSessionParser(file);
+  for (const line of file.content.split(/\r?\n/)) parser.push(line);
+  return parser.finish();
+}
+
+function createGeminiSessionParser(file: GeminiSessionFile, options: { maxMessages?: number } = {}) {
   let id = "";
   let createdAt: string | undefined;
   let updatedAt: string | undefined;
   let summary: string | undefined;
+  let userTitle = "";
   let kind = "main";
   let model: string | undefined;
   const usageAccumulator: GeminiUsageAccumulator = {};
   const messages: CodexMessage[] = [];
+  let messageCount = 0;
+  let previousMessage: CodexMessage | null = null;
 
-  for (const line of lines) {
+  function countMessage(value: unknown) {
+    const message = toGeminiMessage(value);
+    if (!message || !shouldKeepGeminiMessage(message)) return;
+    if (previousMessage?.role === message.role && previousMessage.text === message.text) return;
+    previousMessage = message;
+    messageCount += 1;
+  }
+
+  function push(line: string) {
     const item = safeJsonParse<Record<string, unknown>>(line);
-    if (!item) continue;
+    if (!item) return;
 
     if (typeof item.sessionId === "string") {
       id = item.sessionId || id;
@@ -542,13 +669,16 @@ function parseGeminiSessionFile(file: GeminiSessionContentFile): CodexSession | 
       updatedAt = stringField(item.lastUpdated) || updatedAt;
       summary = stringField(item.summary) || summary;
       kind = stringField(item.kind) || kind;
-      continue;
+      return;
     }
 
     const patch = objectField(item.$set);
     if (patch.messages && Array.isArray(patch.messages)) {
       for (const message of patch.messages) {
-        pushGeminiMessage(messages, message);
+        countMessage(message);
+        pushGeminiMessage(messages, message, options.maxMessages, (text) => {
+          userTitle ||= text;
+        });
         collectGeminiUsage(usageAccumulator, message);
         model = extractGeminiModel(message) || model;
       }
@@ -557,43 +687,73 @@ function parseGeminiSessionFile(file: GeminiSessionContentFile): CodexSession | 
     summary = stringField(patch.summary) || summary;
 
     if (typeof item.type === "string") {
-      pushGeminiMessage(messages, item);
+      countMessage(item);
+      pushGeminiMessage(messages, item, options.maxMessages, (text) => {
+        userTitle ||= text;
+      });
       collectGeminiUsage(usageAccumulator, item);
       model = extractGeminiModel(item) || model;
       updatedAt = stringField(item.timestamp) || updatedAt;
     }
   }
 
-  if (kind === "subagent") return null;
-  id ||= extractGeminiSessionId(file.filePath);
-  if (!id) return null;
+  function finish(): CodexSession | null {
+    if (kind === "subagent") return null;
+    id ||= extractGeminiSessionId(file.filePath);
+    if (!id) return null;
 
-  const visibleMessages = messages.filter((message) => shouldKeepGeminiMessage(message));
-  if (visibleMessages.length === 0) return null;
-  const userTitle = visibleMessages.find((message) => message.role === "user" && message.text.trim());
+    const visibleMessages = messages.filter((message) => shouldKeepGeminiMessage(message));
+    if (visibleMessages.length === 0) return null;
+    const firstVisibleUser = visibleMessages.find((message) => message.role === "user" && message.text.trim());
 
-  return {
-    id,
-    title: clampText(summary || userTitle?.text || id, 88),
-    cwd: file.cwd,
-    createdAt,
-    updatedAt: updatedAt || (file.mtimeMs ? new Date(file.mtimeMs).toISOString() : createdAt),
-    model,
-    modelStatus: { model, modelProvider: "Gemini" },
-    filePath: file.filePath,
-    messageCount: visibleMessages.length,
-    preview: visibleMessages,
-    usage: buildGeminiUsage(usageAccumulator)
-  };
+    return {
+      id,
+      title: clampText(summary || userTitle || firstVisibleUser?.text || id, 88),
+      cwd: file.cwd,
+      createdAt,
+      updatedAt: updatedAt || (file.mtimeMs ? new Date(file.mtimeMs).toISOString() : createdAt),
+      model,
+      modelStatus: { model, modelProvider: "Gemini" },
+      filePath: file.filePath,
+      fileMtimeMs: file.mtimeMs,
+      fileSize: file.size,
+      messageCount,
+      preview: visibleMessages,
+      usage: buildGeminiUsage(usageAccumulator)
+    };
+  }
+
+  return { push, finish };
 }
 
-function pushGeminiMessage(messages: CodexMessage[], value: unknown) {
+async function readGeminiSessionLines(
+  context: GeminiTargetContext,
+  file: GeminiSessionFile,
+  options?: { maxMessages?: number }
+): Promise<CodexSession | null> {
+  const parser = createGeminiSessionParser(file, options);
+  if (context.kind === "wsl") await readWslLines(context.distro!, file.filePath, parser.push);
+  else await readLocalLines(file.filePath, parser.push);
+  return parser.finish();
+}
+
+function pushGeminiMessage(
+  messages: CodexMessage[],
+  value: unknown,
+  maxMessages?: number,
+  onFirstUserText?: (text: string) => void
+) {
   const record = objectField(value);
   const role = geminiRole(stringField(record.type));
   if (!role) return;
 
+  const retainMessage = maxMessages === undefined || messages.length < maxMessages;
+  const needsTitle = role === "user" && onFirstUserText;
+  if (!retainMessage && !needsTitle) return;
   const text = extractGeminiText(record.displayContent) || extractGeminiText(record.content);
   if (!text) return;
+  if (role === "user") onFirstUserText?.(text);
+  if (!retainMessage) return;
 
   const message = {
     role,
@@ -603,6 +763,32 @@ function pushGeminiMessage(messages: CodexMessage[], value: unknown) {
   const previous = messages[messages.length - 1];
   if (previous && previous.role === message.role && previous.text === message.text) return;
   messages.push(message);
+}
+
+function toGeminiMessage(value: unknown): CodexMessage | null {
+  const record = objectField(value);
+  const role = geminiRole(stringField(record.type));
+  if (!role) return null;
+  const text = extractGeminiText(record.displayContent) || extractGeminiText(record.content);
+  return text ? { role, text, timestamp: stringField(record.timestamp) || undefined } : null;
+}
+
+function matchesGeminiSessionSummary(session: CodexSession, query: string) {
+  return [session.id, session.title, session.sourceTitle || "", session.cwd || "", session.model || "", ...session.preview.map((message) => message.text)]
+    .join("\n")
+    .toLowerCase()
+    .includes(query);
+}
+
+async function geminiSessionContains(context: GeminiTargetContext, filePath: string, query: string) {
+  let found = false;
+  const inspect = (line: string) => {
+    found ||= line.toLowerCase().includes(query);
+    return !found;
+  };
+  if (context.kind === "wsl") await readWslLines(context.distro!, filePath, inspect);
+  else await readLocalLines(filePath, inspect);
+  return found;
 }
 
 function geminiRole(type: string): CodexMessage["role"] | null {
@@ -791,61 +977,46 @@ function buildGeminiBranchPath(context: GeminiTargetContext, source: string, bra
   throw new Error("Gemini 分支只能从会话目录或回收站内的会话生成。");
 }
 
-function buildGeminiBranchSessionText(sourceText: string, branchId: string, keepCount: number) {
+async function readGeminiBranchText(context: GeminiTargetContext, filePath: string, branchId: string, keepCount: number) {
   const now = new Date().toISOString();
   const lines: string[] = [];
   let rewrittenMeta = false;
   let visibleMessages = 0;
-
-  for (const rawLine of sourceText.split(/\r?\n/)) {
-    if (!rawLine.trim()) continue;
+  const push = (rawLine: string) => {
+    if (!rawLine.trim()) return true;
     const item = safeJsonParse<Record<string, unknown>>(rawLine);
-    if (!item) continue;
-
+    if (!item) return true;
     if (isGeminiMetadataRecord(item)) {
-      if (rewrittenMeta) continue;
-      lines.push(
-        JSON.stringify({
-          ...item,
-          sessionId: branchId,
-          startTime: now,
-          lastUpdated: now,
-          kind: stringField(item.kind) || "main"
-        })
-      );
-      rewrittenMeta = true;
-      continue;
+      if (!rewrittenMeta) {
+        lines.push(JSON.stringify({ ...item, sessionId: branchId, startTime: now, lastUpdated: now, kind: stringField(item.kind) || "main" }));
+        rewrittenMeta = true;
+      }
+      return true;
     }
-
     const patch = objectField(item.$set);
     if (Array.isArray(patch.messages)) {
       const nextMessages: unknown[] = [];
       for (const message of patch.messages) {
-        if (!isVisibleGeminiRecord(message)) {
+        if (!isVisibleGeminiRecord(message)) nextMessages.push(message);
+        else if (visibleMessages < keepCount) {
+          visibleMessages += 1;
           nextMessages.push(message);
-          continue;
         }
-        if (visibleMessages >= keepCount) continue;
-        visibleMessages += 1;
-        nextMessages.push(message);
       }
       lines.push(JSON.stringify({ ...item, $set: { ...patch, messages: nextMessages } }));
-      continue;
+      return visibleMessages >= keepCount ? false : true;
     }
-
     if (isVisibleGeminiRecord(item)) {
-      if (visibleMessages >= keepCount) break;
+      if (visibleMessages >= keepCount) return false;
       visibleMessages += 1;
-      lines.push(rawLine);
-      continue;
     }
-
     lines.push(rawLine);
-  }
-
+    return visibleMessages < keepCount;
+  };
+  if (context.kind === "wsl") await readWslLines(context.distro!, filePath, push);
+  else await readLocalLines(filePath, push);
   if (!rewrittenMeta) throw new Error("Gemini 源会话缺少 session 元数据。");
   if (visibleMessages < keepCount) throw new Error("Gemini 源会话上下文不足，无法创建分支。");
-
   lines.push(JSON.stringify({ $set: { lastUpdated: now } }));
   return `${lines.join("\n")}\n`;
 }

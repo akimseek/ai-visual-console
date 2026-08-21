@@ -1,9 +1,24 @@
+import { useRef, useState } from "react";
 import type { AiSession } from "./types";
 import { formatDate } from "./format";
 import { shortSessionId } from "./sessionFormat";
 import { BranchPanel } from "./BranchPanel";
 import type { BranchPanelState } from "./BranchPanel";
 import { buildConversationTurns, type ConversationTurn } from "./conversation";
+
+const COLLAPSE_MESSAGE_LENGTH = 4_000;
+
+function MessageText({ text }: { text: string }) {
+  const [expanded, setExpanded] = useState(false);
+  const collapsible = text.length > COLLAPSE_MESSAGE_LENGTH;
+  const visibleText = collapsible && !expanded ? `${text.slice(0, COLLAPSE_MESSAGE_LENGTH)}...` : text;
+  return (
+    <>
+      <p>{visibleText}</p>
+      {collapsible && <button type="button" className="message-expand" onClick={() => setExpanded((value) => !value)}>{expanded ? "收起" : "展开"}</button>}
+    </>
+  );
+}
 
 // 会话详情弹框：展示完整对话（按问答轮次分组）、分支关系，并按轮次提供“从此处分支”。
 // 从 App.tsx 的内联 JSX + renderSessionDetailContent 抽出为独立组件。
@@ -13,6 +28,9 @@ export function SessionDetailModal({
   loading,
   branchPanel,
   supportsBranch,
+  hasMore,
+  loadingMore,
+  onLoadMore,
   onClose,
   onOpenSession,
   onBranchFromTurn
@@ -22,11 +40,27 @@ export function SessionDetailModal({
   loading: boolean;
   branchPanel: BranchPanelState | null;
   supportsBranch: boolean;
+  hasMore: boolean;
+  loadingMore: boolean;
+  onLoadMore: () => Promise<void>;
   onClose: () => void;
   onOpenSession: (session: AiSession) => void;
   onBranchFromTurn: (session: AiSession, turn: ConversationTurn) => void;
 }) {
   const detailSession = selectedSessionDetails?.id === session.id ? selectedSessionDetails : session;
+  const bodyRef = useRef<HTMLDivElement>(null);
+
+  async function loadEarlierMessages() {
+    const body = bodyRef.current;
+    const previousHeight = body?.scrollHeight || 0;
+    await onLoadMore();
+    await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+    if (body) body.scrollTop += body.scrollHeight - previousHeight;
+  }
+
+  function handleBodyScroll() {
+    if (hasMore && !loadingMore && (bodyRef.current?.scrollTop || 0) < 24) void loadEarlierMessages();
+  }
 
   return (
     <div className="session-detail-modal-overlay" role="presentation" onMouseDown={onClose}>
@@ -46,13 +80,14 @@ export function SessionDetailModal({
             ×
           </button>
         </header>
-        <div className="session-detail-modal-body">
+        <div ref={bodyRef} className="session-detail-modal-body" onScroll={handleBodyScroll}>
           {loading ? (
             <div className="detail-loading">正在加载完整会话...</div>
           ) : (
             <>
               <BranchPanel session={detailSession} state={branchPanel} onOpen={onOpenSession} />
-              {buildConversationTurns(detailSession.preview || []).map((turn, turnIndex) => (
+              {hasMore && <button type="button" className="secondary" disabled={loadingMore} onClick={() => void loadEarlierMessages()}>{loadingMore ? "正在加载..." : "加载更早消息"}</button>}
+              {buildConversationTurns(detailSession.preview || [], detailSession.previewOffset).map((turn, turnIndex) => (
                 <article key={`turn-${turnIndex}`} className="conversation-turn">
                   {turn.user && (
                     <div className="conversation-block conversation-question">
@@ -63,7 +98,7 @@ export function SessionDetailModal({
                             <time>{formatDate(turn.user.message.timestamp)}</time>
                           </div>
                         </header>
-                        <p>{turn.user.message.text}</p>
+                        <MessageText text={turn.user.message.text} />
                       </article>
                     </div>
                   )}
@@ -76,7 +111,7 @@ export function SessionDetailModal({
                             <time>{formatDate(entry.message.timestamp)}</time>
                           </div>
                         </header>
-                        <p>{entry.message.text}</p>
+                        <MessageText text={entry.message.text} />
                       </article>
                     ))}
                     {supportsBranch && (

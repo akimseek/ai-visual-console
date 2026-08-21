@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { createInterface } from "node:readline";
 import { promisify } from "node:util";
-import type { CodexSession, CodexSessionFile, CodexTarget, SessionBatchMutationResult, SessionFileRef, SessionMutationRef } from "./types";
+import type { AiMessage, CodexSession, CodexSessionFile, CodexTarget, SessionBatchMutationResult, SessionFileRef, SessionMessagePage, SessionMutationRef } from "./types";
 import {
   deleteSession as deleteLocalSession,
   deleteSessions as deleteLocalSessions,
@@ -31,8 +31,14 @@ import {
   setCachedTargets,
   setWslCodexHomeOverride
 } from "./settings";
-import { applySessionMetadata, applySessionMetadataList, setSessionBranchMetadata } from "./sessionMetadata";
+import {
+  applySessionMetadata,
+  applySessionMetadataList,
+  findSessionIdsByParent,
+  setSessionBranchMetadata
+} from "./sessionMetadata";
 import { measure } from "./performance";
+import { hasAppDatabase, readSessionMessageIndex, saveSessionMessageIndex } from "./appDatabase";
 import {
   createSessionContentParser,
   extractMessage,
@@ -162,21 +168,100 @@ export async function listTrashSessions(targetId: string): Promise<CodexSession[
   });
 }
 
-export async function getSession(targetId: string, sessionId: string) {
+export async function getSession(targetId: string, sessionId: string, ref?: SessionFileRef) {
   return measure(`sessions.get.${targetId}`, async () => {
     const target = await resolveTarget(targetId);
     if (target.kind === "local") {
-      const source = await findLocalSessionFile(sessionId);
+      const source = ref?.filePath
+        ? await resolveLocalSessionFile(target, sessionId, ref.filePath)
+        : await findLocalSessionFile(sessionId);
       return applySessionMetadata(targetId, await loadLocalSession(source));
     }
 
-    const source = await findWslAnySessionFile(targetId, sessionId);
+    const source = ref?.filePath
+      ? await resolveWslSessionFile(target, sessionId, ref.filePath)
+      : await findWslAnySessionFile(targetId, sessionId);
     return applySessionMetadata(targetId, await loadWslSession(target.distro!, source));
   });
 }
 
+export async function getSessionMessagesPage(targetId: string, sessionId: string, offset: number, limit: number): Promise<SessionMessagePage> {
+  return measure(`sessions.page.${targetId}`, async () => {
+    const session = await getSessionSummary(targetId, sessionId);
+    const target = await resolveTarget(targetId);
+    const latest = offset === -1;
+    const pageOffset = latest ? 0 : offset;
+    const messages: AiMessage[] = [];
+    let previous: AiMessage | null = null;
+    let hasMore = false;
+    const fileMtimeMs = session.fileMtimeMs || Date.parse(session.updatedAt || "") || 0;
+    const fileSize = session.fileSize || 0;
+    const anchor = !latest && hasAppDatabase() ? await readSessionMessageIndex({ targetId, sessionId, filePath: session.filePath, mtimeMs: fileMtimeMs, size: fileSize }, pageOffset) : null;
+    const anchors: Array<{ messageOffset: number; lineNumber: number }> = [];
+    let visibleIndex = anchor?.messageOffset || 0;
+    const push = (line: string, lineNumber: number) => {
+      const item = safeJsonParse<SessionLine>(line);
+      const message = item ? extractMessage(item) : null;
+      if (!item || !message || !shouldKeepMessage(message)) return true;
+      const next = { ...message, timestamp: item.timestamp };
+      if (previous?.role === next.role && previous.text === next.text) return true;
+      previous = next;
+      if (!latest && visibleIndex >= pageOffset + limit) {
+        hasMore = true;
+        return false;
+      }
+      if (visibleIndex % 100 === 0) anchors.push({ messageOffset: visibleIndex, lineNumber });
+      if (latest) {
+        messages.push(next);
+        if (messages.length > limit) messages.shift();
+        visibleIndex += 1;
+        return true;
+      }
+      if (visibleIndex >= pageOffset) messages.push(next);
+      visibleIndex += 1;
+      return true;
+    };
+    const startLine = latest ? 1 : anchor?.lineNumber || 1;
+    if (target.kind === "local") await readSessionFileLines(session.filePath, push, startLine);
+    else await wslReadSessionLines(target.distro!, session.filePath, push, startLine);
+    if (hasAppDatabase()) await saveSessionMessageIndex({
+      targetId,
+      sessionId,
+      filePath: session.filePath,
+      mtimeMs: fileMtimeMs,
+      size: fileSize,
+      anchors,
+      messageCount: Math.max(session.messageCount, anchor?.messageCount || 0, hasMore ? 0 : visibleIndex)
+    });
+    return { offset: latest ? Math.max(0, visibleIndex - messages.length) : pageOffset, messages, hasMore: latest ? visibleIndex > messages.length : hasMore };
+  });
+}
+
+export async function getSessionSummary(targetId: string, sessionId: string) {
+  const cached = [
+    ...(await listCachedSessions(targetId, "active")),
+    ...(await listCachedSessions(targetId, "trash"))
+  ].find((session) => session.id === sessionId);
+  if (cached) return cached;
+
+  const session = [
+    ...(await listSessions(targetId)),
+    ...(await listTrashSessions(targetId))
+  ].find((item) => item.id === sessionId);
+  if (!session) throw new Error(`未找到会话：${sessionId}`);
+  return session;
+}
+
 export async function listSessionsByParent(targetId: string, parentSessionId: string): Promise<CodexSession[]> {
   return measure(`sessions.children.${targetId}`, async () => {
+    const childIds = await findSessionIdsByParent(targetId, parentSessionId);
+    if (childIds) {
+      if (childIds.length === 0) return [];
+      const idSet = new Set(childIds);
+      const cached = (await listCachedSessions(targetId, "active")).filter((session) => idSet.has(session.id));
+      if (cached.length === childIds.length) return cached;
+    }
+
     const target = await resolveTarget(targetId);
     const sessions = target.kind === "local"
       ? await applySessionMetadataList(targetId, await listLocalSessions())
@@ -229,8 +314,8 @@ export async function branchSession(targetId: string, sessionId: string, message
       throw new Error("请选择至少一条前置上下文后再创建分支。");
     }
 
-    const session = await getSession(targetId, sessionId);
-    const keepCount = Math.min(messageIndex, session.preview.length);
+    const session = await getSessionSummary(targetId, sessionId);
+    const keepCount = Math.min(messageIndex, session.messageCount);
     if (keepCount <= 0) {
       throw new Error("当前会话没有可保留的上下文。");
     }
@@ -438,6 +523,19 @@ async function verifyWslSessionId(distro: string, filePath: string, sessionId: s
   if (!head.includes(sessionId)) throw new Error(`会话文件与会话编号不匹配：${sessionId}`);
 }
 
+async function verifyLocalSessionId(filePath: string, sessionId: string) {
+  const handle = await fs.open(filePath, "r");
+  try {
+    const buffer = Buffer.alloc(64 * 1024);
+    const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
+    if (!buffer.subarray(0, bytesRead).toString("utf8").includes(sessionId)) {
+      throw new Error(`会话文件与会话编号不匹配：${sessionId}`);
+    }
+  } finally {
+    await handle.close();
+  }
+}
+
 export async function setWslCodexHome(distro: string, codexHome: string) {
   const normalized = codexHome.trim();
   if (!distro) throw new Error("缺少 WSL 发行版名称。");
@@ -484,12 +582,34 @@ async function findLocalSessionFile(sessionId: string) {
   return session.filePath;
 }
 
+async function resolveLocalSessionFile(target: CodexTarget, sessionId: string, filePath: string) {
+  const codexHome = target.codexHome || getCodexHome();
+  const activeRoot = path.join(codexHome, "sessions");
+  const trashRoot = path.join(codexHome, ".visual-console-trash", "sessions");
+  if (!isInsidePath(filePath, activeRoot) && !isInsidePath(filePath, trashRoot)) {
+    throw new Error("拒绝读取 Codex 会话目录之外的文件。");
+  }
+  await verifyLocalSessionId(filePath, sessionId);
+  return filePath;
+}
+
 async function findWslAnySessionFile(targetId: string, sessionId: string) {
   const session =
     (await listSessions(targetId)).find((item) => item.id === sessionId) ||
     (await listTrashSessions(targetId)).find((item) => item.id === sessionId);
   if (!session) throw new Error(`未找到会话：${sessionId}`);
   return session.filePath;
+}
+
+async function resolveWslSessionFile(target: CodexTarget, sessionId: string, filePath: string) {
+  const codexHome = target.codexHome || "";
+  const activeRoot = path.posix.join(codexHome, "sessions");
+  const trashRoot = path.posix.join(codexHome, ".visual-console-trash", "sessions");
+  if (!isInsidePosixDir(filePath, activeRoot) && !isInsidePosixDir(filePath, trashRoot)) {
+    throw new Error("拒绝读取 Codex 会话目录之外的文件。");
+  }
+  await verifyWslSessionId(target.distro!, filePath, sessionId);
+  return filePath;
 }
 
 type SessionLineWriter = {
@@ -1005,12 +1125,15 @@ async function wslReadSessionFile(distro: string, filePath: string) {
 async function wslReadSessionLines(
   distro: string,
   filePath: string,
-  onLine: (line: string) => void | boolean | Promise<void | boolean>
+  onLine: (line: string, lineNumber: number) => void | boolean | Promise<void | boolean>,
+  startLine = 1
 ) {
   const wslExe = await getWslExe();
   if (!wslExe) throw new Error("未找到 wsl.exe。");
 
-  const child = spawn(wslExe, ["-d", distro, "--", "cat", filePath], {
+  const command = startLine > 1 ? "tail" : "cat";
+  const args = startLine > 1 ? ["-n", `+${startLine}`, filePath] : [filePath];
+  const child = spawn(wslExe, ["-d", distro, "--", command, ...args], {
     windowsHide: true,
     stdio: ["ignore", "pipe", "pipe"]
   });
@@ -1029,10 +1152,12 @@ async function wslReadSessionLines(
     timeoutError = error;
   }, `读取 ${filePath}`);
   child.stderr.on("data", (chunk: Buffer) => stderr.push(chunk));
+  let lineNumber = startLine - 1;
 
   try {
     for await (const line of lines) {
-      if ((await onLine(line)) === false) {
+      lineNumber += 1;
+      if ((await onLine(line, lineNumber)) === false) {
         lines.close();
         child.stdout.destroy();
         child.kill("SIGKILL");

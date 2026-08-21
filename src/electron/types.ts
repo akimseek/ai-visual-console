@@ -35,6 +35,7 @@ export type {
   SessionExportFormat,
   SessionExportResult,
   SessionMetadata,
+  SessionMessagePage,
   OpenPathRequest,
   TokenUsage,
   TerminalStartParams,

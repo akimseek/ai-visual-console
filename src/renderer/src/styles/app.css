@@ -648,6 +648,8 @@ select {
 
 .conversation-turn {
   margin: 0 0 18px;
+  content-visibility: auto;
+  contain-intrinsic-size: auto 180px;
 }
 
 .conversation-question .message {
@@ -682,6 +684,10 @@ select {
   line-height: 1;
   padding: 0 10px;
   white-space: nowrap;
+}
+
+.message-expand {
+  margin-top: 8px;
 }
 
 .message-branch:hover {

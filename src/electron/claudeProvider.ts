@@ -3,10 +3,12 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
-import type { AiMessage, AiSession, AiTarget, SessionBatchMutationResult, SessionFileRef, SessionMutationRef, SessionUsage, TokenUsage } from "./types";
+import type { AiMessage, AiSession, AiTarget, SessionBatchMutationResult, SessionFileRef, SessionMessagePage, SessionMutationRef, SessionUsage, TokenUsage } from "./types";
 import type { SessionView } from "./aiProviders";
 import { measure } from "./performance";
-import { applySessionMetadataList, setSessionBranchMetadata } from "./sessionMetadata";
+import { hasAppDatabase, readSessionMessageIndex, saveSessionMessageIndex } from "./appDatabase";
+import { applySessionMetadataList, findSessionIdsByParent, setSessionBranchMetadata } from "./sessionMetadata";
+import { readLocalLines, readWslLines } from "./wslProcess";
 import { getCachedTargets, setCachedTargets } from "./settings";
 import {
   findCachedProviderSession,
@@ -18,6 +20,7 @@ const execFileAsync = promisify(execFile);
 const INTERNAL_WSL_DISTROS = new Set(["docker-desktop", "docker-desktop-data"]);
 const CLAUDE_DEFAULT_CONTEXT_WINDOW = 200_000;
 const CLAUDE_ONE_MILLION_CONTEXT_WINDOW = 1_000_000;
+const CLAUDE_LIST_PREVIEW_LIMIT = 8;
 
 type ClaudeTargetContext = {
   targetId: string;
@@ -101,16 +104,25 @@ export async function searchSessions(targetId: string, view: SessionView, query:
   const sessions = view === "trash" ? await listTrashSessions(targetId) : await listSessions(targetId);
   if (!normalized) return sessions;
 
-  return sessions.filter((session) =>
-    [session.id, session.title, session.sourceTitle || "", session.cwd || "", session.model || "", ...session.preview.map((message) => message.text)]
-      .join("\n")
-      .toLowerCase()
-      .includes(normalized)
-  );
+  const context = await resolveClaudeTargetContext(targetId);
+  const matches: AiSession[] = [];
+  for (const session of sessions) {
+    if (matchesClaudeSessionSummary(session, normalized) || await claudeSessionContains(context, session.filePath, normalized)) {
+      matches.push(session);
+    }
+  }
+  return matches;
 }
 
-export async function getSession(targetId: string, sessionId: string): Promise<AiSession> {
+export async function getSession(targetId: string, sessionId: string, ref?: SessionFileRef): Promise<AiSession> {
   const context = await resolveClaudeTargetContext(targetId);
+  if (ref?.filePath) {
+    assertClaudeSessionPath(context, ref.filePath, "active");
+    await verifyClaudeSessionId(context, ref.filePath, sessionId);
+    const session = await readClaudeSessionLines(context, { filePath: ref.filePath });
+    if (!session || session.id !== sessionId) throw new Error(`会话文件与会话编号不匹配：${sessionId}`);
+    return (await applySessionMetadataList(targetId, [session]))[0];
+  }
   const cached = await findCachedClaudeSession(targetId, sessionId);
   if (cached) {
     try {
@@ -128,8 +140,80 @@ export async function getSession(targetId: string, sessionId: string): Promise<A
   return session;
 }
 
+export async function getSessionMessagesPage(targetId: string, sessionId: string, offset: number, limit: number): Promise<SessionMessagePage> {
+  const context = await resolveClaudeTargetContext(targetId);
+  const session = await getSessionSummary(targetId, sessionId);
+  const latest = offset === -1;
+  const pageOffset = latest ? 0 : offset;
+  const messages: AiMessage[] = [];
+  let previous: AiMessage | null = null;
+  let hasMore = false;
+  const fileMtimeMs = session.fileMtimeMs || Date.parse(session.updatedAt || "") || 0;
+  const fileSize = session.fileSize || 0;
+  const anchor = !latest && hasAppDatabase() ? await readSessionMessageIndex({ targetId, sessionId, filePath: session.filePath, mtimeMs: fileMtimeMs, size: fileSize }, pageOffset) : null;
+  const anchors: Array<{ messageOffset: number; lineNumber: number }> = [];
+  let index = anchor?.messageOffset || 0;
+  const push = (line: string, lineNumber: number) => {
+    const value = safeJsonParse(line.trim()) as Record<string, any> | null;
+    const message = value?.message;
+    if (!value || (value.type !== "user" && value.type !== "assistant") || value.isMeta || !message || typeof message !== "object") return true;
+    const role = message.role === "assistant" ? "assistant" : message.role === "user" ? "user" : null;
+    const text = role ? extractClaudeContentText(message.content) : "";
+    if (!role || !text) return true;
+    const next: AiMessage = { role, text, timestamp: typeof value.timestamp === "string" ? value.timestamp : undefined };
+    if (previous?.role === next.role && previous.text === next.text) return true;
+    previous = next;
+    if (!latest && index >= pageOffset + limit) { hasMore = true; return false; }
+    if (index % 100 === 0) anchors.push({ messageOffset: index, lineNumber });
+    if (latest) {
+      messages.push(next);
+      if (messages.length > limit) messages.shift();
+      index += 1;
+      return true;
+    }
+    if (index++ >= pageOffset) messages.push(next);
+    return true;
+  };
+  const startLine = latest ? 1 : anchor?.lineNumber || 1;
+  if (context.kind === "wsl") await readWslLines(context.distro!, session.filePath, push, startLine);
+  else await readLocalLines(session.filePath, push, startLine);
+  if (hasAppDatabase()) await saveSessionMessageIndex({
+    targetId,
+    sessionId,
+    filePath: session.filePath,
+    mtimeMs: fileMtimeMs,
+    size: fileSize,
+    anchors,
+    messageCount: Math.max(session.messageCount, anchor?.messageCount || 0, hasMore ? 0 : index)
+  });
+  return { offset: latest ? Math.max(0, index - messages.length) : pageOffset, messages, hasMore: latest ? index > messages.length : hasMore };
+}
+
+export async function getSessionSummary(targetId: string, sessionId: string): Promise<AiSession> {
+  const cached = [
+    ...(await listCachedSessions(targetId, "active")),
+    ...(await listCachedSessions(targetId, "trash"))
+  ].find((session) => session.id === sessionId);
+  if (cached) return cached;
+
+  const session = [
+    ...(await listSessions(targetId)),
+    ...(await listTrashSessions(targetId))
+  ].find((item) => item.id === sessionId);
+  if (!session) throw new Error(`未找到 Claude Code 会话：${sessionId}`);
+  return session;
+}
+
 export async function listSessionsByParent(targetId: string, parentSessionId: string): Promise<AiSession[]> {
   return measure(`sessions.children.${targetId}`, async () => {
+    const childIds = await findSessionIdsByParent(targetId, parentSessionId);
+    if (childIds) {
+      if (childIds.length === 0) return [];
+      const idSet = new Set(childIds);
+      const cached = (await listCachedSessions(targetId, "active")).filter((session) => idSet.has(session.id));
+      if (cached.length === childIds.length) return cached;
+    }
+
     const sessions = await listSessions(targetId);
     return sessions.filter((session) => session.metadata?.branch?.parentSessionId === parentSessionId);
   });
@@ -149,10 +233,7 @@ export async function branchSession(targetId: string, sessionId: string, message
     const context = await resolveClaudeTargetContext(targetId);
     const session = await findClaudeSession(targetId, sessionId, "active");
     const branchId = crypto.randomUUID();
-    const sourceText = context.kind === "wsl"
-      ? await wslReadFile(context.distro!, session.filePath)
-      : await fs.readFile(session.filePath, "utf8");
-    const branchText = buildClaudeBranchText(sourceText, branchId, messageIndex);
+    const branchText = await readClaudeBranchText(context, session.filePath, branchId, messageIndex);
     const branchPath = buildClaudeBranchPath(context, session.filePath, branchId);
 
     if (context.kind === "wsl") {
@@ -308,7 +389,7 @@ async function loadClaudeSessions(targetId: string, view: SessionView): Promise<
     : await listLocalSessionFiles(context, view);
   const cacheKey = getClaudeCacheKey(targetId, view);
   const sessions = await loadProviderSessionCache(cacheKey, files, async (file) =>
-    parseClaudeSessionFile(await readClaudeSessionContent(context, file))
+    readClaudeSessionLines(context, file, { maxMessages: CLAUDE_LIST_PREVIEW_LIMIT })
   );
   const contextHints = view === "active" ? await loadClaudeContextHints(context) : new Map<string, ClaudeContextHint>();
   const parsed = sessions.map((session) => applyClaudeContextHint(session, contextHints.get(session.id)));
@@ -345,7 +426,7 @@ async function findClaudeSession(targetId: string, sessionId: string, view: Sess
 }
 
 function getClaudeCacheKey(targetId: string, view: SessionView) {
-  return `sessions:claude:${targetId}:${view}`;
+  return `sessions:claude:${targetId}:${view}:v3`;
 }
 
 async function findCachedClaudeSession(targetId: string, sessionId: string): Promise<AiSession | null> {
@@ -386,6 +467,27 @@ async function getClaudeSessionForMutation(
   const session = parseClaudeSessionFile({ filePath: ref.filePath, content });
   if (!session || session.id !== sessionId) throw new Error(`会话文件与会话编号不匹配：${sessionId}`);
   return session;
+}
+
+function assertClaudeSessionPath(context: ClaudeTargetContext, filePath: string, view: SessionView) {
+  const root = view === "trash" ? getClaudeTrashProjectsRoot(context) : getClaudeProjectsRoot(context);
+  if (context.kind === "wsl") assertInsidePosix(filePath, root, "拒绝操作 Claude 会话目录之外的文件");
+  else assertInsideLocal(filePath, root, "拒绝操作 Claude 会话目录之外的文件");
+}
+
+async function verifyClaudeSessionId(context: ClaudeTargetContext, filePath: string, sessionId: string) {
+  let found = false;
+  const inspect = (line: string) => {
+    const value = safeJsonParse(line.trim()) as Record<string, unknown> | null;
+    const candidate = typeof value?.sessionId === "string" ? value.sessionId : "";
+    if (!candidate) return true;
+    found = true;
+    if (candidate !== sessionId) throw new Error(`会话文件与会话编号不匹配：${sessionId}`);
+    return false;
+  };
+  if (context.kind === "wsl") await readWslLines(context.distro!, filePath, inspect);
+  else await readLocalLines(filePath, inspect);
+  if (!found) throw new Error(`会话文件与会话编号不匹配：${sessionId}`);
 }
 
 function getClaudeProjectsRoot(context: ClaudeTargetContext) {
@@ -596,88 +698,133 @@ function collectClaudeContextHints(content: string, hints: Map<string, ClaudeCon
 }
 
 function parseClaudeSessionFile(file: ClaudeSessionContentFile): AiSession | null {
-  const records = file.content
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter(Boolean)
-    .map(safeJsonParse)
-    .filter((record): record is Record<string, any> => Boolean(record && typeof record === "object"));
-  if (records.length === 0) return null;
+  const parser = createClaudeSessionParser(file);
+  for (const line of file.content.split(/\r?\n/)) parser.push(line);
+  return parser.finish();
+}
 
-  const sessionId = findString(records, "sessionId") || path.basename(file.filePath, ".jsonl");
+function createClaudeSessionParser(file: ClaudeSessionFile, options: { maxMessages?: number } = {}) {
+  const sessionId = path.basename(file.filePath, ".jsonl");
   const messages: AiMessage[] = [];
+  let resolvedSessionId = "";
   let cwd = "";
   let model = "";
   let createdAt = "";
   let updatedAt = "";
   let fallbackTitle = "";
+  let userTitle = "";
   const usage = createClaudeUsageAccumulator();
+  let messageCount = 0;
+  let previousMessage: AiMessage | null = null;
 
-  for (const record of records) {
-    const timestamp = typeof record.timestamp === "string" ? record.timestamp : "";
+  function push(line: string) {
+    const record = safeJsonParse(line.trim());
+    if (!record || typeof record !== "object") return;
+    const value = record as Record<string, any>;
+    resolvedSessionId ||= findString([value], "sessionId");
+    const timestamp = typeof value.timestamp === "string" ? value.timestamp : "";
     if (timestamp && !createdAt) createdAt = timestamp;
     if (timestamp) updatedAt = timestamp;
-    if (!cwd && typeof record.cwd === "string") cwd = record.cwd;
+    if (!cwd && typeof value.cwd === "string") cwd = value.cwd;
 
-    if (record.type === "last-prompt" && typeof record.lastPrompt === "string") {
-      fallbackTitle = record.lastPrompt;
-      continue;
+    if (value.type === "last-prompt" && typeof value.lastPrompt === "string") {
+      fallbackTitle = value.lastPrompt;
+      return;
     }
 
-    if (record.type !== "user" && record.type !== "assistant") continue;
-    const message = record.message;
-    if (!message || typeof message !== "object") continue;
+    if (value.type !== "user" && value.type !== "assistant") return;
+    const message = value.message;
+    if (!message || typeof message !== "object") return;
     const role = message.role === "assistant" ? "assistant" : message.role === "user" ? "user" : null;
-    if (!role) continue;
-    if (record.isMeta === true) continue;
+    if (!role) return;
+    if (value.isMeta === true) return;
 
     if (role === "assistant" && !model && typeof message.model === "string") model = message.model;
     if (role === "assistant") accumulateClaudeUsage(usage, message.usage, timestamp);
     const text = extractClaudeContentText(message.content);
-    if (!text) continue;
-    messages.push({ role, text, timestamp });
+    if (!text) return;
+    const visible: AiMessage = { role, text, timestamp };
+    if (previousMessage?.role === visible.role && previousMessage.text === visible.text) return;
+    previousMessage = visible;
+    messageCount += 1;
+    const retainMessage = options.maxMessages === undefined || messages.length < options.maxMessages;
+    const needsTitle = role === "user" && !userTitle;
+    if (!retainMessage && !needsTitle) return;
+    if (needsTitle) userTitle = text;
+    if (retainMessage) messages.push(visible);
   }
 
-  const updatedAtFromMtime = file.mtimeMs ? new Date(file.mtimeMs).toISOString() : "";
-  const effectiveUpdatedAt = latestIsoTimestamp(updatedAt, updatedAtFromMtime);
-  const title = messages.find((message) => message.role === "user")?.text || fallbackTitle || sessionId;
+  function finish(): AiSession | null {
+    if (messages.length === 0 && !resolvedSessionId) return null;
+    const updatedAtFromMtime = file.mtimeMs ? new Date(file.mtimeMs).toISOString() : "";
+    const effectiveUpdatedAt = latestIsoTimestamp(updatedAt, updatedAtFromMtime);
+    const title = userTitle || fallbackTitle || resolvedSessionId || sessionId;
+    return {
+      id: resolvedSessionId || sessionId,
+      title: compactTitle(title),
+      cwd,
+      createdAt: createdAt || updatedAtFromMtime,
+      updatedAt: effectiveUpdatedAt || createdAt,
+      model,
+      filePath: file.filePath,
+      fileMtimeMs: file.mtimeMs,
+      fileSize: file.size,
+      messageCount,
+      preview: messages,
+      usage: buildClaudeSessionUsage(usage, inferClaudeContextWindow(model))
+    };
+  }
 
-  return {
-    id: sessionId,
-    title: compactTitle(title),
-    cwd,
-    createdAt: createdAt || updatedAtFromMtime,
-    updatedAt: effectiveUpdatedAt || createdAt,
-    model,
-    filePath: file.filePath,
-    messageCount: messages.length,
-    preview: messages,
-    usage: buildClaudeSessionUsage(usage, inferClaudeContextWindow(model))
-  };
+  return { push, finish };
 }
 
-function buildClaudeBranchText(sourceText: string, branchId: string, keepMessageCount: number) {
+async function readClaudeSessionLines(
+  context: ClaudeTargetContext,
+  file: ClaudeSessionFile,
+  options?: { maxMessages?: number }
+): Promise<AiSession | null> {
+  const parser = createClaudeSessionParser(file, options);
+  if (context.kind === "wsl") await readWslLines(context.distro!, file.filePath, parser.push);
+  else await readLocalLines(file.filePath, parser.push);
+  return parser.finish();
+}
+
+function matchesClaudeSessionSummary(session: AiSession, query: string) {
+  return [session.id, session.title, session.sourceTitle || "", session.cwd || "", session.model || "", ...session.preview.map((message) => message.text)]
+    .join("\n")
+    .toLowerCase()
+    .includes(query);
+}
+
+async function claudeSessionContains(context: ClaudeTargetContext, filePath: string, query: string) {
+  let found = false;
+  const inspect = (line: string) => {
+    found ||= line.toLowerCase().includes(query);
+    return !found;
+  };
+  if (context.kind === "wsl") await readWslLines(context.distro!, filePath, inspect);
+  else await readLocalLines(filePath, inspect);
+  return found;
+}
+
+async function readClaudeBranchText(context: ClaudeTargetContext, filePath: string, branchId: string, keepMessageCount: number) {
   const output: string[] = [];
   let keptMessages = 0;
-
-  for (const line of sourceText.split(/\r?\n/)) {
+  const push = (line: string) => {
     const trimmed = line.trim();
-    if (!trimmed) continue;
+    if (!trimmed) return true;
     const record = safeJsonParse(trimmed);
-    if (!record || typeof record !== "object") continue;
-    const rewritten = rewriteClaudeSessionId(record as Record<string, any>, branchId);
-    output.push(JSON.stringify(rewritten));
-
+    if (!record || typeof record !== "object") return true;
+    output.push(JSON.stringify(rewriteClaudeSessionId(record as Record<string, any>, branchId)));
     if (isCountableClaudeMessage(record as Record<string, any>)) {
       keptMessages += 1;
-      if (keptMessages >= keepMessageCount) break;
+      if (keptMessages >= keepMessageCount) return false;
     }
-  }
-
-  if (keptMessages < keepMessageCount) {
-    throw new Error("创建 Claude 分支失败：原始 jsonl 中可保留消息不足。");
-  }
-
+    return true;
+  };
+  if (context.kind === "wsl") await readWslLines(context.distro!, filePath, push);
+  else await readLocalLines(filePath, push);
+  if (keptMessages < keepMessageCount) throw new Error("创建 Claude 分支失败：原始 jsonl 中可保留消息不足。");
   return `${output.join("\n")}\n`;
 }
 

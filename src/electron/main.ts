@@ -11,6 +11,8 @@ import {
   deleteSessions,
   duplicateSession,
   getSession,
+  getSessionMessagesPage,
+  getSessionSummary,
   getSessionFolderPath,
   listCachedSessions,
   listCachedTargets,
@@ -342,13 +344,25 @@ app.whenReady().then(() => {
       searchSessions(checkedTargetId, checkedView, checkedQuery)
     );
   });
-  ipcMain.handle("codex:get-session", (_event, targetId: unknown, sessionId: unknown) => {
+  ipcMain.handle("codex:get-session", (_event, targetId: unknown, sessionId: unknown, refValue: unknown) => {
     const checkedTargetId = requireString(targetId, "targetId");
     const checkedSessionId = requireString(sessionId, "sessionId");
-    return coalesceSessionRequest(`get:${checkedTargetId}:${checkedSessionId}`, () =>
-      getSession(checkedTargetId, checkedSessionId)
+    const ref = requireSessionFileRef(refValue);
+    return coalesceSessionRequest(`get:${checkedTargetId}:${checkedSessionId}:${ref?.filePath || ""}`, () =>
+      getSession(checkedTargetId, checkedSessionId, ref)
     );
   });
+  ipcMain.handle("codex:get-session-messages-page", (_event, targetId: unknown, sessionId: unknown, offset: unknown, limit: unknown) =>
+    getSessionMessagesPage(
+      requireString(targetId, "targetId"),
+      requireString(sessionId, "sessionId"),
+      requireMessagePageOffset(offset),
+      Math.min(requirePositiveInteger(limit, "limit"), 500)
+    )
+  );
+  ipcMain.handle("codex:get-session-summary", (_event, targetId: unknown, sessionId: unknown) =>
+    getSessionSummary(requireString(targetId, "targetId"), requireString(sessionId, "sessionId"))
+  );
   ipcMain.handle("codex:set-session-custom-title", (_event, targetId: unknown, sessionId: unknown, title: unknown) =>
     setSessionCustomTitle(
       requireString(targetId, "targetId"),
@@ -652,6 +666,11 @@ function requireNonNegativeInteger(value: unknown, name: string) {
   const numberValue = requireNumber(value, name);
   if (!Number.isInteger(numberValue) || numberValue < 0) throw new Error(`参数无效：${name}`);
   return numberValue;
+}
+
+function requireMessagePageOffset(value: unknown) {
+  if (value === -1) return -1;
+  return requireNonNegativeInteger(value, "offset");
 }
 
 function requireView(value: unknown) {

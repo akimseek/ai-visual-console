@@ -11,6 +11,7 @@ import type {
   CompressionPrompt,
   CompressionPromptInput,
   AiSession,
+  SessionMessagePage,
   AiTarget,
   AppCommand,
   CliEnvironmentRequest,
@@ -63,8 +64,12 @@ const api = {
     ipcRenderer.invoke("codex:list-trash-sessions", targetId) as Promise<AiSession[]>,
   searchSessions: (targetId: string, view: "active" | "trash", query: string) =>
     ipcRenderer.invoke("codex:search-sessions", targetId, view, query) as Promise<AiSession[]>,
-  getSession: (targetId: string, sessionId: string) =>
-    ipcRenderer.invoke("codex:get-session", targetId, sessionId) as Promise<AiSession>,
+  getSession: (targetId: string, sessionId: string, ref?: SessionFileRef) =>
+    ipcRenderer.invoke("codex:get-session", targetId, sessionId, ref) as Promise<AiSession>,
+  getSessionMessagesPage: (targetId: string, sessionId: string, offset: number, limit: number) =>
+    ipcRenderer.invoke("codex:get-session-messages-page", targetId, sessionId, offset, limit) as Promise<SessionMessagePage>,
+  getSessionSummary: (targetId: string, sessionId: string) =>
+    ipcRenderer.invoke("codex:get-session-summary", targetId, sessionId) as Promise<AiSession>,
   setSessionCustomTitle: (targetId: string, sessionId: string, title: string) =>
     ipcRenderer.invoke("codex:set-session-custom-title", targetId, sessionId, title) as Promise<import("./types").SessionMetadata>,
   listSessionChildren: (targetId: string, parentSessionId: string) =>

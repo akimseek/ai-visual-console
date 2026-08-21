@@ -4,6 +4,7 @@ import {
   deleteSessionMetadataRecord,
   hasAppDatabase,
   importSessionMetadata,
+  readSessionIdsByParent,
   readSessionMetadata,
   readSessionMetadataMap,
   saveSessionMetadata
@@ -35,6 +36,12 @@ export async function applySessionMetadataList(targetId: string, sessions: Codex
   await ensureLegacyMetadataMigrated();
   const metadata = await readSessionMetadataMap(targetId);
   return sessions.map((session) => attachMetadata(session, metadata[session.id]));
+}
+
+export async function findSessionIdsByParent(targetId: string, parentSessionId: string): Promise<string[] | null> {
+  if (!hasAppDatabase()) return null;
+  await ensureLegacyMetadataMigrated();
+  return readSessionIdsByParent(targetId, parentSessionId);
 }
 
 export async function setSessionBranchMetadata(

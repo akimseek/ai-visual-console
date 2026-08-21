@@ -14,7 +14,7 @@ import {
 } from "./appDatabase";
 
 const SESSION_FILE_RE = /^rollout-.+\.jsonl$/;
-const CACHE_VERSION = 4;
+const CACHE_VERSION = 5;
 const LIST_READ_BYTES = 64 * 1024;
 const MAX_SESSION_READ_BYTES = 32 * 1024 * 1024;
 const LIST_PARSE_CONCURRENCY = 16;
@@ -288,13 +288,17 @@ export async function readSessionFile(filePath: string) {
 
 export async function readSessionFileLines(
   filePath: string,
-  onLine: (line: string) => void | boolean | Promise<void | boolean>
+  onLine: (line: string, lineNumber: number) => void | boolean | Promise<void | boolean>,
+  startLine = 1
 ) {
   const input = createReadStream(filePath, { encoding: "utf8" });
   const lines = createInterface({ input, crlfDelay: Infinity });
+  let lineNumber = 0;
   try {
     for await (const line of lines) {
-      if ((await onLine(line)) === false) break;
+      lineNumber += 1;
+      if (lineNumber < startLine) continue;
+      if ((await onLine(line, lineNumber)) === false) break;
     }
   } finally {
     input.destroy();

@@ -13,13 +13,13 @@ export type ConversationTurn = {
   replies: ConversationMessageEntry[];
 };
 
-export function buildConversationTurns(messages: AiMessage[]) {
+export function buildConversationTurns(messages: AiMessage[], offset = 0) {
   const turns: ConversationTurn[] = [];
   let currentTurn: ConversationTurn | null = null;
 
   messages.forEach((message, index) => {
     if (!isVisibleConversationMessage(message)) return;
-    const entry = { message, index };
+    const entry = { message, index: offset + index };
     if (message.role === "user") {
       currentTurn = { user: entry, replies: [] };
       turns.push(currentTurn);

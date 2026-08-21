@@ -64,6 +64,32 @@ type SessionMetadataRow = {
   metadata_json: string;
 };
 
+type SessionMetadataIdRow = {
+  session_id: string;
+};
+
+export type SessionMessageIndexEntry = {
+  targetId: string;
+  sessionId: string;
+  filePath: string;
+  mtimeMs: number;
+  size: number;
+  anchors: Array<{ messageOffset: number; lineNumber: number }>;
+  messageCount: number;
+};
+
+export type SessionMessageAnchor = {
+  messageOffset: number;
+  lineNumber: number;
+  messageCount: number;
+};
+
+type SessionMessageIndexRow = {
+  message_offset: number;
+  line_number: number;
+  message_count: number;
+};
+
 type WorkspacePresetRow = {
   id: string;
   name: string;
@@ -156,6 +182,18 @@ export async function readSessionMetadataMap(targetId: string): Promise<Record<s
   return Object.fromEntries(rows.map((row) => [row.session_id, parseMetadata(row.metadata_json)]));
 }
 
+export async function readSessionIdsByParent(targetId: string, parentSessionId: string): Promise<string[] | null> {
+  if (!databasePath) return null;
+  const db = await getDatabase();
+  const rows = db.prepare(`
+    SELECT session_id
+    FROM session_metadata
+    WHERE target_id = ?
+      AND json_extract(metadata_json, '$.branch.parentSessionId') = ?
+  `).all(targetId, parentSessionId) as SessionMetadataIdRow[];
+  return rows.map((row) => row.session_id);
+}
+
 export async function saveSessionMetadata(targetId: string, sessionId: string, metadata: SessionMetadata) {
   await updateDatabase((db) => {
     db.prepare(`
@@ -172,6 +210,50 @@ export async function deleteSessionMetadataRecord(targetId: string, sessionId: s
   await updateDatabase((db) => {
     db.prepare("DELETE FROM session_metadata WHERE target_id = ? AND session_id = ?").run(targetId, sessionId);
   });
+}
+
+// 页索引只保存文件指纹和消息位置，不保存会话正文。
+export async function saveSessionMessageIndex(entry: SessionMessageIndexEntry) {
+  if (entry.anchors.length === 0) return;
+  await updateDatabase((db) => {
+    db.prepare(`
+      DELETE FROM session_message_index
+      WHERE target_id = ? AND session_id = ? AND (file_path <> ? OR mtime_ms <> ? OR size <> ?)
+    `).run(entry.targetId, entry.sessionId, entry.filePath, entry.mtimeMs, entry.size);
+    const insert = db.prepare(`
+      INSERT INTO session_message_index
+        (target_id, session_id, file_path, mtime_ms, size, message_offset, line_number, message_count, indexed_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(target_id, session_id, file_path, mtime_ms, size, message_offset) DO UPDATE SET
+        line_number = excluded.line_number,
+        message_count = excluded.message_count,
+        indexed_at = excluded.indexed_at
+    `);
+    const indexedAt = new Date().toISOString();
+    for (const anchor of entry.anchors) {
+      insert.run(entry.targetId, entry.sessionId, entry.filePath, entry.mtimeMs, entry.size, anchor.messageOffset, anchor.lineNumber, entry.messageCount, indexedAt);
+    }
+  });
+}
+
+export async function readSessionMessageIndex(
+  entry: Pick<SessionMessageIndexEntry, "targetId" | "sessionId" | "filePath" | "mtimeMs" | "size">,
+  offset: number
+): Promise<SessionMessageAnchor | null> {
+  const db = await getDatabase();
+  const row = db.prepare(`
+    SELECT message_offset, line_number, message_count
+    FROM session_message_index
+    WHERE target_id = ? AND session_id = ? AND file_path = ? AND mtime_ms = ? AND size = ?
+      AND message_offset <= ?
+    ORDER BY message_offset DESC
+    LIMIT 1
+  `).get(entry.targetId, entry.sessionId, entry.filePath, entry.mtimeMs, entry.size, offset) as SessionMessageIndexRow | undefined;
+  return row ? {
+    messageOffset: row.message_offset,
+    lineNumber: row.line_number,
+    messageCount: row.message_count
+  } : null;
 }
 
 export async function importSessionMetadata(
@@ -326,6 +408,22 @@ async function getDatabase() {
     CREATE INDEX IF NOT EXISTS idx_session_metadata_updated_at
       ON session_metadata(updated_at);
 
+    CREATE TABLE IF NOT EXISTS session_message_index (
+      target_id TEXT NOT NULL,
+      session_id TEXT NOT NULL,
+      file_path TEXT NOT NULL,
+      mtime_ms REAL NOT NULL,
+      size INTEGER NOT NULL,
+      message_offset INTEGER NOT NULL,
+      line_number INTEGER NOT NULL DEFAULT 1,
+      message_count INTEGER NOT NULL,
+      indexed_at TEXT NOT NULL,
+      PRIMARY KEY (target_id, session_id, file_path, mtime_ms, size, message_offset)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_session_message_index_session
+      ON session_message_index(target_id, session_id, indexed_at DESC);
+
     CREATE TABLE IF NOT EXISTS workspace_presets (
       id TEXT PRIMARY KEY,
       name TEXT NOT NULL,
@@ -352,6 +450,13 @@ async function getDatabase() {
   `);
   try {
     database.exec("ALTER TABLE session_cache ADD COLUMN cached_at TEXT NOT NULL DEFAULT ''");
+  } catch {
+    // 已存在的数据库已完成迁移。
+  }
+  try {
+    database.exec("ALTER TABLE session_message_index ADD COLUMN line_number INTEGER NOT NULL DEFAULT 1");
+    // 旧索引未记录原始行号，不能用于新的随机定位语义。
+    database.exec("DELETE FROM session_message_index");
   } catch {
     // 已存在的数据库已完成迁移。
   }

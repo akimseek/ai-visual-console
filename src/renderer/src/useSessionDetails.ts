@@ -6,7 +6,6 @@ import type { SessionView } from "./useSessionLoader";
 type UseSessionDetailsOptions = {
   targetId: string;
   activeSession: AiSession | null;
-  selectedSession: AiSession | null;
   view: SessionView;
   supportsBranch: boolean;
   onSessionLoaded: (targetId: string, session: AiSession) => void;
@@ -16,7 +15,6 @@ type UseSessionDetailsOptions = {
 export function useSessionDetails({
   targetId,
   activeSession,
-  selectedSession,
   view,
   supportsBranch,
   onSessionLoaded,
@@ -25,6 +23,8 @@ export function useSessionDetails({
   const [detailDialogSession, setDetailDialogSession] = useState<AiSession | null>(null);
   const [selectedSessionDetails, setSelectedSessionDetails] = useState<AiSession | null>(null);
   const [selectedSessionLoading, setSelectedSessionLoading] = useState(false);
+  const [detailHasMore, setDetailHasMore] = useState(false);
+  const [detailLoadingMore, setDetailLoadingMore] = useState(false);
   const [branchPanel, setBranchPanel] = useState<BranchPanelState | null>(null);
 
   useEffect(() => {
@@ -37,10 +37,11 @@ export function useSessionDetails({
   }, [detailDialogSession]);
 
   useEffect(() => {
-    const sessionToLoad = detailDialogSession || activeSession;
+    const sessionToLoad = detailDialogSession;
     if (!sessionToLoad) {
       setSelectedSessionDetails(null);
       setSelectedSessionLoading(false);
+      setDetailHasMore(false);
       return;
     }
 
@@ -48,11 +49,12 @@ export function useSessionDetails({
     setSelectedSessionDetails(null);
     setSelectedSessionLoading(true);
     void window.codexConsole
-      .getSession(targetId, sessionToLoad.id)
-      .then((session) => {
+      .getSessionMessagesPage(targetId, sessionToLoad.id, -1, 100)
+      .then((page) => {
         if (cancelled) return;
+        const session = { ...sessionToLoad, preview: page.messages, previewOffset: page.offset, messageCount: Math.max(sessionToLoad.messageCount, page.offset + page.messages.length) };
         setSelectedSessionDetails(session);
-        onSessionLoaded(targetId, session);
+        setDetailHasMore(page.offset > 0);
       })
       .catch((error: any) => {
         if (!cancelled) notifyError(error?.message || "加载完整会话失败。");
@@ -64,13 +66,20 @@ export function useSessionDetails({
     return () => {
       cancelled = true;
     };
-    // 只在目标或会话切换时读取完整 jsonl，回调由 App 保持最新业务语义。
+    // 详情仅请求首个消息页；进入终端和详情首屏都不读取完整 JSONL。
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [targetId, activeSession?.id, detailDialogSession?.id]);
+  }, [targetId, detailDialogSession?.id]);
 
   useEffect(() => {
-    const session = selectedSessionDetails || selectedSession;
-    if (!targetId || !session || view !== "active" || !supportsBranch) {
+    if (detailDialogSession) return;
+    setSelectedSessionDetails(null);
+    setSelectedSessionLoading(false);
+    setBranchPanel(null);
+  }, [activeSession?.id, detailDialogSession]);
+
+  useEffect(() => {
+    const session = selectedSessionDetails;
+    if (!detailDialogSession || !targetId || !session || view !== "active" || !supportsBranch) {
       setBranchPanel(null);
       return;
     }
@@ -85,7 +94,7 @@ export function useSessionDetails({
     const parentSessionId = session.metadata?.branch?.parentSessionId;
     const parentTargetId = session.metadata?.branch?.parentTargetId || targetId;
     void Promise.all([
-      parentSessionId ? window.codexConsole.getSession(parentTargetId, parentSessionId).catch(() => null) : Promise.resolve(null),
+      parentSessionId ? window.codexConsole.getSessionSummary(parentTargetId, parentSessionId).catch(() => null) : Promise.resolve(null),
       window.codexConsole.listSessionChildren(targetId, session.id).catch(() => [])
     ]).then(([parent, children]) => {
       if (!cancelled) setBranchPanel({ sessionId: session.id, parent, children, loading: false });
@@ -95,11 +104,11 @@ export function useSessionDetails({
     };
     // 仅会话、父分支和能力变化时重新读取关系。
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [targetId, view, supportsBranch, selectedSession?.id, selectedSessionDetails?.id, selectedSessionDetails?.metadata?.branch?.parentSessionId]);
+  }, [targetId, view, supportsBranch, detailDialogSession?.id, selectedSessionDetails?.id, selectedSessionDetails?.metadata?.branch?.parentSessionId]);
 
-  async function refreshSessionSnapshot(nextTargetId: string, sessionId: string) {
+  async function refreshSessionSnapshot(nextTargetId: string, sessionId: string, filePath?: string) {
     try {
-      const session = await window.codexConsole.getSession(nextTargetId, sessionId);
+      const session = await window.codexConsole.getSession(nextTargetId, sessionId, filePath ? { filePath } : undefined);
       onSessionLoaded(nextTargetId, session);
       setSelectedSessionDetails((current) => (current?.id === session.id ? session : current));
       setDetailDialogSession((current) => (current?.id === session.id ? session : current));
@@ -114,6 +123,23 @@ export function useSessionDetails({
     setSelectedSessionDetails(null);
     setSelectedSessionLoading(false);
     setBranchPanel(null);
+    setDetailHasMore(false);
+    setDetailLoadingMore(false);
+  }
+
+  async function loadMoreDetailMessages() {
+    if (!detailDialogSession || !selectedSessionDetails || detailLoadingMore || !detailHasMore) return;
+    setDetailLoadingMore(true);
+    try {
+      const offset = Math.max(0, (selectedSessionDetails.previewOffset || 0) - 100);
+      const page = await window.codexConsole.getSessionMessagesPage(targetId, detailDialogSession.id, offset, 100);
+      setSelectedSessionDetails((current) => current?.id === detailDialogSession.id
+        ? { ...current, preview: [...page.messages, ...current.preview], previewOffset: page.offset }
+        : current);
+      setDetailHasMore(page.offset > 0);
+    } finally {
+      setDetailLoadingMore(false);
+    }
   }
 
   return {
@@ -124,6 +150,9 @@ export function useSessionDetails({
     selectedSessionLoading,
     setSelectedSessionLoading,
     branchPanel,
+    detailHasMore,
+    detailLoadingMore,
+    loadMoreDetailMessages,
     setBranchPanel,
     refreshSessionSnapshot,
     resetSessionDetails

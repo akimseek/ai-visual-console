@@ -15,8 +15,11 @@ export type CodexSession = {
   modelStatus?: SessionModelStatus;
   cliVersion?: string;
   filePath: string;
+  fileMtimeMs?: number;
+  fileSize?: number;
   messageCount: number;
   preview: CodexMessage[];
+  previewOffset?: number;
   usage?: SessionUsage;
   metadata?: SessionMetadata;
 };
@@ -240,6 +243,14 @@ export type AiMessage = CodexMessage;
 export type AiSession = CodexSession;
 export type AiSessionFile = CodexSessionFile;
 export type AiTarget = CodexTarget;
+
+// 会话详情按页读取原始 JSONL 时使用；offset 是过滤后可见消息的绝对序号。
+// 仅首屏可传 -1，请求末尾 limit 条消息并返回其实际绝对偏移。
+export type SessionMessagePage = {
+  offset: number;
+  messages: AiMessage[];
+  hasMore: boolean;
+};
 
 export type InstalledSkill = {
   name: string;

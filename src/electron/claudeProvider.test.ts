@@ -2,9 +2,18 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+
+vi.mock("./sessionMetadata", () => ({
+  applySessionMetadataList: async (_targetId: string, sessions: unknown[]) => sessions,
+  findSessionIdsByParent: async () => null,
+  setSessionBranchMetadata: async (_targetId: string, _sessionId: string, branch: unknown) => ({ branch })
+}));
+
 import {
   deleteSession,
+  branchSession,
   getSession,
+  getSessionMessagesPage,
   listSessions,
   purgeSession,
   restoreSession,
@@ -86,11 +95,58 @@ describe("searchSessions", () => {
   it("空查询返回全部", async () => {
     expect(await searchSessions("claude:local", "active", "  ")).toHaveLength(2);
   });
+
+  it("列表仅缓存有限预览，但全文搜索仍可命中后续消息", async () => {
+    const lines = [
+      { sessionId: "sess-preview", type: "user", timestamp: "2024-01-01T11:00:00Z", message: { role: "user", content: "Preview question" } },
+      ...Array.from({ length: 10 }, (_, index) => ({
+        type: "assistant",
+        timestamp: `2024-01-01T11:${String(index + 1).padStart(2, "0")}:00Z`,
+        message: { role: "assistant", content: `Later answer ${index + 1}` }
+      }))
+    ];
+    await writeClaudeSession("proj1", "preview.jsonl", lines, "2024-01-01T11:10:00Z");
+
+    const preview = (await listSessions("claude:local")).find((session) => session.id === "sess-preview");
+    expect(preview?.preview).toHaveLength(8);
+    expect(preview?.messageCount).toBe(11);
+    expect((await searchSessions("claude:local", "active", "Later answer 10")).map((session) => session.id)).toContain("sess-preview");
+    await expect(getSessionMessagesPage("claude:local", "sess-preview", 8, 2)).resolves.toMatchObject({
+      offset: 8,
+      messages: [{ text: "Later answer 8" }, { text: "Later answer 9" }],
+      hasMore: true
+    });
+    await expect(getSessionMessagesPage("claude:local", "sess-preview", -1, 2)).resolves.toMatchObject({
+      offset: 9,
+      messages: [{ text: "Later answer 9" }, { text: "Later answer 10" }],
+      hasMore: true
+    });
+  });
 });
 
 describe("getSession", () => {
   it("找不到会话时抛错", async () => {
     await expect(getSession("claude:local", "missing")).rejects.toThrow("未找到 Claude");
+  });
+
+  it("携带 filePath 时直接读取指定会话", async () => {
+    const filePath = path.join(projectsRoot, "proj1", "a.jsonl");
+    await expect(getSession("claude:local", SESSION_A, { filePath })).resolves.toMatchObject({ id: SESSION_A });
+  });
+});
+
+describe("branchSession", () => {
+  it("可从列表预览之外的绝对消息位置创建分支", async () => {
+    await writeClaudeSession("proj1", "long.jsonl", [
+      { sessionId: "sess-long", type: "user", timestamp: "2024-01-01T11:00:00Z", message: { role: "user", content: "Start" } },
+      ...Array.from({ length: 12 }, (_, index) => ({
+        type: "assistant",
+        timestamp: `2024-01-01T11:${String(index + 1).padStart(2, "0")}:00Z`,
+        message: { role: "assistant", content: `Answer ${index + 1}` }
+      }))
+    ], "2024-01-01T11:12:00Z");
+
+    await expect(branchSession("claude:local", "sess-long", 10)).resolves.toMatchObject({ messageCount: 10 });
   });
 });
 

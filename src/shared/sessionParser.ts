@@ -103,6 +103,8 @@ export function parseSessionListContent(file: CodexSessionFile, content: string)
   let cliVersion: string | undefined;
   let usage: SessionUsage | undefined;
   const messages: CodexMessage[] = [];
+  let messageCount = 0;
+  let previousMessage: CodexMessage | null = null;
 
   for (const line of lines) {
     const item = safeJsonParse<SessionLine>(line);
@@ -127,10 +129,13 @@ export function parseSessionListContent(file: CodexSessionFile, content: string)
     model = modelStatus?.model || model;
     usage = extractUsage(item) || usage;
 
-    if (messages.length >= 8) continue;
     const message = extractMessage(item);
     if (message && shouldKeepMessage(message)) {
-      pushUniqueMessage(messages, { ...message, timestamp: item.timestamp });
+      const visible = { ...message, timestamp: item.timestamp };
+      if (previousMessage?.role === visible.role && previousMessage.text === visible.text) continue;
+      previousMessage = visible;
+      messageCount += 1;
+      if (messages.length < 8) messages.push(visible);
     }
   }
 
@@ -152,7 +157,9 @@ export function parseSessionListContent(file: CodexSessionFile, content: string)
     modelStatus,
     cliVersion,
     filePath: file.filePath,
-    messageCount: messages.length,
+    fileMtimeMs: file.mtimeMs,
+    fileSize: file.size,
+    messageCount,
     preview: messages,
     usage
   };

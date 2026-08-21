@@ -280,13 +280,15 @@ export function App() {
     selectedSessionLoading,
     setSelectedSessionLoading,
     branchPanel,
+    detailHasMore,
+    detailLoadingMore,
+    loadMoreDetailMessages,
     setBranchPanel,
     refreshSessionSnapshot,
     resetSessionDetails
   } = useSessionDetails({
     targetId,
     activeSession,
-    selectedSession: selected,
     view,
     supportsBranch: Boolean(capabilities?.branch),
     onSessionLoaded: applySessionSnapshot,
@@ -568,7 +570,7 @@ export function App() {
 
     await loadSessions(targetId, view, true);
     const session = selectedSessionDetails || activeSession || selected;
-    if (session) await refreshSessionSnapshot(targetId, session.id);
+    if (session) await refreshSessionSnapshot(targetId, session.id, session.filePath);
   }
 
   async function refreshProviderTargets() {
@@ -743,7 +745,9 @@ export function App() {
     if (exitCode !== 0) return;
     const tab = openTabs.find((item) => item.key === tabKey);
     if (tab?.session) {
-      void refreshSessionSnapshot(tab.targetId, tab.session.id);
+      // 终端已退出，只需更新左侧会话摘要；不要为此完整解析大型 JSONL。
+      invalidateLoadedView(tab.targetId, "active");
+      void loadSessions(tab.targetId, "active", true);
     } else if (tab?.targetId) {
       void finalizeNewSession(tab);
     }
@@ -904,6 +908,9 @@ export function App() {
             selectedSessionDetails={selectedSessionDetails}
             loading={selectedSessionLoading}
             branchPanel={branchPanel}
+            hasMore={detailHasMore}
+            loadingMore={detailLoadingMore}
+            onLoadMore={loadMoreDetailMessages}
             supportsBranch={supportsBranch}
             onClose={() => setDetailDialogSession(null)}
             onOpenSession={openSessionDetail}

@@ -94,7 +94,7 @@ describe("deleteSessions 批量路径", () => {
     const cachePath = getCachePath();
     await fs.mkdir(path.dirname(cachePath), { recursive: true });
     await fs.writeFile(cachePath, JSON.stringify({
-      version: 4,
+      version: 5,
       sessions: {
         "/a.jsonl": { mtimeMs: 1, size: 1, session: {} },
         "/b.jsonl": { mtimeMs: 1, size: 1, session: {} },

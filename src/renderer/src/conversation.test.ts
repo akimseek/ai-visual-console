@@ -54,4 +54,10 @@ describe("buildConversationTurns", () => {
     expect(turns[0].user?.index).toBe(0);
     expect(turns[0].replies[0].index).toBe(1);
   });
+
+  it("分页窗口保留绝对消息索引", () => {
+    const turns = buildConversationTurns([msg("user", "a"), msg("assistant", "b")], 200);
+    expect(turns[0].user?.index).toBe(200);
+    expect(turns[0].replies[0].index).toBe(201);
+  });
 });

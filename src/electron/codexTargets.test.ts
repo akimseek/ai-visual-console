@@ -11,7 +11,7 @@ vi.mock("./sessionMetadata", () => ({
   setSessionBranchMetadata: async () => ({})
 }));
 
-import { branchSession } from "./codexTargets";
+import { branchSession, getSession } from "./codexTargets";
 
 const SESSION_ID = "11111111-2222-3333-4444-555555555555";
 let workDir = "";
@@ -63,5 +63,25 @@ describe("branchSession", () => {
     expect(parsed?.id).toBe(branch.id);
     expect(parsed?.preview.map((message) => message.text)).toEqual(["问题", "回答"]);
     expect((await fs.stat(branch.filePath)).size).toBeLessThan(32 * 1024 * 1024);
+  });
+});
+
+describe("getSession filePath 快路径", () => {
+  it("直接读取已知会话文件，并拒绝会话目录之外的路径", async () => {
+    const sessionsDir = path.join(codexHome, "sessions", "2026", "06", "15");
+    const source = path.join(sessionsDir, `rollout-2026-06-15T14-33-16-${SESSION_ID}.jsonl`);
+    const content = `${JSON.stringify({
+      timestamp: "2026-06-15T14:33:16.000Z",
+      type: "session_meta",
+      payload: { id: SESSION_ID, cwd: "/workspace" }
+    })}\n`;
+    await fs.mkdir(sessionsDir, { recursive: true });
+    await fs.writeFile(source, content, "utf8");
+
+    const session = await getSession("local", SESSION_ID, { filePath: source });
+    expect(session.id).toBe(SESSION_ID);
+    await expect(getSession("local", SESSION_ID, { filePath: path.join(workDir, "outside.jsonl") })).rejects.toThrow(
+      "拒绝读取 Codex 会话目录之外的文件"
+    );
   });
 });
