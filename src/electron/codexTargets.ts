@@ -315,7 +315,9 @@ export async function branchSession(targetId: string, sessionId: string, message
     }
 
     const session = await getSessionSummary(targetId, sessionId);
-    const keepCount = Math.min(messageIndex, session.messageCount);
+    // 轻量会话摘要只读取文件首段，messageCount 可能是不完整的；分支偏移由详情页传入，
+    // 写入器会流式扫描原始 JSONL 并在绝对消息位置截断。
+    const keepCount = messageIndex;
     if (keepCount <= 0) {
       throw new Error("当前会话没有可保留的上下文。");
     }

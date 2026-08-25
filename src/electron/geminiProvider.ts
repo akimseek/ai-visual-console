@@ -250,7 +250,8 @@ export async function branchSession(targetId: string, sessionId: string, message
     }
 
     const session = await getSessionSummary(targetId, sessionId);
-    const keepCount = Math.min(messageIndex, session.messageCount);
+    // 列表摘要的 messageCount 可能只覆盖 JSONL 首段，不能用它限制分页详情传入的绝对偏移。
+    const keepCount = messageIndex;
     if (keepCount <= 0) {
       throw new Error("当前 Gemini 会话没有可保留的上下文。");
     }

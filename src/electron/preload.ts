@@ -47,6 +47,11 @@ const api = {
     ipcRenderer.invoke("vendor:read-configs", request) as Promise<ApiVendorConfigReadResult>,
   enableApiVendor: (request: ApiVendorEnableRequest) =>
     ipcRenderer.invoke("vendor:enable", request) as Promise<ApiVendorEnableResult>,
+  switchVendorRoute: (terminalId: string, vendorId: string) =>
+    ipcRenderer.invoke("vendor:route-switch", terminalId, vendorId) as Promise<{
+      switched: number;
+      reason?: "terminal-not-found" | "gateway-not-active" | "route-not-found" | "provider-mismatch";
+    }>,
   listCompressionPrompts: () => ipcRenderer.invoke("compression-prompt:list") as Promise<CompressionPrompt[]>,
   saveCompressionPrompt: (input: CompressionPromptInput) =>
     ipcRenderer.invoke("compression-prompt:save", input) as Promise<CompressionPrompt>,

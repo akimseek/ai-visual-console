@@ -81,8 +81,13 @@ export async function listApiVendors(target?: CodexTarget | null): Promise<ApiVe
   });
 }
 
+export async function listApiVendorSummaries(target?: CodexTarget | null): Promise<ApiVendor[]> {
+  const vendors = await listApiVendors(target);
+  return vendors.map((vendor) => ({ ...vendor, apiKey: "" }));
+}
+
 export async function saveApiVendor(input: ApiVendorInput): Promise<ApiVendor> {
-  const normalized = normalizeVendorInput(input);
+  const normalized = normalizeVendorInput(input, Boolean(input.id));
   const now = new Date().toISOString();
   let saved: ApiVendor | null = null;
 
@@ -91,6 +96,7 @@ export async function saveApiVendor(input: ApiVendorInput): Promise<ApiVendor> {
     const existing = normalized.id
       ? db.prepare("SELECT * FROM api_vendors WHERE id = ?").get(normalized.id) as VendorRow | undefined
       : undefined;
+    const existingVendor = existing ? rowToVendor(db, existing) : undefined;
     const duplicate = db.prepare("SELECT id FROM api_vendors WHERE name_norm = ? AND id <> ?")
       .get(normalizeVendorName(normalized.name), existing?.id || "") as { id: string } | undefined;
     if (duplicate) throw new Error(`供应商名称已存在：${normalized.name}`);
@@ -98,7 +104,7 @@ export async function saveApiVendor(input: ApiVendorInput): Promise<ApiVendor> {
       id: existing?.id || crypto.randomUUID(),
       providerId: normalized.providerId,
       name: normalized.name,
-      apiKey: normalized.apiKey,
+      apiKey: normalized.apiKey || existingVendor?.apiKey || "",
       apiBaseUrl: normalized.apiBaseUrl,
       writeCommonConfig: normalized.writeCommonConfig,
       configs: normalized.configs,
@@ -195,7 +201,7 @@ export async function enableApiVendor(request: ApiVendorEnableRequest, target?: 
 
   await ensureVendorSchema();
   await updateAppDatabase((db) => {
-    db.prepare("UPDATE api_vendors SET enabled = 0").run();
+    db.prepare("UPDATE api_vendors SET enabled = 0 WHERE provider_id = ?").run(vendor.providerId);
     db.prepare("UPDATE api_vendors SET enabled = 1, last_enabled_at = ?, updated_at = ? WHERE id = ?")
       .run(enabledAt, enabledAt, vendor.id);
   });
@@ -203,15 +209,16 @@ export async function enableApiVendor(request: ApiVendorEnableRequest, target?: 
   return { vendorId: vendor.id, written, backupRoot };
 }
 
-function normalizeVendorInput(input: ApiVendorInput): ApiVendorInput {
+function normalizeVendorInput(input: ApiVendorInput, allowEmptyApiKey = false): ApiVendorInput {
   const name = input.name.trim();
   const apiKey = input.apiKey.trim();
   const apiBaseUrl = input.apiBaseUrl.trim();
   if (!name) throw new Error("供应商名称不能为空。");
-  if (!apiKey) throw new Error("API Key 不能为空。");
+  if (!apiKey && !allowEmptyApiKey) throw new Error("API Key 不能为空。");
   if (!apiBaseUrl) throw new Error("API 请求地址不能为空。");
   const configs = input.configs.map((config) => ({
-    id: config.id?.trim() || crypto.randomUUID(),
+    // 配置行 ID 是数据库全局主键，不能复用 renderer 默认模板的固定 ID。
+    id: crypto.randomUUID(),
     providerId: config.providerId,
     label: config.label?.trim().slice(0, 60) || undefined,
     enabled: config.enabled,

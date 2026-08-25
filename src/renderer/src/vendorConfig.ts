@@ -28,14 +28,14 @@ export function buildVendorDraft(input: ApiVendorDraft): ApiVendorDraft {
   const apiKey = input.apiKey;
   const apiBaseUrl = input.apiBaseUrl;
   const providerId = input.providerId || "codex";
-  const existing = new Map(input.configs.map((config) => [config.id, config]));
+  const existing = new Map(input.configs.map((config) => [`${config.providerId}:${config.targetPath}`, config]));
   const configs = defaultVendorConfigs()
     .filter((config) => config.providerId === providerId)
     .map((fallback) => ({
       ...fallback,
-      enabled: existing.get(fallback.id)?.enabled ?? fallback.enabled,
-      targetPath: existing.get(fallback.id)?.targetPath || fallback.targetPath,
-      content: existing.get(fallback.id)?.content ?? fallback.content
+      enabled: existing.get(`${fallback.providerId}:${fallback.targetPath}`)?.enabled ?? fallback.enabled,
+      targetPath: existing.get(`${fallback.providerId}:${fallback.targetPath}`)?.targetPath || fallback.targetPath,
+      content: existing.get(`${fallback.providerId}:${fallback.targetPath}`)?.content ?? fallback.content
     }));
   return {
     id: input.id,
@@ -87,7 +87,7 @@ export function validateVendorDraft(draft: ApiVendorDraft, existingVendors: ApiV
     errors.name = "供应商名称已存在。";
   }
   if (!draft.apiBaseUrl.trim()) errors.apiBaseUrl = "请输入 API 请求地址。";
-  if (!draft.apiKey.trim()) errors.apiKey = "请输入 API Key。";
+  if (!draft.apiKey.trim() && !draft.id) errors.apiKey = "请输入 API Key。";
   return errors;
 }
 
@@ -188,10 +188,11 @@ export function buildVendorConfigTemplateFromExisting(
 ) {
   const hasExistingContent = existingContent.trim().length > 0;
   const content = hasExistingContent ? existingContent : config.content;
-  if (config.id === "codex-auth") return buildCodexAuthTemplate(content);
-  if (config.id === "codex-config") return buildCodexConfigTemplate(content, hasExistingContent);
-  if (config.id === "gemini-env") return buildGeminiEnvTemplate(content);
-  if (config.id === "gemini-settings") return buildGeminiSettingsTemplate(content, config.content);
+  const normalizedPath = config.targetPath.replace(/\\/g, "/");
+  if (config.providerId === "codex" && normalizedPath.endsWith("/auth.json")) return buildCodexAuthTemplate(content);
+  if (config.providerId === "codex" && normalizedPath.endsWith("/config.toml")) return buildCodexConfigTemplate(content, hasExistingContent);
+  if (config.providerId === "gemini" && normalizedPath.endsWith("/.env")) return buildGeminiEnvTemplate(content);
+  if (config.providerId === "gemini" && normalizedPath.endsWith("/settings.json")) return buildGeminiSettingsTemplate(content, config.content);
   if (config.providerId === "claude") return buildClaudeSettingsTemplate(content, config.content);
   return toVendorConfigTemplate(content, draft);
 }
@@ -306,11 +307,13 @@ function upsertTomlProviderBlock(
   _hasExistingContent: boolean
 ) {
   const nextHeader = `[model_providers.${nextProviderName}]`;
-  const lines = content.split(/\r?\n/);
+  const lines = dedupeTomlProviderBlocks(content.split(/\r?\n/), nextProviderName);
   let headerIndex = currentProviderName
-    ? lines.findIndex((line) => parseTomlProviderHeader(line) === currentProviderName)
+    ? lines.findIndex((line) => parseTomlProviderHeader(line) === nextProviderName)
     : -1;
-  if (headerIndex === -1) headerIndex = lines.findIndex((line) => parseTomlProviderHeader(line) === nextProviderName);
+  if (headerIndex === -1 && currentProviderName) {
+    headerIndex = lines.findIndex((line) => parseTomlProviderHeader(line) === currentProviderName);
+  }
   if (headerIndex === -1) headerIndex = lines.findIndex((line) => Boolean(parseTomlProviderHeader(line)));
   if (headerIndex === -1) {
     const separator = lines.length && lines[lines.length - 1].trim() ? [""] : [];
@@ -335,6 +338,27 @@ function upsertTomlProviderBlock(
     ),
     ...after
   ].join("\n").replace(/\n{3,}/g, "\n\n");
+}
+
+function dedupeTomlProviderBlocks(lines: string[], providerName: string) {
+  const result: string[] = [];
+  let seen = false;
+  let skipping = false;
+  for (const line of lines) {
+    const header = parseTomlProviderHeader(line);
+    if (header) {
+      if (header === providerName) {
+        if (seen) {
+          skipping = true;
+          continue;
+        }
+        seen = true;
+      }
+      skipping = false;
+    }
+    if (!skipping) result.push(line);
+  }
+  return result;
 }
 
 function upsertTomlBlockScalar(lines: string[], key: string, value: string) {

@@ -19,11 +19,13 @@ type VendorToast = { message: string; tone: "success" | "error" } | null;
 export function useVendors({
   selectedTarget,
   targetId,
-  providerId
+  providerId,
+  activeTerminalId
 }: {
   selectedTarget: AiTarget | undefined;
   targetId: string;
   providerId: AiProviderId | "";
+  activeTerminalId?: string;
 }) {
   const [vendorManagerOpen, setVendorManagerOpen] = useState(false);
   const [vendorManagerMode, setVendorManagerMode] = useState<"list" | "form">("list");
@@ -80,11 +82,16 @@ export function useVendors({
       const wasEnabled = Boolean(vendorDraft.id && vendors.some((vendor) => vendor.id === vendorDraft.id && vendor.enabled));
       const shouldApplyConfig = shouldApplyVendorConfigAfterSave(vendorDraft, vendors);
       const saved = await window.codexConsole.saveApiVendor(prepareVendorDraftForSave(vendorDraft));
+      let switched = false;
+      let switchReason: string | undefined;
       if (shouldApplyConfig) {
-        await window.codexConsole.enableApiVendor({
+        const result = await window.codexConsole.enableApiVendor({
           vendorId: saved.id,
-          targetId: selectedTarget?.id || targetId || undefined
+          targetId: selectedTarget?.id || targetId || undefined,
+          terminalId: activeTerminalId
         });
+        switched = result.switched === true;
+        switchReason = result.switchReason;
       }
       const list = await window.codexConsole.listApiVendors(selectedTarget?.id || targetId);
       setVendors(list);
@@ -92,7 +99,11 @@ export function useVendors({
       setVendorManagerMode("list");
       const encryptionAvailable = await window.codexConsole.isApiKeyEncryptionAvailable().catch(() => true);
       const baseMessage = wasEnabled
-        ? "供应商已保存并更新当前配置。"
+        ? switched
+          ? "供应商已保存，当前终端路由已切换；已发出的请求按原供应商处理，后续请求使用新供应商。"
+          : switchReason === "gateway-not-active"
+            ? "供应商已保存；当前终端未接入本地 Gateway，请关闭并重新打开一次，之后可直接切换。"
+            : "供应商已保存并更新当前配置。"
         : shouldApplyConfig ? "供应商已保存并启用。" : "供应商已保存。";
       setVendorMessage(
         encryptionAvailable
@@ -185,10 +196,18 @@ export function useVendors({
     try {
       const result = await window.codexConsole.enableApiVendor({
         vendorId,
-        targetId: selectedTarget?.id || targetId || undefined
+        targetId: selectedTarget?.id || targetId || undefined,
+        terminalId: activeTerminalId
       });
+      const switched = result.switched === true;
       await loadApiVendors();
-      setVendorMessage(`供应商已启用，写入 ${result.written.length} 个配置文件。已打开的终端需要重启后生效。`);
+      setVendorMessage(
+        switched
+          ? `供应商已启用，写入 ${result.written.length} 个配置文件；当前终端路由已切换，后续请求使用新供应商。已发出的请求按原供应商处理。`
+          : result.switchReason === "gateway-not-active"
+            ? `供应商已启用，写入 ${result.written.length} 个配置文件；当前终端未接入本地 Gateway，请关闭并重新打开一次，之后可直接切换。`
+            : `供应商已启用，写入 ${result.written.length} 个配置文件；新终端将使用该供应商。`
+      );
     } catch (vendorEnableError: any) {
       setVendorError(vendorEnableError?.message || "启用供应商失败。");
     } finally {

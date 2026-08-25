@@ -142,4 +142,34 @@ describe("buildVendorConfigTemplateFromExisting", () => {
     expect(result).toContain("[model_providers.akim]");
     expect(result).toContain('base_url = "{{BASE_URL}}"');
   });
+
+  it("已有多个 akim provider 时只保留一个并保留其他 provider", () => {
+    const cfg: ApiVendorConfigTemplate = {
+      id: "stored-config-id",
+      providerId: "codex",
+      label: "config",
+      enabled: true,
+      targetPath: "~/.codex/config.toml",
+      content: ""
+    };
+    const existing = [
+      'model_provider = "vef_ai_relay"',
+      "",
+      "[model_providers.vef_ai_relay]",
+      'name = "vef_ai_relay"',
+      'base_url = "https://relay.example/v1"',
+      "",
+      "[model_providers.akim]",
+      'name = "akim"',
+      'base_url = "https://old.example/v1"',
+      "",
+      "[model_providers.akim]",
+      'name = "akim"',
+      'base_url = "https://duplicate.example/v1"'
+    ].join("\n");
+    const result = buildVendorConfigTemplateFromExisting(cfg, existing, DRAFT);
+    expect(result.match(/\[model_providers\.akim\]/g)).toHaveLength(1);
+    expect(result).toContain("[model_providers.vef_ai_relay]");
+    expect(result).toContain('model_provider = "akim"');
+  });
 });

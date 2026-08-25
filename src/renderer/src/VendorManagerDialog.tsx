@@ -79,7 +79,7 @@ export function VendorManagerDialog({
         <header>
           <div>
             <h2 id="vendor-manager-title">供应商管理</h2>
-            <p>保存 API 供应商并按当前目标环境写入 CLI 配置文件。启用后，已打开的终端需要重启后生效。</p>
+            <p>保存 API 供应商并按当前目标环境写入 CLI 配置文件。启用后，已打开的同协议终端会在下一次请求时切换。</p>
           </div>
           <button type="button" title="关闭" onClick={onClose} disabled={Boolean(busy)}>
             x
@@ -198,6 +198,7 @@ export function VendorManagerDialog({
                 <input
                   value={draft.apiKey}
                   type="password"
+                  placeholder={draft.id ? "留空以保留现有 API Key" : "输入 API Key"}
                   aria-invalid={Boolean(fieldErrors.apiKey)}
                   onChange={(event) => updateDraft({ apiKey: event.target.value })}
                 />

@@ -269,7 +269,12 @@ export function App() {
     saveVendorDraft,
     deleteVendorById,
     enableVendorById
-  } = useVendors({ selectedTarget, targetId, providerId });
+  } = useVendors({
+    selectedTarget,
+    targetId,
+    providerId,
+    activeTerminalId: terminalIdsByTabKey[activeTabKey]
+  });
   const activeTab = openTabs.find((tab) => tab.key === activeTabKey) || openTabs[0] || null;
   const activeSession = activeTab?.session || null;
   const {

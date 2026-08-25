@@ -152,12 +152,15 @@ export type ApiVendorConfigReadResult = {
 export type ApiVendorEnableRequest = {
   vendorId: string;
   targetId?: string;
+  terminalId?: string;
 };
 
 export type ApiVendorEnableResult = {
   vendorId: string;
   written: string[];
   backupRoot: string;
+  switched?: boolean;
+  switchReason?: "terminal-not-found" | "gateway-not-active" | "route-not-found" | "provider-mismatch";
 };
 
 export type CompressionPrompt = {
@@ -265,6 +268,7 @@ export type TerminalStartParams = {
   sessionId?: string;
   cwd?: string;
   codexHome?: string;
+  vendorId?: string;
   useCodexCwdFlag?: boolean;
   cliArgs?: string;
 };

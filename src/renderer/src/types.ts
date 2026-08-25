@@ -80,6 +80,10 @@ export type CodexConsoleApi = {
   deleteApiVendor: (vendorId: string) => Promise<{ deleted: boolean }>;
   readApiVendorConfigs: (request: ApiVendorConfigReadRequest) => Promise<ApiVendorConfigReadResult>;
   enableApiVendor: (request: ApiVendorEnableRequest) => Promise<ApiVendorEnableResult>;
+  switchVendorRoute: (terminalId: string, vendorId: string) => Promise<{
+    switched: number;
+    reason?: "terminal-not-found" | "gateway-not-active" | "route-not-found" | "provider-mismatch";
+  }>;
   listCompressionPrompts: () => Promise<CompressionPrompt[]>;
   saveCompressionPrompt: (input: CompressionPromptInput) => Promise<CompressionPrompt>;
   deleteCompressionPrompt: (promptId: string) => Promise<{ deleted: boolean }>;

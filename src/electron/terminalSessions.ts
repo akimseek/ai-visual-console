@@ -1,10 +1,10 @@
-import { BrowserWindow } from "electron";
+import type { BrowserWindow } from "electron";
 import { createRequire } from "node:module";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import type { SystemTerminalStartRequest, TerminalStartParams } from "./types";
+import type { AiProviderId, SystemTerminalStartRequest, TerminalStartParams } from "./types";
 import {
   buildCmdCommand,
   buildPosixShellCommand as buildShellCommand,
@@ -12,6 +12,14 @@ import {
   posixShellQuote as shellQuote
 } from "../shared/shellArgs";
 import { getWslDistroFromTargetId, wslMountPathToWindowsPath } from "../shared/wslPaths";
+import {
+  createVendorRoute,
+  destroyVendorRoute,
+  linkCodexRouteStorage,
+  switchVendorRoute,
+  type VendorRoute
+} from "./vendorGateway";
+import { readWslLines } from "./wslProcess";
 
 type TerminalSession = {
   id: string;
@@ -19,6 +27,7 @@ type TerminalSession = {
   window: BrowserWindow;
   outputBuffer: string;
   outputTimer?: NodeJS.Timeout;
+  vendorRouteId?: string;
 };
 
 type TerminalCommand = {
@@ -31,7 +40,7 @@ type TerminalCommand = {
 type TerminalProvider = {
   id: "codex" | "gemini" | "claude";
   canHandle: (targetId: string) => boolean;
-  buildCommand: (params: TerminalStartParams) => Promise<TerminalCommand>;
+  buildCommand: (params: TerminalStartParams & { vendorRoute?: VendorRoute }) => Promise<TerminalCommand>;
 };
 
 const sessions = new Map<string, TerminalSession>();
@@ -61,7 +70,15 @@ export async function startTerminalSession(
   window: BrowserWindow,
   params: TerminalStartParams & { cols?: number; rows?: number }
 ) {
-  return startPtySession(window, await resolveTerminalProvider(params.targetId).buildCommand(params), params.cols, params.rows);
+  const provider = resolveTerminalProvider(params.targetId);
+  const route = await createVendorRoute(provider.id, params.vendorId);
+  try {
+    const command = await provider.buildCommand({ ...params, vendorRoute: route });
+    return await startPtySession(window, command, params.cols, params.rows, route?.routeId);
+  } catch (error) {
+    if (route) await destroyVendorRoute(route.routeId);
+    throw error;
+  }
 }
 
 export async function startSystemTerminalSession(
@@ -71,7 +88,13 @@ export async function startSystemTerminalSession(
   return startPtySession(window, await buildSystemTerminalCommand(params), params.cols, params.rows);
 }
 
-async function startPtySession(window: BrowserWindow, command: TerminalCommand, cols?: number, rows?: number) {
+async function startPtySession(
+  window: BrowserWindow,
+  command: TerminalCommand,
+  cols?: number,
+  rows?: number,
+  vendorRouteId?: string
+) {
   const pty = loadNodePty();
   const terminalId = crypto.randomUUID();
   const child = pty.spawn(command.file, command.args, {
@@ -86,7 +109,7 @@ async function startPtySession(window: BrowserWindow, command: TerminalCommand, 
     }
   });
 
-  const session: TerminalSession = { id: terminalId, pty: child, window, outputBuffer: "" };
+  const session: TerminalSession = { id: terminalId, pty: child, window, outputBuffer: "", vendorRouteId };
   sessions.set(terminalId, session);
 
   child.onData((data) => {
@@ -95,6 +118,7 @@ async function startPtySession(window: BrowserWindow, command: TerminalCommand, 
   child.onExit(({ exitCode }) => {
     flushTerminalOutput(session);
     sessions.delete(terminalId);
+    if (session.vendorRouteId) void destroyVendorRoute(session.vendorRouteId);
     sendToWindow(window, "terminal:exit", terminalId, exitCode);
   });
 
@@ -194,6 +218,14 @@ export function stopTerminalSession(terminalId: string) {
   session.outputBuffer = "";
   session.pty.kill();
   sessions.delete(terminalId);
+  if (session.vendorRouteId) void destroyVendorRoute(session.vendorRouteId);
+}
+
+export function switchTerminalVendor(terminalId: string, providerId: AiProviderId, vendorId: string) {
+  const session = sessions.get(terminalId);
+  if (!session) return { switched: 0, reason: "terminal-not-found" as const };
+  if (!session.vendorRouteId) return { switched: 0, reason: "gateway-not-active" as const };
+  return switchVendorRoute(session.vendorRouteId, providerId, vendorId);
 }
 
 function queueTerminalOutput(session: TerminalSession, data: string) {
@@ -220,6 +252,7 @@ export function stopAllTerminalSessions() {
       session.outputTimer = undefined;
       session.outputBuffer = "";
       session.pty.kill();
+      if (session.vendorRouteId) void destroyVendorRoute(session.vendorRouteId);
     } catch {
       // 进程可能已经退出。
     }
@@ -261,29 +294,32 @@ function resolveTerminalProvider(targetId: string) {
   return provider;
 }
 
-async function buildCodexCommand(params: TerminalStartParams) {
+async function buildCodexCommand(params: TerminalStartParams & { vendorRoute?: VendorRoute }) {
   const extraArgs = parseCliArgs(params.cliArgs || "");
   if (params.targetId.startsWith("wsl:")) {
     const distro = params.targetId.slice("wsl:".length);
-    const codexCommand = "codex";
-    const codexInvocation = buildShellCommand(codexCommand, extraArgs);
+    await syncCodexProviderAliases(params.vendorRoute, params.codexHome || "", distro, Boolean(params.sessionId));
+    const codexInvocation = buildCodexInvocation(extraArgs, params.vendorRoute, true);
     const command = params.sessionId
-      ? `${params.cwd ? `cd ${shellQuote(params.cwd)} && ` : ""}exec ${buildShellCommand(codexCommand, ["resume", params.sessionId])}`
+      ? `${params.cwd ? `cd ${shellQuote(params.cwd)} && ` : ""}exec ${buildCodexInvocation(["resume", params.sessionId], params.vendorRoute, true)}`
       : params.cwd && params.useCodexCwdFlag
-        ? `exec ${buildShellCommand(codexCommand, ["-C", params.cwd, ...extraArgs])}`
+        ? `exec ${buildCodexInvocation(["-C", params.cwd, ...extraArgs], params.vendorRoute, true)}`
         : params.cwd
           ? `mkdir -p ${shellQuote(params.cwd)} && cd ${shellQuote(params.cwd)} && exec ${codexInvocation}`
-        : `mkdir -p "$HOME/.akim" && cd "$HOME/.akim" && exec ${codexInvocation}`;
+          : `mkdir -p "$HOME/.akim" && cd "$HOME/.akim" && exec ${codexInvocation}`;
+    const routeSetup = buildWslCodexRouteSetup(params.vendorRoute, params.codexHome);
 
     return {
       file: "wsl.exe",
-      args: ["-d", distro, "--", "bash", "-ic", command],
+      args: ["-d", distro, "--", "bash", "-ic", `${routeSetup}${command}`],
       cwd: os.homedir()
     };
   }
 
   const codexHome = params.codexHome?.trim();
   const cwd = params.cwd || path.join(os.homedir(), ".akim");
+  await linkCodexRouteStorage(params.vendorRoute, codexHome || path.join(os.homedir(), ".codex"));
+  await syncCodexProviderAliases(params.vendorRoute, codexHome || path.join(os.homedir(), ".codex"), undefined, Boolean(params.sessionId));
 
   if (process.platform === "win32") {
     const windowsCwd = toWindowsShellCwd(cwd);
@@ -299,7 +335,9 @@ async function buildCodexCommand(params: TerminalStartParams) {
       file: "codex.cmd",
       args,
       cwd: windowsCwd,
-      env: codexHome ? { CODEX_HOME: codexHome } : undefined
+      env: params.vendorRoute?.codexHome
+        ? { CODEX_HOME: params.vendorRoute.codexHome }
+        : codexHome ? { CODEX_HOME: codexHome } : undefined
     };
   }
 
@@ -307,22 +345,21 @@ async function buildCodexCommand(params: TerminalStartParams) {
     await fs.mkdir(cwd, { recursive: true });
   }
 
-  const codexCommand = "codex";
-  const codexInvocation = buildShellCommand(codexCommand, extraArgs);
+  const codexInvocation = buildCodexInvocation(extraArgs, params.vendorRoute);
   const command = params.sessionId
-    ? `exec ${buildShellCommand(codexCommand, ["resume", params.sessionId])}`
+    ? `exec ${buildCodexInvocation(["resume", params.sessionId], params.vendorRoute)}`
     : params.cwd && params.useCodexCwdFlag
-      ? `exec ${buildShellCommand(codexCommand, ["-C", params.cwd, ...extraArgs])}`
+      ? `exec ${buildCodexInvocation(["-C", params.cwd, ...extraArgs], params.vendorRoute)}`
       : `exec ${codexInvocation}`;
   return {
     file: process.env.SHELL || "bash",
     args: ["-ic", command],
     cwd,
-    env: codexHome ? { CODEX_HOME: codexHome } : undefined
+    env: params.vendorRoute?.codexHome ? undefined : codexHome ? { CODEX_HOME: codexHome } : undefined
   };
 }
 
-async function buildGeminiCommand(params: TerminalStartParams) {
+async function buildGeminiCommand(params: TerminalStartParams & { vendorRoute?: VendorRoute }) {
   const extraArgs = parseCliArgs(params.cliArgs || "");
   const resumeArgs = params.sessionId ? ["--resume", params.sessionId] : [];
   if (params.targetId.startsWith("gemini:wsl:")) {
@@ -334,7 +371,9 @@ async function buildGeminiCommand(params: TerminalStartParams) {
 
     return {
       file: "wsl.exe",
-      args: ["-d", distro, "--", "bash", "-ic", command],
+      args: ["-d", distro, "--", "bash", "-ic", params.vendorRoute
+        ? `export GOOGLE_GEMINI_BASE_URL=${shellQuote(params.vendorRoute.baseUrl)} GEMINI_API_KEY=${shellQuote(params.vendorRoute.localToken)}; ${command}`
+        : command],
       cwd: os.homedir()
     };
   }
@@ -346,18 +385,26 @@ async function buildGeminiCommand(params: TerminalStartParams) {
     return {
       file: "cmd.exe",
       args: ["/d", "/s", "/c", buildCmdCommand("gemini", [...resumeArgs, ...extraArgs])],
-      cwd
+      cwd,
+      env: params.vendorRoute ? {
+        GOOGLE_GEMINI_BASE_URL: params.vendorRoute.baseUrl,
+        GEMINI_API_KEY: params.vendorRoute.localToken
+      } : undefined
     };
   }
 
   return {
     file: process.env.SHELL || "bash",
-    args: ["-ic", `exec ${buildShellCommand("gemini", [...resumeArgs, ...extraArgs])}`],
-    cwd
+    args: ["-ic", `exec ${buildGatewayInvocation("gemini", [...resumeArgs, ...extraArgs], params.vendorRoute, {
+      GOOGLE_GEMINI_BASE_URL: params.vendorRoute?.baseUrl || "",
+      GEMINI_API_KEY: params.vendorRoute?.localToken || ""
+    })}`],
+    cwd,
+    env: undefined
   };
 }
 
-async function buildClaudeCommand(params: TerminalStartParams) {
+async function buildClaudeCommand(params: TerminalStartParams & { vendorRoute?: VendorRoute }) {
   const extraArgs = parseCliArgs(params.cliArgs || "");
   const resumeArgs = params.sessionId ? ["--resume", params.sessionId] : [];
   if (params.targetId.startsWith("claude:wsl:")) {
@@ -369,7 +416,9 @@ async function buildClaudeCommand(params: TerminalStartParams) {
 
     return {
       file: "wsl.exe",
-      args: ["-d", distro, "--", "bash", "-ic", command],
+      args: ["-d", distro, "--", "bash", "-ic", params.vendorRoute
+        ? `export ANTHROPIC_BASE_URL=${shellQuote(params.vendorRoute.baseUrl)} ANTHROPIC_AUTH_TOKEN=${shellQuote(params.vendorRoute.localToken)}; ${command}`
+        : command],
       cwd: os.homedir()
     };
   }
@@ -381,13 +430,106 @@ async function buildClaudeCommand(params: TerminalStartParams) {
     return {
       file: "cmd.exe",
       args: ["/d", "/s", "/c", buildCmdCommand("claude", [...resumeArgs, ...extraArgs])],
-      cwd
+      cwd,
+      env: params.vendorRoute ? {
+        ANTHROPIC_BASE_URL: params.vendorRoute.baseUrl,
+        ANTHROPIC_AUTH_TOKEN: params.vendorRoute.localToken
+      } : undefined
     };
   }
 
   return {
     file: process.env.SHELL || "bash",
-    args: ["-ic", `exec ${buildShellCommand("claude", [...resumeArgs, ...extraArgs])}`],
-    cwd
+    args: ["-ic", `exec ${buildGatewayInvocation("claude", [...resumeArgs, ...extraArgs], params.vendorRoute, {
+      ANTHROPIC_BASE_URL: params.vendorRoute?.baseUrl || "",
+      ANTHROPIC_AUTH_TOKEN: params.vendorRoute?.localToken || ""
+    })}`],
+    cwd,
+    env: undefined
   };
+}
+
+export function buildCodexInvocation(args: string[], route?: VendorRoute, useWslPath = false) {
+  if (!route?.codexHome) return buildShellCommand("codex", args);
+  if (useWslPath) {
+    const codexHome = shellQuote(toWslPath(route.codexHome));
+    return `env CODEX_HOME=${codexHome} ${buildShellCommand("codex", args)}`;
+  }
+  return buildShellCommand("env", [`CODEX_HOME=${route.codexHome}`, "codex", ...args]);
+}
+
+export function buildWslCodexRouteSetup(route?: VendorRoute, sourceHome?: string) {
+  if (!route?.codexHome) return "";
+  const routeHomePath = toWslPath(route.codexHome);
+  const routeHome = shellQuote(routeHomePath);
+  const source = sourceHome?.trim() ? shellQuote(sourceHome.trim()) : '"$HOME/.codex"';
+  return [
+    `mkdir -p -- ${routeHome}`,
+    `mkdir -p -- ${source}/sessions`,
+    `: >> ${source}/history.jsonl`,
+    `[ -e ${shellQuote(`${routeHomePath}/sessions`)} ] || ln -s -- ${source}/sessions ${shellQuote(`${routeHomePath}/sessions`)}`,
+    `[ -e ${shellQuote(`${routeHomePath}/history.jsonl`)} ] || ln -s -- ${source}/history.jsonl ${shellQuote(`${routeHomePath}/history.jsonl`)}`
+  ].join(" && ") + "; ";
+}
+
+async function syncCodexProviderAliases(
+  route: VendorRoute | undefined,
+  sourceHome: string,
+  distro?: string,
+  required = false
+) {
+  if (!route?.codexHome) return;
+  if (!sourceHome.trim()) {
+    if (distro) throw new Error("未找到 WSL Codex 配置目录，无法恢复历史会话。");
+    return;
+  }
+  const sourceConfigPath = distro
+    ? path.posix.join(sourceHome, "config.toml")
+    : path.join(sourceHome, "config.toml");
+  const names: string[] = [];
+  const addName = (line: string) => {
+    const name = /^\s*\[model_providers\.([A-Za-z0-9_-]+)\]\s*$/.exec(line)?.[1];
+    if (name && name !== "akim_gateway" && !names.includes(name)) names.push(name);
+  };
+  if (distro) {
+    try {
+      await readWslLines(distro, sourceConfigPath, (line) => {
+        addName(line);
+      });
+    } catch (error: any) {
+      throw new Error(`无法读取 WSL Codex 配置：${sourceConfigPath}。${error?.message || ""}`.trim(), { cause: error });
+    }
+  } else {
+    const sourceConfig = await fs.readFile(sourceConfigPath, "utf8").catch(() => "");
+    for (const line of sourceConfig.split(/\r?\n/)) addName(line);
+  }
+  if (names.length === 0) {
+    if (required) throw new Error(`Codex 配置中未找到任何 model_providers：${sourceConfigPath}`);
+    return;
+  }
+  const configPath = path.join(route.codexHome, "config.toml");
+  const aliases = names.map((name) => [
+    `[model_providers.${name}]`,
+    `name = "${name}"`,
+    'wire_api = "responses"',
+    "requires_openai_auth = true",
+    `base_url = "${route.baseUrl}"`
+  ].join("\n")).join("\n\n");
+  await fs.appendFile(configPath, `\n${aliases}\n`);
+}
+
+function toWslPath(value: string) {
+  const match = /^([a-zA-Z]):[\\/](.*)$/.exec(value);
+  if (!match) return value;
+  return `/mnt/${match[1].toLowerCase()}/${match[2].replace(/\\/g, "/")}`;
+}
+
+function buildGatewayInvocation(
+  command: string,
+  args: string[],
+  route: VendorRoute | undefined,
+  environment: Record<string, string>
+) {
+  if (!route) return buildShellCommand(command, args);
+  return buildShellCommand("env", [...Object.entries(environment).map(([key, value]) => `${key}=${value}`), command, ...args]);
 }

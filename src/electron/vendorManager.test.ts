@@ -98,8 +98,11 @@ const sqliteMock = vi.hoisted(() => {
         this.state.configs = this.state.configs.filter((config) => config.vendor_id !== params[0]);
         return { changes: 1, lastInsertRowid: 0 };
       }
-      if (sql === "UPDATE api_vendors SET enabled = 0") {
-        this.state.vendors = this.state.vendors.map((vendor) => ({ ...vendor, enabled: 0 }));
+      if (sql.startsWith("UPDATE api_vendors SET enabled = 0")) {
+        const providerId = params[0];
+        this.state.vendors = this.state.vendors.map((vendor) =>
+          !providerId || vendor.provider_id === providerId ? { ...vendor, enabled: 0 } : vendor
+        );
         return { changes: this.state.vendors.length, lastInsertRowid: 0 };
       }
       if (sql.startsWith("UPDATE api_vendors SET enabled = 1, last_enabled_at = ?, updated_at = ? WHERE id = ?")) {
@@ -145,6 +148,7 @@ import {
   deleteApiVendor,
   enableApiVendor,
   isApiKeyEncryptionAvailable,
+  listApiVendorSummaries,
   listApiVendors,
   saveApiVendor,
   setVendorDatabasePath
@@ -277,6 +281,14 @@ describe("listApiVendors 过滤与排序", () => {
 
     const all = await listApiVendors();
     expect(all).toHaveLength(3);
+    const configIds = all.flatMap((vendor) => vendor.configs.map((config) => config.id));
+    expect(new Set(configIds).size).toBe(configIds.length);
+  });
+
+  it("摘要列表不返回 API Key", async () => {
+    await saveApiVendor(vendorInput());
+    const summaries = await listApiVendorSummaries();
+    expect(summaries[0].apiKey).toBe("");
   });
 });
 
@@ -285,6 +297,17 @@ describe("deleteApiVendor", () => {
     const saved = await saveApiVendor(vendorInput());
     await deleteApiVendor(saved.id);
     expect(await listApiVendors()).toHaveLength(0);
+  });
+});
+
+describe("编辑供应商密钥", () => {
+  it("编辑摘要供应商时留空 API Key 会保留原密钥", async () => {
+    const saved = await saveApiVendor(vendorInput());
+    const edited = await saveApiVendor({
+      ...vendorInput({ id: saved.id, apiKey: "" }),
+      name: "Renamed Vendor"
+    });
+    expect(edited.apiKey).toBe("sk-secret-123");
   });
 });
 
