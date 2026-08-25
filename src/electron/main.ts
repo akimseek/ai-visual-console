@@ -37,6 +37,8 @@ import {
   listWorkspacePresets,
   saveCompressionPrompt,
   saveWorkspacePreset,
+  getGatewayPort,
+  setGatewayPort,
   setSettingsPath
 } from "./settings";
 import {
@@ -74,7 +76,7 @@ import {
   saveApiVendor,
   setVendorDatabasePath
 } from "./vendorManager";
-import { stopVendorGateway } from "./vendorGateway";
+import { getVendorGatewayPort, stopVendorGateway } from "./vendorGateway";
 import {
   resizeTerminalSession,
   getTerminalSessionCount,
@@ -332,6 +334,16 @@ app.whenReady().then(() => {
     const vendor = (await listApiVendors()).find((item) => item.id === checkedVendorId);
     if (!vendor) throw new Error("供应商不存在。");
     return switchTerminalVendor(checkedTerminalId, vendor.providerId, vendor.id);
+  });
+  ipcMain.handle("gateway:get-port", async () => ({
+    configuredPort: await getGatewayPort(),
+    activePort: getVendorGatewayPort()
+  }));
+  ipcMain.handle("gateway:set-port", async (_event, port: unknown) => {
+    const checkedPort = requireGatewayPort(port);
+    const configuredPort = await setGatewayPort(checkedPort);
+    const activePort = getVendorGatewayPort();
+    return { configuredPort, activePort, applied: activePort === 0 || activePort === configuredPort };
   });
   ipcMain.handle("codex:list-cached-targets", (_event, providerId: unknown) =>
     listCachedTargets(providerId === undefined || providerId === null || providerId === "" ? undefined : requireProviderId(providerId))
@@ -700,6 +712,14 @@ function requireView(value: unknown) {
 function requireProviderId(value: unknown): AiProviderId {
   if (value !== "codex" && value !== "gemini" && value !== "claude") throw new Error("参数无效：providerId");
   return value;
+}
+
+function requireGatewayPort(value: unknown) {
+  const port = typeof value === "number" ? value : Number(value);
+  if (!Number.isInteger(port) || port < 0 || port > 65535) {
+    throw new Error("网关端口必须是 0 到 65535 之间的整数。端口 0 表示自动分配。");
+  }
+  return port;
 }
 
 function requireAppCommand(value: unknown): AppCommand {

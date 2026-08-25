@@ -26,6 +26,7 @@ import { useSkills } from "./useSkills";
 import { SkillManagerDialog } from "./SkillManagerDialog";
 import { NewSessionDialog } from "./NewSessionDialog";
 import { SessionSettingsDialog } from "./SessionSettingsDialog";
+import { GatewayPortDialog } from "./GatewayPortDialog";
 import { SessionDetailModal } from "./SessionDetailModal";
 import { SessionContextMenu, TabContextMenu } from "./ContextMenus";
 import { StatusBar } from "./StatusBar";
@@ -84,10 +85,49 @@ export function App() {
   const [providerStatusOpen, setProviderStatusOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [usageDetailsOpen, setUsageDetailsOpen] = useState(false);
+  const [gatewayPortOpen, setGatewayPortOpen] = useState(false);
+  const [gatewayPortDraft, setGatewayPortDraft] = useState("0");
+  const [gatewayPortStatus, setGatewayPortStatus] = useState<import("./types").GatewayPortStatus | null>(null);
+  const [gatewayPortError, setGatewayPortError] = useState("");
+  const [gatewayPortBusy, setGatewayPortBusy] = useState(false);
   const { openAppMenu, setOpenAppMenu } = useAppMenuState();
   const usageDetailsRef = useRef<HTMLDivElement | null>(null);
 
   const { notice, setNotice } = useAppNotice();
+
+  async function openGatewayPortDialog() {
+    setGatewayPortError("");
+    try {
+      const status = await window.codexConsole.getGatewayPort();
+      setGatewayPortStatus(status);
+      setGatewayPortDraft(String(status.configuredPort));
+      setGatewayPortOpen(true);
+    } catch (error: any) {
+      setNotice(error?.message || "读取网关端口失败。");
+    }
+  }
+
+  async function saveGatewayPort() {
+    const port = Number(gatewayPortDraft.trim());
+    if (!Number.isInteger(port) || port < 0 || port > 65535) {
+      setGatewayPortError("端口必须是 0 到 65535 之间的整数。端口 0 表示自动分配。");
+      return;
+    }
+    setGatewayPortBusy(true);
+    setGatewayPortError("");
+    try {
+      const result = await window.codexConsole.setGatewayPort(port);
+      setGatewayPortStatus(result);
+      setGatewayPortOpen(false);
+      setNotice(result.applied
+        ? `网关端口已设置为 ${result.configuredPort === 0 ? "自动分配" : result.configuredPort}。`
+        : `网关端口已保存为 ${result.configuredPort}，当前 Gateway 仍使用端口 ${result.activePort}；新建终端时生效。`);
+    } catch (error: any) {
+      setGatewayPortError(error?.message || "保存网关端口失败。");
+    } finally {
+      setGatewayPortBusy(false);
+    }
+  }
   const {
     systemTerminalOpen,
     systemTerminalMinimized,
@@ -812,6 +852,7 @@ export function App() {
     actions: {
       manageSkills: () => void openSkillManager(),
       openSessionSettings: openSessionSettingsDialog,
+      openGatewayPortSettings: () => void openGatewayPortDialog(),
       exportSession: (format) => void exportActiveSession(format),
       quit: () => void runAppCommand("quit"),
       manageVendors: () => void openVendorManager(),
@@ -1066,6 +1107,17 @@ export function App() {
           onClose={() => setSessionSettingsOpen(false)}
           onRestore={() => void clearWslCodexHome()}
           onSave={() => void configureWslCodexHome()}
+        />
+      )}
+      {gatewayPortOpen && (
+        <GatewayPortDialog
+          draft={gatewayPortDraft}
+          status={gatewayPortStatus}
+          error={gatewayPortError}
+          busy={gatewayPortBusy}
+          onChange={setGatewayPortDraft}
+          onClose={() => setGatewayPortOpen(false)}
+          onSave={() => void saveGatewayPort()}
         />
       )}
       {skillManagerOpen && (

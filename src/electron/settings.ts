@@ -13,6 +13,7 @@ import {
 
 type AppSettings = {
   wslCodexHomes?: Record<string, string>;
+  gatewayPort?: number;
   cachedTargets?: CodexTarget[];
   workspacePresets?: WorkspacePreset[];
   compressionPrompts?: CompressionPrompt[];
@@ -48,6 +49,22 @@ let structuredSettingsMigration: Promise<void> | null = null;
 export function setSettingsPath(filePath: string) {
   settingsPath = filePath;
   structuredSettingsMigration = null;
+}
+
+export async function getGatewayPort() {
+  const settings = await readSettings();
+  return normalizeGatewayPort(settings.gatewayPort);
+}
+
+export async function setGatewayPort(port: number) {
+  const normalized = normalizeGatewayPort(port);
+  await updateSettings((settings) => ({ ...settings, gatewayPort: normalized }));
+  return normalized;
+}
+
+function normalizeGatewayPort(port: unknown) {
+  if (typeof port !== "number" || !Number.isInteger(port) || port < 0 || port > 65535) return 0;
+  return port;
 }
 
 export async function getWslCodexHomeOverride(distro: string) {

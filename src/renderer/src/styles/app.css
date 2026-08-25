@@ -3424,6 +3424,20 @@ select {
   color: #8a93a0;
 }
 
+.dialog-hint,
+.dialog-error {
+  margin: 0;
+  font-size: 13px;
+}
+
+.dialog-hint {
+  color: #68717f;
+}
+
+.dialog-error {
+  color: #b23838;
+}
+
 .skill-manager-toolbar {
   display: flex;
   align-items: center;

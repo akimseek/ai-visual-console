@@ -1,10 +1,9 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import crypto from "node:crypto";
-import fs from "node:fs/promises";
-import path from "node:path";
 import { Readable } from "node:stream";
 import type { AiProviderId, ApiVendor } from "./types";
 import { listApiVendors } from "./vendorManager";
+import { getGatewayPort } from "./settings";
 
 const MAX_REQUEST_BYTES = 32 * 1024 * 1024;
 const ROUTE_PREFIX = "/gateway";
@@ -15,7 +14,6 @@ export type VendorRoute = {
   vendorId: string;
   localToken: string;
   baseUrl: string;
-  codexHome?: string;
 };
 
 export type VendorRouteSwitchResult = {
@@ -36,12 +34,21 @@ export async function ensureVendorGateway() {
     await gatewayStartPromise;
     return gatewayAddress;
   }
-  gatewayStartPromise = new Promise<void>((resolve, reject) => {
+  gatewayStartPromise = startVendorGateway().finally(() => {
+    gatewayStartPromise = null;
+  });
+  await gatewayStartPromise;
+  return gatewayAddress;
+}
+
+async function startVendorGateway() {
+  const configuredPort = await getGatewayPort();
+  await new Promise<void>((resolve, reject) => {
     const server = createServer((request, response) => {
       void handleGatewayRequest(request, response);
     });
     server.once("error", reject);
-    server.listen(0, "127.0.0.1", () => {
+    server.listen(configuredPort, "127.0.0.1", () => {
       const address = server.address();
       if (!address || typeof address === "string") {
         reject(new Error("本地 Gateway 未返回有效监听地址。"));
@@ -51,11 +58,12 @@ export async function ensureVendorGateway() {
       gatewayAddress = `http://127.0.0.1:${address.port}`;
       resolve();
     });
-  }).finally(() => {
-    gatewayStartPromise = null;
   });
-  await gatewayStartPromise;
-  return gatewayAddress;
+}
+
+export function getVendorGatewayPort() {
+  if (!gatewayAddress) return 0;
+  return Number(new URL(gatewayAddress).port) || 0;
 }
 
 export async function createVendorRoute(providerId: AiProviderId, vendorId?: string) {
@@ -73,7 +81,6 @@ export async function createVendorRoute(providerId: AiProviderId, vendorId?: str
     baseUrl: `${gatewayUrl}${ROUTE_PREFIX}/${providerId}/${routeId}`,
     createdAt: Date.now()
   };
-  if (providerId === "codex") route.codexHome = await createCodexHome(route);
   routes.set(routeId, route);
   return route;
 }
@@ -90,31 +97,6 @@ export async function destroyVendorRoute(routeId: string) {
   const route = routes.get(routeId);
   if (!route) return;
   routes.delete(routeId);
-  if (route.codexHome) await fs.rm(route.codexHome, { recursive: true, force: true }).catch(() => undefined);
-}
-
-export async function linkCodexRouteStorage(route: VendorRoute | undefined, sourceHome: string) {
-  if (!route?.codexHome || !sourceHome) return;
-  await fs.mkdir(path.join(sourceHome, "sessions"), { recursive: true });
-  await fs.appendFile(path.join(sourceHome, "history.jsonl"), "");
-  await linkPath(path.join(sourceHome, "sessions"), path.join(route.codexHome, "sessions"), process.platform === "win32" ? "junction" : undefined);
-  if (process.platform === "win32") {
-    try {
-      await fs.link(path.join(sourceHome, "history.jsonl"), path.join(route.codexHome, "history.jsonl"));
-    } catch (error: any) {
-      if (error?.code !== "EEXIST") throw error;
-    }
-  } else {
-    await linkPath(path.join(sourceHome, "history.jsonl"), path.join(route.codexHome, "history.jsonl"));
-  }
-}
-
-async function linkPath(source: string, destination: string, type?: "junction") {
-  try {
-    await fs.symlink(source, destination, type);
-  } catch (error: any) {
-    if (error?.code !== "EEXIST") throw error;
-  }
 }
 
 export async function stopVendorGateway() {
@@ -237,23 +219,6 @@ async function readRequestBody(request: IncomingMessage) {
     chunks.push(buffer);
   }
   return Buffer.concat(chunks);
-}
-
-async function createCodexHome(route: VendorRoute) {
-  const tempRoot = path.join(process.cwd(), "temp");
-  await fs.mkdir(tempRoot, { recursive: true });
-  const home = await fs.mkdtemp(path.join(tempRoot, "ai-vendor-route-"));
-  await fs.writeFile(path.join(home, "auth.json"), JSON.stringify({ OPENAI_API_KEY: route.localToken }, null, 2));
-  await fs.writeFile(path.join(home, "config.toml"), [
-    'model_provider = "akim_gateway"',
-    "",
-    "[model_providers.akim_gateway]",
-    'name = "akim_gateway"',
-    'wire_api = "responses"',
-    "requires_openai_auth = true",
-    `base_url = "${route.baseUrl}"`
-  ].join("\n"));
-  return home;
 }
 
 function respondJson(response: ServerResponse, status: number, value: unknown) {

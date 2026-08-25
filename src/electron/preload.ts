@@ -18,6 +18,8 @@ import type {
   CliEnvironmentStatus,
   CliInstallRequest,
   CliInstallResult,
+  GatewayPortStatus,
+  GatewayPortUpdateResult,
   InstalledSkill,
   SessionBranchParams,
   SessionExportFormat,
@@ -38,6 +40,8 @@ const api = {
     ipcRenderer.invoke("cli:check-environment", request) as Promise<CliEnvironmentStatus>,
   installCli: (request: CliInstallRequest) =>
     ipcRenderer.invoke("cli:install", request) as Promise<CliInstallResult>,
+  getGatewayPort: () => ipcRenderer.invoke("gateway:get-port") as Promise<GatewayPortStatus>,
+  setGatewayPort: (port: number) => ipcRenderer.invoke("gateway:set-port", port) as Promise<GatewayPortUpdateResult>,
   listApiVendors: (targetId?: string) => ipcRenderer.invoke("vendor:list", targetId) as Promise<ApiVendor[]>,
   saveApiVendor: (input: ApiVendorInput) => ipcRenderer.invoke("vendor:save", input) as Promise<ApiVendor>,
   isApiKeyEncryptionAvailable: () =>

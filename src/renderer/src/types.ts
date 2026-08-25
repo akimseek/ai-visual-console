@@ -16,6 +16,8 @@ import type {
   CliEnvironmentStatus,
   CliInstallRequest,
   CliInstallResult,
+  GatewayPortStatus,
+  GatewayPortUpdateResult,
   InstalledSkill,
   OpenPathRequest,
   SessionExportFormat,
@@ -47,6 +49,8 @@ export type {
   CliEnvironmentStatus,
   CliInstallRequest,
   CliInstallResult,
+  GatewayPortStatus,
+  GatewayPortUpdateResult,
   AiSession,
   AiSessionFile,
   AiTarget,
@@ -74,6 +78,8 @@ export type CodexConsoleApi = {
   listProviders: () => Promise<AiProviderSummary[]>;
   checkCliEnvironment: (request: CliEnvironmentRequest) => Promise<CliEnvironmentStatus>;
   installCli: (request: CliInstallRequest) => Promise<CliInstallResult>;
+  getGatewayPort: () => Promise<GatewayPortStatus>;
+  setGatewayPort: (port: number) => Promise<GatewayPortUpdateResult>;
   listApiVendors: (targetId?: string) => Promise<ApiVendor[]>;
   saveApiVendor: (input: ApiVendorInput) => Promise<ApiVendor>;
   isApiKeyEncryptionAvailable: () => Promise<boolean>;

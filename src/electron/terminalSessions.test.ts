@@ -1,30 +1,35 @@
 import { describe, expect, it } from "vitest";
-import { buildCodexInvocation, buildWslCodexRouteSetup } from "./terminalSessions";
+import { buildCodexInvocation, buildTerminalEnvironment } from "./terminalSessions";
 
 const route = {
   routeId: "route-id",
   providerId: "codex" as const,
   vendorId: "vendor-id",
   localToken: "token",
-  baseUrl: "http://127.0.0.1:1234/gateway/codex/route-id",
-  codexHome: "/tmp/ai-vendor-route"
+  baseUrl: "http://127.0.0.1:1234/gateway/codex/route-id"
 };
 
 describe("Codex Gateway command", () => {
-  it("在交互 shell 中以路由专用 CODEX_HOME 执行 Codex", () => {
+  it("通过命令行覆盖路由 provider，不创建专用 CODEX_HOME", () => {
     expect(buildCodexInvocation(["resume", "session-id"], route))
-      .toBe("env 'CODEX_HOME=/tmp/ai-vendor-route' 'codex' 'resume' 'session-id'");
+      .toBe("codex '-c' 'model_provider=\"akim_gateway\"' '-c' 'model_providers.akim_gateway.name=\"akim_gateway\"' '-c' 'model_providers.akim_gateway.wire_api=\"responses\"' '-c' 'model_providers.akim_gateway.requires_openai_auth=true' '-c' 'model_providers.akim_gateway.env_key=\"OPENAI_API_KEY\"' '-c' 'model_providers.akim_gateway.base_url=\"http://127.0.0.1:1234/gateway/codex/route-id\"' 'resume' 'session-id'");
   });
 
-  it("在 WSL 中将 Windows 临时目录转换为 WSL 路径", () => {
-    expect(buildCodexInvocation([], { ...route, codexHome: "C:\\Users\\akim\\AppData\\Local\\Temp\\route" }, true))
-      .toBe("env CODEX_HOME='/mnt/c/Users/akim/AppData/Local/Temp/route' 'codex'");
-  });
-
-  it("在 WSL 中把会话存储链接回原始 Codex 目录", () => {
-    expect(buildWslCodexRouteSetup({ ...route, codexHome: "C:\\Temp\\route" }, "/home/akim/.codex"))
-      .toContain("mkdir -p -- '/mnt/c/Temp/route'");
-    expect(buildWslCodexRouteSetup({ ...route, codexHome: "C:\\Temp\\route" }, "/home/akim/.codex"))
-      .toContain("'/mnt/c/Temp/route/sessions'");
+  it("路由环境覆盖继承的 Codex 凭证，避免发送旧 bearer token", () => {
+    const previousCodexKey = process.env.CODEX_API_KEY;
+    const previousAccessToken = process.env.CODEX_ACCESS_TOKEN;
+    process.env.CODEX_API_KEY = "old-codex-key";
+    process.env.CODEX_ACCESS_TOKEN = "old-access-token";
+    try {
+      const environment = buildTerminalEnvironment({ OPENAI_API_KEY: "route-token" });
+      expect(environment.OPENAI_API_KEY).toBe("route-token");
+      expect(environment.CODEX_API_KEY).toBeUndefined();
+      expect(environment.CODEX_ACCESS_TOKEN).toBeUndefined();
+    } finally {
+      if (previousCodexKey === undefined) delete process.env.CODEX_API_KEY;
+      else process.env.CODEX_API_KEY = previousCodexKey;
+      if (previousAccessToken === undefined) delete process.env.CODEX_ACCESS_TOKEN;
+      else process.env.CODEX_ACCESS_TOKEN = previousAccessToken;
+    }
   });
 });

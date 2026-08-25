@@ -4,6 +4,7 @@ import type { AppMenuDefinition } from "./AppMenuBar";
 type AppMenuActions = {
   manageSkills: () => void;
   openSessionSettings: () => void;
+  openGatewayPortSettings: () => void;
   exportSession: (format: SessionExportFormat) => void;
   quit: () => void;
   manageVendors: () => void;
@@ -40,6 +41,7 @@ export function createAppMenus({
       items: [
         { label: "管理 skill", disabled: !supportsSkills || !hasTarget, action: actions.manageSkills },
         { label: "设置会话", disabled: !supportsSessionSettings || !isWslTarget, action: actions.openSessionSettings },
+        { label: "设置网关端口", action: actions.openGatewayPortSettings },
         { separator: true, label: "" },
         {
           label: "导出",

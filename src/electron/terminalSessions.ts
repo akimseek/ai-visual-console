@@ -15,11 +15,10 @@ import { getWslDistroFromTargetId, wslMountPathToWindowsPath } from "../shared/w
 import {
   createVendorRoute,
   destroyVendorRoute,
-  linkCodexRouteStorage,
   switchVendorRoute,
   type VendorRoute
 } from "./vendorGateway";
-import { readWslLines } from "./wslProcess";
+import { readLocalLines, readWslLines } from "./wslProcess";
 
 type TerminalSession = {
   id: string;
@@ -102,11 +101,7 @@ async function startPtySession(
     cols: cols || 100,
     rows: rows || 30,
     cwd: command.cwd,
-    env: {
-      ...process.env,
-      TERM: "xterm-256color",
-      ...command.env
-    }
+    env: buildTerminalEnvironment(command.env)
   });
 
   const session: TerminalSession = { id: terminalId, pty: child, window, outputBuffer: "", vendorRouteId };
@@ -123,6 +118,24 @@ async function startPtySession(
   });
 
   return { terminalId };
+}
+
+/**
+ * Build the child environment while preventing credentials inherited from the
+ * desktop process from taking precedence over the credentials injected for a
+ * Gateway route. Codex recognizes several auth environment variables; leaving
+ * CODEX_API_KEY/CODEX_ACCESS_TOKEN alongside OPENAI_API_KEY can make it send a
+ * different bearer token than the one the local route generated.
+ */
+export function buildTerminalEnvironment(overrides?: Record<string, string>) {
+  const environment: Record<string, string> = { ...process.env } as Record<string, string>;
+  if (overrides?.OPENAI_API_KEY) {
+    delete environment.CODEX_API_KEY;
+    delete environment.CODEX_ACCESS_TOKEN;
+  }
+  environment.TERM = "xterm-256color";
+  Object.assign(environment, overrides);
+  return environment;
 }
 
 async function buildSystemTerminalCommand(params: SystemTerminalStartRequest): Promise<TerminalCommand> {
@@ -298,28 +311,30 @@ async function buildCodexCommand(params: TerminalStartParams & { vendorRoute?: V
   const extraArgs = parseCliArgs(params.cliArgs || "");
   if (params.targetId.startsWith("wsl:")) {
     const distro = params.targetId.slice("wsl:".length);
-    await syncCodexProviderAliases(params.vendorRoute, params.codexHome || "", distro, Boolean(params.sessionId));
-    const codexInvocation = buildCodexInvocation(extraArgs, params.vendorRoute, true);
+    const providerNames = await readCodexProviderNames(params.codexHome, distro);
+    const codexInvocation = buildCodexInvocation(extraArgs, params.vendorRoute, providerNames);
     const command = params.sessionId
-      ? `${params.cwd ? `cd ${shellQuote(params.cwd)} && ` : ""}exec ${buildCodexInvocation(["resume", params.sessionId], params.vendorRoute, true)}`
+      ? `${params.cwd ? `cd ${shellQuote(params.cwd)} && ` : ""}exec ${buildCodexInvocation(["resume", params.sessionId], params.vendorRoute, providerNames)}`
       : params.cwd && params.useCodexCwdFlag
-        ? `exec ${buildCodexInvocation(["-C", params.cwd, ...extraArgs], params.vendorRoute, true)}`
+        ? `exec ${buildCodexInvocation(["-C", params.cwd, ...extraArgs], params.vendorRoute, providerNames)}`
         : params.cwd
           ? `mkdir -p ${shellQuote(params.cwd)} && cd ${shellQuote(params.cwd)} && exec ${codexInvocation}`
           : `mkdir -p "$HOME/.akim" && cd "$HOME/.akim" && exec ${codexInvocation}`;
-    const routeSetup = buildWslCodexRouteSetup(params.vendorRoute, params.codexHome);
-
+    const environment = buildCodexEnvironment(params.vendorRoute, params.codexHome);
+    const exportCommand = environment
+      ? `unset CODEX_API_KEY CODEX_ACCESS_TOKEN; export ${Object.entries(environment).map(([key, value]) => `${key}=${shellQuote(value)}`).join(" ")}; `
+      : "";
     return {
       file: "wsl.exe",
-      args: ["-d", distro, "--", "bash", "-ic", `${routeSetup}${command}`],
-      cwd: os.homedir()
+      args: ["-d", distro, "--", "bash", "-ic", `${exportCommand}${command}`],
+      cwd: os.homedir(),
+      env: undefined
     };
   }
 
   const codexHome = params.codexHome?.trim();
   const cwd = params.cwd || path.join(os.homedir(), ".akim");
-  await linkCodexRouteStorage(params.vendorRoute, codexHome || path.join(os.homedir(), ".codex"));
-  await syncCodexProviderAliases(params.vendorRoute, codexHome || path.join(os.homedir(), ".codex"), undefined, Boolean(params.sessionId));
+  const providerNames = await readCodexProviderNames(codexHome);
 
   if (process.platform === "win32") {
     const windowsCwd = toWindowsShellCwd(cwd);
@@ -333,11 +348,9 @@ async function buildCodexCommand(params: TerminalStartParams & { vendorRoute?: V
         : extraArgs;
     return {
       file: "codex.cmd",
-      args,
+      args: buildCodexArgs(args, params.vendorRoute, providerNames),
       cwd: windowsCwd,
-      env: params.vendorRoute?.codexHome
-        ? { CODEX_HOME: params.vendorRoute.codexHome }
-        : codexHome ? { CODEX_HOME: codexHome } : undefined
+      env: buildCodexEnvironment(params.vendorRoute, codexHome)
     };
   }
 
@@ -345,17 +358,17 @@ async function buildCodexCommand(params: TerminalStartParams & { vendorRoute?: V
     await fs.mkdir(cwd, { recursive: true });
   }
 
-  const codexInvocation = buildCodexInvocation(extraArgs, params.vendorRoute);
+  const codexInvocation = buildCodexInvocation(extraArgs, params.vendorRoute, providerNames);
   const command = params.sessionId
-    ? `exec ${buildCodexInvocation(["resume", params.sessionId], params.vendorRoute)}`
+    ? `exec ${buildCodexInvocation(["resume", params.sessionId], params.vendorRoute, providerNames)}`
     : params.cwd && params.useCodexCwdFlag
-      ? `exec ${buildCodexInvocation(["-C", params.cwd, ...extraArgs], params.vendorRoute)}`
+      ? `exec ${buildCodexInvocation(["-C", params.cwd, ...extraArgs], params.vendorRoute, providerNames)}`
       : `exec ${codexInvocation}`;
   return {
     file: process.env.SHELL || "bash",
     args: ["-ic", command],
     cwd,
-    env: params.vendorRoute?.codexHome ? undefined : codexHome ? { CODEX_HOME: codexHome } : undefined
+    env: buildCodexEnvironment(params.vendorRoute, codexHome)
   };
 }
 
@@ -449,79 +462,53 @@ async function buildClaudeCommand(params: TerminalStartParams & { vendorRoute?: 
   };
 }
 
-export function buildCodexInvocation(args: string[], route?: VendorRoute, useWslPath = false) {
-  if (!route?.codexHome) return buildShellCommand("codex", args);
-  if (useWslPath) {
-    const codexHome = shellQuote(toWslPath(route.codexHome));
-    return `env CODEX_HOME=${codexHome} ${buildShellCommand("codex", args)}`;
-  }
-  return buildShellCommand("env", [`CODEX_HOME=${route.codexHome}`, "codex", ...args]);
+const CODEX_ROUTE_PROVIDER = "akim_gateway";
+
+function buildCodexArgs(args: string[], route?: VendorRoute, providerNames: string[] = []) {
+  return [...buildCodexRouteConfigArgs(route, providerNames), ...args];
 }
 
-export function buildWslCodexRouteSetup(route?: VendorRoute, sourceHome?: string) {
-  if (!route?.codexHome) return "";
-  const routeHomePath = toWslPath(route.codexHome);
-  const routeHome = shellQuote(routeHomePath);
-  const source = sourceHome?.trim() ? shellQuote(sourceHome.trim()) : '"$HOME/.codex"';
+function buildCodexRouteConfigArgs(route?: VendorRoute, providerNames: string[] = []) {
+  if (!route) return [];
   return [
-    `mkdir -p -- ${routeHome}`,
-    `mkdir -p -- ${source}/sessions`,
-    `: >> ${source}/history.jsonl`,
-    `[ -e ${shellQuote(`${routeHomePath}/sessions`)} ] || ln -s -- ${source}/sessions ${shellQuote(`${routeHomePath}/sessions`)}`,
-    `[ -e ${shellQuote(`${routeHomePath}/history.jsonl`)} ] || ln -s -- ${source}/history.jsonl ${shellQuote(`${routeHomePath}/history.jsonl`)}`
-  ].join(" && ") + "; ";
+    "-c", `model_provider=${JSON.stringify(CODEX_ROUTE_PROVIDER)}`,
+    "-c", `model_providers.${CODEX_ROUTE_PROVIDER}.name=${JSON.stringify(CODEX_ROUTE_PROVIDER)}`,
+    "-c", `model_providers.${CODEX_ROUTE_PROVIDER}.wire_api=${JSON.stringify("responses")}`,
+    "-c", `model_providers.${CODEX_ROUTE_PROVIDER}.requires_openai_auth=true`,
+    "-c", `model_providers.${CODEX_ROUTE_PROVIDER}.env_key=${JSON.stringify("OPENAI_API_KEY")}`,
+    "-c", `model_providers.${CODEX_ROUTE_PROVIDER}.base_url=${JSON.stringify(route.baseUrl)}`,
+    ...providerNames
+      .filter((name) => name !== CODEX_ROUTE_PROVIDER)
+      .flatMap((name) => ["-c", `model_providers.${name}.base_url=${JSON.stringify(route.baseUrl)}`])
+  ];
 }
 
-async function syncCodexProviderAliases(
-  route: VendorRoute | undefined,
-  sourceHome: string,
-  distro?: string,
-  required = false
-) {
-  if (!route?.codexHome) return;
-  if (!sourceHome.trim()) {
-    if (distro) throw new Error("未找到 WSL Codex 配置目录，无法恢复历史会话。");
-    return;
-  }
-  const sourceConfigPath = distro
-    ? path.posix.join(sourceHome, "config.toml")
-    : path.join(sourceHome, "config.toml");
+export function buildCodexInvocation(args: string[], route?: VendorRoute, providerNames: string[] = []) {
+  return buildShellCommand("codex", buildCodexArgs(args, route, providerNames));
+}
+
+async function readCodexProviderNames(codexHome?: string, distro?: string) {
   const names: string[] = [];
   const addName = (line: string) => {
     const name = /^\s*\[model_providers\.([A-Za-z0-9_-]+)\]\s*$/.exec(line)?.[1];
-    if (name && name !== "akim_gateway" && !names.includes(name)) names.push(name);
+    if (name && !names.includes(name)) names.push(name);
   };
+  const sourceHome = codexHome?.trim();
   if (distro) {
-    try {
-      await readWslLines(distro, sourceConfigPath, (line) => {
-        addName(line);
-      });
-    } catch (error: any) {
-      throw new Error(`无法读取 WSL Codex 配置：${sourceConfigPath}。${error?.message || ""}`.trim(), { cause: error });
-    }
-  } else {
-    const sourceConfig = await fs.readFile(sourceConfigPath, "utf8").catch(() => "");
-    for (const line of sourceConfig.split(/\r?\n/)) addName(line);
+    if (!sourceHome) return names;
+    await readWslLines(distro, path.posix.join(sourceHome, "config.toml"), addName).catch(() => undefined);
+    return names;
   }
-  if (names.length === 0) {
-    if (required) throw new Error(`Codex 配置中未找到任何 model_providers：${sourceConfigPath}`);
-    return;
-  }
-  const configPath = path.join(route.codexHome, "config.toml");
-  const aliases = names.map((name) => [
-    `[model_providers.${name}]`,
-    `name = "${name}"`,
-    'wire_api = "responses"',
-    "requires_openai_auth = true",
-    `base_url = "${route.baseUrl}"`
-  ].join("\n")).join("\n\n");
-  await fs.appendFile(configPath, `\n${aliases}\n`);
+  const configPath = path.join(sourceHome || os.homedir() + "/.codex", "config.toml");
+  await readLocalLines(configPath, addName).catch(() => undefined);
+  return names;
 }
 
-function toWslPath(value: string) {
-  const match = /^([a-zA-Z]):[\\/](.*)$/.exec(value);
-  if (!match) return value;
-  return `/mnt/${match[1].toLowerCase()}/${match[2].replace(/\\/g, "/")}`;
+function buildCodexEnvironment(route: VendorRoute | undefined, codexHome?: string) {
+  const environment: Record<string, string> = {};
+  if (route) environment.OPENAI_API_KEY = route.localToken;
+  if (codexHome?.trim()) environment.CODEX_HOME = codexHome.trim();
+  return Object.keys(environment).length > 0 ? environment : undefined;
 }
 
 function buildGatewayInvocation(

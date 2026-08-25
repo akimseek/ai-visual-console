@@ -225,6 +225,15 @@ export type AppCommand =
   | "openLogDir"
   | "about";
 
+export type GatewayPortStatus = {
+  configuredPort: number;
+  activePort: number;
+};
+
+export type GatewayPortUpdateResult = GatewayPortStatus & {
+  applied: boolean;
+};
+
 export type CodexSessionFile = {
   filePath: string;
   mtimeMs: number;

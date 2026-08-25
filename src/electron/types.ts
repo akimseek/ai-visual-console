@@ -16,6 +16,8 @@ export type {
   CliEnvironmentStatus,
   CliInstallRequest,
   CliInstallResult,
+  GatewayPortStatus,
+  GatewayPortUpdateResult,
   AiSession,
   AiSessionFile,
   AiTarget,
