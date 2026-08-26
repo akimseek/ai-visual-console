@@ -2155,15 +2155,6 @@ select {
   justify-content: flex-end;
   gap: 6px;
   min-width: 164px;
-  opacity: 0;
-  pointer-events: none;
-  transition: opacity 0.12s ease;
-}
-
-.vendor-list-row:hover .vendor-card-actions,
-.vendor-list-row:focus-within .vendor-card-actions {
-  opacity: 1;
-  pointer-events: auto;
 }
 
 .vendor-card-actions button {
