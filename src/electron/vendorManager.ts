@@ -10,7 +10,8 @@ import type {
   ApiVendorEnableRequest,
   ApiVendorEnableResult,
   ApiVendorInput,
-  CodexTarget
+  CodexTarget,
+  VendorModel
 } from "./types";
 import { assertAllowedConfigPath } from "../shared/shellArgs";
 import { runWslShell, shellQuote } from "./wslProcess";
@@ -152,7 +153,8 @@ export async function saveApiVendor(input: ApiVendorInput): Promise<ApiVendor> {
           id, vendor_id, provider_id, label, enabled, target_path, content, sort_order
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
       `).run(
-        config.id || crypto.randomUUID(),
+        // 配置 id 在表中是全局主键；供应商复制或导入时不能复用外部 id。
+        crypto.randomUUID(),
         stored.id,
         config.providerId,
         config.label || null,
@@ -473,4 +475,67 @@ function listVendorConfigs(db: SqliteDatabase, vendorId: string): ApiVendorConfi
 
 function safeName(value: string) {
   return value.replace(/[\\/:*?"<>|\u0000-\u001F]/g, "_").slice(0, 100) || "vendor";
+}
+
+const MODEL_LIST_TIMEOUT_MS = 10_000;
+
+export async function listVendorModels(vendorId: string): Promise<VendorModel[]> {
+  const vendors = await listApiVendors();
+  const vendor = vendors.find((v) => v.id === vendorId);
+  if (!vendor) throw new Error("供应商不存在。");
+  if (!vendor.apiBaseUrl) throw new Error("供应商未配置 API 地址。");
+
+  const baseUrl = new URL(vendor.apiBaseUrl);
+  // 中转站的地址可能填写为根地址、/v1 或 /openai/v1；按顺序尝试候选地址，保留已有路径前缀。
+  const basePath = baseUrl.pathname.replace(/\/+$/, "");
+  const modelUrls = [...new Set([
+    /\/models$/i.test(basePath) ? basePath : `${basePath || ""}/models`,
+    /\/v\d+(?:\.\d+)?$/i.test(basePath) || /\/models$/i.test(basePath) ? "" : `${basePath || ""}/v1/models`
+  ].filter(Boolean).map((pathname) => new URL(pathname, baseUrl.origin).toString()))];
+  const headers: Record<string, string> = { accept: "application/json" };
+  if (vendor.apiKey) headers.authorization = `Bearer ${vendor.apiKey}`;
+  if (vendor.providerId === "claude") headers["x-api-key"] = vendor.apiKey;
+  if (vendor.providerId === "gemini") headers["x-goog-api-key"] = vendor.apiKey;
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), MODEL_LIST_TIMEOUT_MS);
+  try {
+    let lastError = "获取模型列表失败。";
+    for (const modelsUrl of modelUrls) {
+      const response = await fetch(modelsUrl, { headers, signal: controller.signal });
+      if (!response.ok) {
+        lastError = `获取模型列表失败 (${response.status})`;
+        if (response.status === 404 || response.status === 405) continue;
+        throw new Error(lastError);
+      }
+      const body = await response.json() as unknown;
+      const raw = extractModelRows(body);
+      return raw.map((item) => ({
+      id: String(item.id || item.name || item.model || ""),
+      object: typeof item.object === "string" ? item.object : undefined,
+      ownedBy: typeof item.owned_by === "string" ? item.owned_by : undefined,
+      created: typeof item.created === "number" ? item.created : undefined,
+      description: typeof item.description === "string" ? item.description : undefined,
+      pricingMultiplier: typeof item.pricingMultiplier === "number" ? item.pricingMultiplier : undefined,
+      tags: Array.isArray(item.tags) ? (item.tags as string[]).filter((t): t is string => typeof t === "string") : undefined
+      })).filter((m) => m.id);
+    }
+    throw new Error(lastError);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function extractModelRows(body: unknown): Array<Record<string, unknown>> {
+  if (Array.isArray(body)) return body.filter(isRecord);
+  if (!isRecord(body)) return [];
+  for (const key of ["data", "models", "items", "results"]) {
+    const value = body[key];
+    if (Array.isArray(value)) return value.filter(isRecord);
+  }
+  return [];
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }

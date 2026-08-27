@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import type { AiProviderId, AiProviderSummary, AiTarget } from "./types";
+import { Dialog } from "./Dialog";
 
 // 平台状态弹框：集中展示当前 Provider 的目标、路径、命令与能力，并对可打开路径做存在性探测。
 // 从 App.tsx 抽出为独立组件，连同其专用的纯函数一起迁移。
@@ -84,36 +85,13 @@ export function ProviderStatusDialog({
   }, [target?.id, provider?.id, target?.codexHome]);
 
   return (
-    <div className="dialog-overlay" role="presentation">
-      <section className="new-session-dialog provider-status-dialog" role="dialog" aria-modal="true" aria-labelledby="provider-status-title">
-        <header>
-          <h2 id="provider-status-title">平台状态</h2>
-          <button type="button" title="关闭" onClick={onClose}>
-            x
-          </button>
-        </header>
-        <div className="provider-status-content">
-          <ProviderStatusSection title="目标" rows={platformRows} />
-          <ProviderStatusSection
-            title="路径"
-            rows={checkedPathRows}
-            targetId={target?.id}
-            onOpenPath={openPath}
-            onCopyPath={copyPath}
-          />
-          <ProviderStatusSection title="命令" rows={commandRows} />
-          <section className="provider-status-section">
-            <h3>能力</h3>
-            <div className="capability-grid">
-              {capabilityRows.map((row) => (
-                <span key={row.label} className={row.enabled ? "enabled" : ""}>
-                  {row.label}
-                </span>
-              ))}
-            </div>
-          </section>
-        </div>
-        <footer>
+    <Dialog
+      title="平台状态"
+      onClose={onClose}
+      className="provider-status-dialog"
+      closeOnOverlay={false}
+      footer={
+        <>
           <button type="button" className="secondary" onClick={onClose}>
             关闭
           </button>
@@ -123,9 +101,31 @@ export function ProviderStatusDialog({
           <button type="button" onClick={onRefresh} disabled={!provider}>
             刷新
           </button>
-        </footer>
-      </section>
-    </div>
+        </>
+      }
+    >
+      <div className="provider-status-content">
+        <ProviderStatusSection title="目标" rows={platformRows} />
+        <ProviderStatusSection
+          title="路径"
+          rows={checkedPathRows}
+          targetId={target?.id}
+          onOpenPath={openPath}
+          onCopyPath={copyPath}
+        />
+        <ProviderStatusSection title="命令" rows={commandRows} />
+        <section className="provider-status-section">
+          <h3>能力</h3>
+          <div className="capability-grid">
+            {capabilityRows.map((row) => (
+              <span key={row.label} className={row.enabled ? "enabled" : ""}>
+                {row.label}
+              </span>
+            ))}
+          </div>
+        </section>
+      </div>
+    </Dialog>
   );
 }
 

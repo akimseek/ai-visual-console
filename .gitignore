@@ -54,3 +54,5 @@ desktop.ini
 # Local Codex / agent workspace metadata
 .codex/
 .agents/
+.qoder/
+.claude/

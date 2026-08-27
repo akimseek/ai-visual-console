@@ -343,3 +343,13 @@ export type WorkspacePresetInput = {
   prompt?: string;
   cliArgs?: string;
 };
+
+export type VendorModel = {
+  id: string;
+  object?: string;
+  ownedBy?: string;
+  created?: number;
+  description?: string;
+  pricingMultiplier?: number;
+  tags?: string[];
+};

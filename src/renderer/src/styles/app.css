@@ -1633,17 +1633,21 @@ select {
 
 .terminal-composer {
   position: relative;
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  display: flex;
+  flex-direction: column;
   flex: 0 0 auto;
-  gap: 8px;
   border-top: 1px solid #263244;
   background: #0f172a;
-  padding: 0 10px 10px;
+  padding: 10px 12px 8px;
+  gap: 8px;
 }
 
 .terminal-composer.active {
   background: #101b31;
+}
+
+.terminal-composer.dragging {
+  background: #162032;
 }
 
 .terminal-composer-resize {
@@ -1677,15 +1681,20 @@ select {
   min-height: 54px;
   overflow: auto;
   border: 1px solid #334155;
-  border-radius: 7px;
+  border-radius: 10px;
   background: #111827;
   color: #e5e7eb;
-  font: 13px/1.45 Consolas, "Cascadia Mono", "Courier New", monospace;
+  font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
   outline: none;
-  padding: 8px 10px;
+  padding: 12px 14px;
   resize: none;
   scrollbar-color: #334155 transparent;
   scrollbar-width: thin;
+  box-sizing: border-box;
+}
+
+.terminal-composer textarea::placeholder {
+  color: #6b7280;
 }
 
 .terminal-composer textarea::-webkit-scrollbar {
@@ -1704,27 +1713,687 @@ select {
 
 .terminal-composer textarea:focus {
   border-color: #4f75d8;
-  box-shadow: 0 0 0 2px rgba(79, 117, 216, 0.2);
+  box-shadow: 0 0 0 2px rgba(79, 117, 216, 0.15);
 }
 
-.terminal-composer button {
-  align-self: center;
+/* 拖拽文件覆盖层 */
+.composer-drag-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(15, 23, 42, 0.85);
+  border: 2px dashed #4f75d8;
+  border-radius: 10px;
+  z-index: 10;
+  pointer-events: none;
+}
+
+.composer-drag-overlay span {
+  color: #93c5fd;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+/* 附件卡片 */
+.composer-attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 0 2px;
+}
+
+.composer-attachment-card {
+  position: relative;
+  display: flex;
+  align-items: center;
+  background: #1e293b;
+  border: 1px solid #334155;
+  border-radius: 10px;
+  overflow: hidden;
+}
+
+.composer-attachment-card.image {
+  width: 72px;
+  height: 72px;
+}
+
+.composer-attachment-card.file {
+  padding: 8px 12px;
+  gap: 8px;
+  min-width: 160px;
+  max-width: 260px;
+}
+
+.composer-attachment-remove {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  width: 20px;
+  height: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.6);
+  border: none;
+  border-radius: 50%;
+  color: #fff;
+  font-size: 14px;
+  cursor: pointer;
+  z-index: 2;
+  padding: 0;
+  line-height: 1;
+}
+
+.composer-attachment-remove:hover {
+  background: rgba(220, 38, 38, 0.8);
+}
+
+.composer-attachment-thumb {
+  width: 100%;
+  height: 100%;
+  padding: 0;
+  border: none;
+  background: none;
+  cursor: pointer;
+  overflow: hidden;
+}
+
+.composer-attachment-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.composer-attachment-file {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.composer-attachment-icon {
+  font-size: 22px;
+  flex-shrink: 0;
+}
+
+.composer-attachment-info {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.composer-attachment-name {
+  font-size: 13px;
+  color: #e5e7eb;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.composer-attachment-type {
+  font-size: 11px;
+  color: #6b7280;
+}
+
+/* 输入工具栏 */
+.composer-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.composer-toolbar-left {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.composer-toolbar-right {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.composer-toolbar-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  border: 1px solid #334155;
+  border-radius: 8px;
+  background: transparent;
+  color: #9ca3af;
+  cursor: pointer;
+  padding: 0;
+  transition: background 0.15s, color 0.15s;
+}
+
+.composer-toolbar-btn:hover {
+  background: #1e293b;
+  color: #e5e7eb;
+}
+
+.composer-attach-btn:hover {
+  color: #4f75d8;
+}
+
+.composer-model-btn {
+  width: auto;
+  padding: 0 10px;
+  gap: 6px;
+  font-size: 13px;
+  color: #9ca3af;
+}
+
+.composer-model-btn span {
+  font-weight: 500;
+}
+
+.composer-model-btn:hover {
+  color: #e5e7eb;
+}
+
+.composer-send-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
   height: 36px;
-  border: 1px solid #4f75d8;
-  border-radius: 7px;
-  background: #3268d5;
+  border: none;
+  border-radius: 10px;
+  background: #4f75d8;
   color: #ffffff;
   cursor: pointer;
-  font-size: 13px;
-  font-weight: 800;
-  padding: 0 14px;
+  padding: 0;
+  transition: background 0.15s;
 }
 
-.terminal-composer button:disabled {
-  border-color: #334155;
+.composer-send-btn:hover:not(:disabled) {
+  background: #3b62c9;
+}
+
+.composer-send-btn:disabled {
   background: #1f2937;
-  color: #6b7280;
+  color: #4b5563;
   cursor: not-allowed;
+}
+
+/* 模型下拉菜单 */
+.composer-model-selector {
+  position: relative;
+}
+
+.composer-model-dropdown {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 0;
+  min-width: 320px;
+  max-height: 360px;
+  overflow-y: auto;
+  background: #1e293b;
+  border: 1px solid #334155;
+  border-radius: 10px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+  z-index: 100;
+  padding: 4px;
+}
+
+.composer-model-empty {
+  padding: 16px;
+  text-align: center;
+  color: #6b7280;
+  font-size: 13px;
+}
+
+.composer-model-option {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 10px 12px;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: #e5e7eb;
+  cursor: pointer;
+  transition: background 0.1s;
+}
+
+.composer-model-option:hover {
+  background: #334155;
+}
+
+.composer-model-option.selected {
+  background: rgba(79, 117, 216, 0.15);
+}
+
+.composer-model-option-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.composer-model-option-name {
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.composer-model-option-price {
+  font-size: 12px;
+  color: #6b7280;
+  flex-shrink: 0;
+}
+
+.composer-model-option-desc {
+  font-size: 12px;
+  color: #9ca3af;
+  margin-top: 2px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.composer-model-option-tags {
+  display: flex;
+  gap: 4px;
+  margin-top: 4px;
+  flex-wrap: wrap;
+}
+
+.composer-model-tag {
+  font-size: 11px;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: #334155;
+  color: #9ca3af;
+}
+
+/* 图片预览弹框 */
+.composer-image-overlay {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.7);
+  z-index: 1000;
+  backdrop-filter: blur(4px);
+}
+
+.composer-image-modal {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  background: #1e293b;
+  border-radius: 12px;
+  padding: 16px;
+  max-width: 90vw;
+  max-height: 90vh;
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.5);
+}
+
+.composer-image-actions {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  display: flex;
+  gap: 4px;
+  z-index: 2;
+}
+
+.composer-image-action-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border: 1px solid #334155;
+  border-radius: 8px;
+  background: rgba(30, 41, 59, 0.9);
+  color: #e5e7eb;
+  cursor: pointer;
+  padding: 0;
+}
+
+.composer-image-action-btn:hover {
+  background: #334155;
+}
+
+.composer-image-container {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  max-width: 80vw;
+  max-height: 70vh;
+}
+
+.composer-image-container img {
+  max-width: 100%;
+  max-height: 70vh;
+  object-fit: contain;
+  transition: transform 0.15s;
+  border-radius: 4px;
+}
+
+.composer-image-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  margin-top: 12px;
+  gap: 12px;
+}
+
+.composer-image-name {
+  font-size: 13px;
+  color: #9ca3af;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 60%;
+}
+
+.composer-image-zoom {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.composer-image-zoom button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border: 1px solid #334155;
+  border-radius: 6px;
+  background: transparent;
+  color: #e5e7eb;
+  cursor: pointer;
+  font-size: 16px;
+  padding: 0;
+}
+
+.composer-image-zoom button:hover {
+  background: #334155;
+}
+
+.composer-image-zoom span {
+  font-size: 13px;
+  color: #9ca3af;
+  min-width: 40px;
+  text-align: center;
+}
+
+/* 自管输入栏：与主界面保持浅色、紧凑的工作台样式。 */
+.terminal-composer {
+  margin: 10px 14px 14px;
+  padding: 0;
+  gap: 0;
+  border: 1px solid #334155;
+  border-radius: 10px;
+  background: #0f172a;
+  overflow: visible;
+  box-shadow: none;
+}
+
+.terminal-composer.active,
+.terminal-composer.dragging {
+  background: #101b31;
+}
+
+.terminal-composer-resize {
+  top: -7px;
+  height: 12px;
+}
+
+.terminal-composer-resize::before {
+  top: 4px;
+  width: 64px;
+  height: 6px;
+  border: 1px solid #334155;
+  border-radius: 999px;
+  background: #0f172a;
+}
+
+.terminal-composer-resize:hover::before {
+  border-color: #4f75d8;
+  background: #162032;
+}
+
+.terminal-composer textarea {
+  min-height: 72px;
+  border: 0;
+  border-radius: 10px 10px 0 0;
+  background: transparent;
+  color: #e5e7eb;
+  font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  padding: 20px 18px 14px;
+  box-shadow: none;
+}
+
+.terminal-composer textarea::placeholder {
+  color: #6b7280;
+}
+
+.terminal-composer textarea:focus {
+  border: 0;
+  box-shadow: none;
+}
+
+.composer-input-row {
+  display: flex;
+  align-items: flex-end;
+  min-width: 0;
+}
+
+.composer-input-row textarea {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.composer-attachments {
+  gap: 10px;
+  padding: 12px 18px 0;
+}
+
+.composer-attachment-card {
+  overflow: visible;
+  border-color: #334155;
+  border-radius: 10px;
+  background: #1e293b;
+  color: #e5e7eb;
+}
+
+.composer-attachment-card.image {
+  width: 84px;
+  height: 84px;
+}
+
+.composer-attachment-card.file,
+.composer-attachment-card.directory {
+  min-width: 210px;
+  max-width: 300px;
+  min-height: 76px;
+  padding: 10px 14px;
+}
+
+.composer-attachment-icon {
+  display: grid;
+  width: 38px;
+  height: 48px;
+  place-items: center;
+  border: 1px solid #475569;
+  border-radius: 8px;
+  color: #9ca3af;
+  font-size: 22px;
+}
+
+.composer-attachment-name {
+  color: #e5e7eb;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.composer-attachment-type {
+  color: #6b7280;
+  font-size: 12px;
+}
+
+.composer-attachment-remove {
+  top: 4px;
+  right: 4px;
+  width: 22px;
+  height: 22px;
+  border: 1px solid #475569;
+  background: rgba(15, 23, 42, 0.86);
+  color: #e5e7eb;
+  box-shadow: none;
+}
+
+.composer-attachment-remove:hover {
+  background: #7f1d1d;
+  color: #ffffff;
+}
+
+.composer-toolbar {
+  min-height: 28px;
+  border-top: 1px solid #263244;
+  padding: 3px 8px;
+}
+
+.composer-toolbar-left,
+.composer-toolbar-right {
+  gap: 6px;
+}
+
+.composer-toolbar-btn {
+  width: 28px;
+  height: 28px;
+  border: 0;
+  border-radius: 10px;
+  color: #9ca3af;
+}
+
+.composer-toolbar-btn:hover {
+  background: #1e293b;
+  color: #e5e7eb;
+}
+
+.composer-add-btn {
+  width: 42px;
+  height: 42px;
+  border: 1px solid #cfd4da;
+  border-radius: 12px;
+  font-size: 28px;
+  line-height: 1;
+}
+
+.composer-add-btn span {
+  transform: translateY(-1px);
+}
+
+.composer-attach-menu,
+.composer-model-selector {
+  position: relative;
+}
+
+.composer-attach-dropdown {
+  position: absolute;
+  left: 0;
+  bottom: calc(100% + 8px);
+  z-index: 100;
+  min-width: 192px;
+  padding: 6px;
+  border: 1px solid #334155;
+  border-radius: 11px;
+  background: #1e293b;
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.4);
+}
+
+.composer-attach-dropdown button {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  gap: 10px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: #e5e7eb;
+  cursor: pointer;
+  padding: 9px 10px;
+  text-align: left;
+}
+
+.composer-attach-dropdown button:hover {
+  background: #334155;
+}
+
+.composer-model-btn {
+  width: auto;
+  height: 28px;
+  border: 0;
+  color: #9ca3af;
+}
+
+.composer-model-dropdown {
+  border-color: #334155;
+  background: #1e293b;
+  box-shadow: 0 14px 32px rgba(0, 0, 0, 0.4);
+}
+
+.composer-model-option {
+  color: #e5e7eb;
+}
+
+.composer-model-option:hover,
+.composer-model-option.selected {
+  background: #334155;
+}
+
+.composer-model-option-desc,
+.composer-model-option-price,
+.composer-model-empty {
+  color: #9ca3af;
+}
+
+.composer-model-tag {
+  background: #334155;
+  color: #9ca3af;
+}
+
+.composer-send-btn {
+  flex: 0 0 auto;
+  width: 34px;
+  height: 34px;
+  margin: 0 10px 10px 4px;
+  border-radius: 12px;
+  background: #4b7561;
+}
+
+.composer-send-btn:hover:not(:disabled) {
+  background: #3d624f;
+}
+
+.composer-send-btn:disabled {
+  background: #1f2937;
+  color: #4b5563;
+}
+
+.composer-drag-overlay {
+  border: 1px dashed #4f75d8;
+  border-radius: 20px;
+  background: rgba(15, 23, 42, 0.94);
+}
+
+.composer-drag-overlay span {
+  color: #93c5fd;
 }
 
 .terminal-host .xterm,

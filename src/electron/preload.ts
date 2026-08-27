@@ -29,6 +29,7 @@ import type {
   SessionFileRef,
   SystemTerminalStartRequest,
   TerminalStartRequest,
+  VendorModel,
   WorkspacePreset,
   WorkspacePresetInput
 } from "./types";
@@ -56,6 +57,7 @@ const api = {
       switched: number;
       reason?: "terminal-not-found" | "gateway-not-active" | "route-not-found" | "provider-mismatch";
     }>,
+  listVendorModels: (vendorId: string) => ipcRenderer.invoke("vendor:list-models", vendorId) as Promise<VendorModel[]>,
   listCompressionPrompts: () => ipcRenderer.invoke("compression-prompt:list") as Promise<CompressionPrompt[]>,
   saveCompressionPrompt: (input: CompressionPromptInput) =>
     ipcRenderer.invoke("compression-prompt:save", input) as Promise<CompressionPrompt>,

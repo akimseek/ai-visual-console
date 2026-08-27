@@ -210,8 +210,12 @@ async function runSnapshotSafely(targetId: string) {
         ? await runWindowsSnapshot()
         : await runPosixSnapshot(targetId);
     return mergeOutput(output);
-  } catch (error: any) {
-    return `DETECTION_ERROR=${firstLine(error?.stderr || error?.stdout || error?.message || String(error))}`;
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.error(`[wsl-snapshot-detection] ${message}`, error);
+    const stderr = error instanceof Error && "stderr" in error ? String((error as Record<string, unknown>).stderr) : "";
+    const stdout = error instanceof Error && "stdout" in error ? String((error as Record<string, unknown>).stdout) : "";
+    return `DETECTION_ERROR=${firstLine(stderr || stdout || message)}`;
   }
 }
 

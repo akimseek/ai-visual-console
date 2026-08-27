@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import type { MutableRefObject } from "react";
 import { FitAddon } from "@xterm/addon-fit";
 import { SearchAddon } from "@xterm/addon-search";
 import { Terminal } from "@xterm/xterm";
@@ -17,6 +18,8 @@ export type UseXtermHostOptions = {
   customKeyHandler?: XtermKeyHandler;
   /** 粘贴回调（不传时用默认粘贴行为） */
   onPaste?: (text: string) => void;
+  /** 由宿主维护的 PTY 标识，供 resize、键盘输入和宿主业务逻辑共用。 */
+  terminalIdRef?: MutableRefObject<string>;
 };
 
 // 提取两个终端组件（EmbeddedTerminal / SystemTerminal）共享的 xterm.js 基础设施：
@@ -28,11 +31,12 @@ export type UseXtermHostOptions = {
 //   - 处理 onReady / onExit 等业务回调
 //   - 注册 terminal:data / terminal:exit 监听
 export function useXtermHost(options: UseXtermHostOptions = {}) {
-  const { customKeyHandler, onPaste } = options;
+  const { customKeyHandler, onPaste, terminalIdRef: providedTerminalIdRef } = options;
 
   const hostRef = useRef<HTMLDivElement | null>(null);
   const terminalRef = useRef<Terminal | null>(null);
-  const terminalIdRef = useRef("");
+  const ownedTerminalIdRef = useRef("");
+  const terminalIdRef = providedTerminalIdRef || ownedTerminalIdRef;
   const fitAddonRef = useRef<FitAddon | null>(null);
   const searchAddonRef = useRef<SearchAddon | null>(null);
   const disposeRef = useRef({ disposed: false });
@@ -42,6 +46,28 @@ export function useXtermHost(options: UseXtermHostOptions = {}) {
   const resizeObserverRef = useRef<ResizeObserver | null>(null);
   // 右键菜单状态
   const [contextMenu, setContextMenu] = useState<ContextMenuState>(null);
+
+  useEffect(() => {
+    if (!contextMenu) return;
+    // 终端右键菜单由 Hook 统一管理：菜单外点击、滚动或 Escape 都应立即关闭。
+    const closeOnOutsidePointer = (event: PointerEvent) => {
+      const target = event.target as Element | null;
+      if (target?.closest(".terminal-context-menu")) return;
+      setContextMenu(null);
+    };
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setContextMenu(null);
+    };
+    const closeOnScroll = () => setContextMenu(null);
+    document.addEventListener("pointerdown", closeOnOutsidePointer);
+    document.addEventListener("scroll", closeOnScroll, true);
+    document.addEventListener("keydown", closeOnEscape);
+    return () => {
+      document.removeEventListener("pointerdown", closeOnOutsidePointer);
+      document.removeEventListener("scroll", closeOnScroll, true);
+      document.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [contextMenu]);
 
   // 用 ref 持有外部回调，避免 mountTerminal 的 useCallback 因它们而每渲染重建
   const customKeyHandlerRef = useRef(customKeyHandler);
@@ -65,6 +91,8 @@ export function useXtermHost(options: UseXtermHostOptions = {}) {
     terminalRef.current?.paste(text);
     setContextMenu(null);
     return true;
+    // terminalIdRef 是稳定 ref 容器。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // 将 xterm 挂载到 host DOM 元素上。返回清理函数，宿主组件应在其 useEffect 的 cleanup 中调用。
@@ -180,6 +208,9 @@ export function useXtermHost(options: UseXtermHostOptions = {}) {
       dispose: () => {
         if (outputFrameRef.current) cancelAnimationFrame(outputFrameRef.current);
         if (resizeFrameRef.current) cancelAnimationFrame(resizeFrameRef.current);
+        outputBufferRef.current = "";
+        outputFrameRef.current = 0;
+        resizeFrameRef.current = 0;
         resizeObserver.disconnect();
         host.removeEventListener("contextmenu", onContextMenu);
         if (onPasteEvent) host.removeEventListener("paste", onPasteEvent);
@@ -192,6 +223,8 @@ export function useXtermHost(options: UseXtermHostOptions = {}) {
         searchAddonRef.current = null;
       }
     };
+    // onPaste 与 terminalIdRef 通过 ref 持有最新值，避免重建 xterm。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pasteClipboardText]);
 
   // disposed 标记 + 兜底清理
@@ -204,6 +237,8 @@ export function useXtermHost(options: UseXtermHostOptions = {}) {
       terminalIdRef.current = "";
       if (terminalId) void window.codexConsole.stopTerminal(terminalId);
     };
+    // terminalIdRef 是稳定 ref 容器。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   return {

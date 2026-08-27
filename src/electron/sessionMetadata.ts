@@ -133,8 +133,10 @@ async function readLegacyStore(): Promise<MetadataStore> {
     const store = JSON.parse(await fs.readFile(metadataPath, "utf8")) as MetadataStore;
     if (store.version !== STORE_VERSION || !store.sessions) return emptyStore();
     return store;
-  } catch (error: any) {
-    if (error?.code === "ENOENT") return emptyStore();
+  } catch (error: unknown) {
+    if ((error as NodeJS.ErrnoException)?.code === "ENOENT") return emptyStore();
+    const message = error instanceof Error ? error.message : String(error);
+    console.error(`[legacy-metadata-read-failed] ${message}`, error);
     await backupBrokenStore(error);
     return emptyStore();
   }
@@ -171,8 +173,8 @@ function emptyStore(): MetadataStore {
   return { version: STORE_VERSION, sessions: {} };
 }
 
-async function backupBrokenStore(error: any) {
-  if (!metadataPath || error?.code === "ENOENT") return;
+async function backupBrokenStore(error: unknown) {
+  if (!metadataPath || (error as NodeJS.ErrnoException)?.code === "ENOENT") return;
   const backupPath = `${metadataPath}.broken-${new Date().toISOString().replace(/[:.]/g, "-")}`;
   try {
     await fs.copyFile(metadataPath, backupPath);

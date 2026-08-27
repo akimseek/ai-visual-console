@@ -332,8 +332,10 @@ async function readSettings(): Promise<AppSettings> {
   if (!settingsPath) return {};
   try {
     return JSON.parse(await fs.readFile(settingsPath, "utf8")) as AppSettings;
-  } catch (error: any) {
-    if (error?.code === "ENOENT") return {};
+  } catch (error: unknown) {
+    if ((error as NodeJS.ErrnoException)?.code === "ENOENT") return {};
+    const message = error instanceof Error ? error.message : String(error);
+    console.error(`[settings-read-failed] ${message}`, error);
     await backupBrokenSettings(error);
     return {};
   }
@@ -351,8 +353,8 @@ async function updateSettings(updater: (settings: AppSettings) => AppSettings) {
   await settingsQueue;
 }
 
-async function backupBrokenSettings(error: any) {
-  if (!settingsPath || error?.code === "ENOENT") return;
+async function backupBrokenSettings(error: unknown) {
+  if (!settingsPath || (error as NodeJS.ErrnoException)?.code === "ENOENT") return;
   const backupPath = `${settingsPath}.broken-${new Date().toISOString().replace(/[:.]/g, "-")}`;
   try {
     await fs.copyFile(settingsPath, backupPath);

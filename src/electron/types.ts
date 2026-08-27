@@ -45,5 +45,6 @@ export type {
   SystemTerminalKind,
   SystemTerminalStartRequest,
   WorkspacePreset,
-  WorkspacePresetInput
+  WorkspacePresetInput,
+  VendorModel
 } from "../shared/types";

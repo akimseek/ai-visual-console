@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { MouseEvent, WheelEvent } from "react";
 import type {
   AiSession,
@@ -32,7 +32,6 @@ import { SessionContextMenu, TabContextMenu } from "./ContextMenus";
 import { StatusBar } from "./StatusBar";
 import { SessionList } from "./SessionList";
 import { useStableCallback } from "./useStableCallback";
-import { useDismissableOverlay } from "./useDismissableOverlay";
 import { SidebarControls } from "./SidebarControls";
 import { NoticeToast } from "./NoticeToast";
 import { SidebarHeader } from "./SidebarHeader";
@@ -508,13 +507,21 @@ export function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [targetId]);
 
-  useDismissableOverlay(
-    Boolean(contextMenu || tabContextMenu),
-    useCallback(() => {
+  useEffect(() => {
+    if (!contextMenu && !tabContextMenu) return;
+    // 只在菜单外点击时关闭；菜单内点击必须先让“重命名/复制”等动作完成。
+    const closeOnOutsidePointer = (event: PointerEvent) => {
+      const target = event.target as Element | null;
+      // 两类菜单都在 document 下渲染；菜单内部点击不能先被全局监听卸载。
+      if (target?.closest(".context-menu, .terminal-context-menu")) return;
+      // 菜单卸载与弹框挂载之间存在一个事件循环；期间拖选弹框内容不应关闭任何浮层。
+      if (target?.closest(".dialog-overlay, .terminal-paste-overlay")) return;
       setContextMenu(null);
       setTabContextMenu(null);
-    }, [])
-  );
+    };
+    document.addEventListener("pointerdown", closeOnOutsidePointer);
+    return () => document.removeEventListener("pointerdown", closeOnOutsidePointer);
+  }, [contextMenu, tabContextMenu]);
 
   function updateCachedSessions(
     nextTargetId: string,
@@ -955,6 +962,7 @@ export function App() {
           systemTerminalCreateSignal={systemTerminalCreateSignal}
           onCloseSystemTerminal={closeSystemTerminal}
           onToggleSystemTerminalMinimized={toggleSystemTerminalMinimized}
+          vendors={vendors}
         />
 
         {detailDialogSession && (
@@ -978,8 +986,17 @@ export function App() {
             menu={contextMenu}
             supportsTrash={supportsTrash}
             canDuplicate={contextMenu.view === "active" && supportsDuplicate}
-            onRename={() => openRenameSession(contextMenu.session)}
-            onDuplicate={() => openDuplicateSession(contextMenu.session)}
+            onRename={() => {
+              const session = contextMenu.session;
+              setContextMenu(null);
+              // 先卸载右键菜单，再挂载弹框，避免全局 pointerdown 监听误关弹框。
+              window.setTimeout(() => openRenameSession(session), 0);
+            }}
+            onDuplicate={() => {
+              const session = contextMenu.session;
+              setContextMenu(null);
+              window.setTimeout(() => openDuplicateSession(session), 0);
+            }}
             onOpenFolder={() =>
               void runWorkspaceAction("正在打开目录...", () =>
                 window.codexConsole.openSessionFolder(targetId, contextMenu.session.id)
@@ -1197,7 +1214,7 @@ const DEFAULT_NEW_SESSION_CWD = "~/.akim";
 function focusActiveWorkspaceInput(workspace: HTMLElement | null) {
   const activePanel = workspace?.querySelector<HTMLElement>(".terminal-panel.active");
   const target =
-    activePanel?.querySelector<HTMLTextAreaElement>(".terminal-composer.active textarea") ||
+    activePanel?.querySelector<HTMLTextAreaElement>(".terminal-composer textarea") ||
     activePanel?.querySelector<HTMLTextAreaElement>(".xterm-helper-textarea") ||
     activePanel?.querySelector<HTMLElement>(".terminal-host .xterm");
   target?.focus();

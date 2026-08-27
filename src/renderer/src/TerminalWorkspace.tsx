@@ -1,5 +1,5 @@
 import { lazy, Suspense, type MouseEvent, type RefObject, type WheelEvent } from "react";
-import type { AiSession } from "./types";
+import type { AiSession, ApiVendor } from "./types";
 import type { TerminalTab } from "./terminalTabState";
 import { TerminalTabs } from "./TerminalTabs";
 
@@ -42,7 +42,8 @@ export function TerminalWorkspace({
   systemTerminalMinimized,
   systemTerminalCreateSignal,
   onCloseSystemTerminal,
-  onToggleSystemTerminalMinimized
+  onToggleSystemTerminalMinimized,
+  vendors
 }: {
   workspaceRef: RefObject<HTMLElement | null>;
   sidebarCollapsed: boolean;
@@ -71,6 +72,7 @@ export function TerminalWorkspace({
   systemTerminalCreateSignal: number;
   onCloseSystemTerminal: () => void;
   onToggleSystemTerminalMinimized: () => void;
+  vendors?: ApiVendor[];
 }) {
   return (
     <section className="terminal-workspace" ref={workspaceRef}>
@@ -121,6 +123,7 @@ export function TerminalWorkspace({
                 onReady={(terminalId) => onTerminalReady(tab.key, terminalId)}
                 onExit={(exitCode) => onTerminalExit(tab.key, exitCode)}
                 onInputModeChange={(state) => onTerminalInputState(tab.key, state)}
+                vendors={vendors}
               />
             ))}
           </Suspense>

@@ -26,6 +26,7 @@ import type {
   SessionMessagePage,
   SystemTerminalStartRequest,
   TerminalStartParams,
+  VendorModel,
   WorkspacePreset,
   WorkspacePresetInput
 } from "../../shared/types";
@@ -69,6 +70,7 @@ export type {
   SystemTerminalStartRequest,
   TerminalStartParams,
   TokenUsage,
+  VendorModel,
   WorkspacePreset,
   WorkspacePresetInput
 } from "../../shared/types";
@@ -90,6 +92,7 @@ export type CodexConsoleApi = {
     switched: number;
     reason?: "terminal-not-found" | "gateway-not-active" | "route-not-found" | "provider-mismatch";
   }>;
+  listVendorModels: (vendorId: string) => Promise<VendorModel[]>;
   listCompressionPrompts: () => Promise<CompressionPrompt[]>;
   saveCompressionPrompt: (input: CompressionPromptInput) => Promise<CompressionPrompt>;
   deleteCompressionPrompt: (promptId: string) => Promise<{ deleted: boolean }>;

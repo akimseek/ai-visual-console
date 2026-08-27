@@ -10,6 +10,7 @@ import type {
   SessionBatchMutationResult,
   SessionFileRef,
   SessionMessagePage,
+  SessionMutationRef,
   SessionUsage,
   TokenUsage
 } from "./types";
@@ -30,6 +31,7 @@ const execFileAsync = promisify(execFile);
 const INTERNAL_WSL_DISTROS = new Set(["docker-desktop", "docker-desktop-data"]);
 const QODER_CONFIG_DIR_NAME = ".qoder-cn";
 const QODER_LIST_PREVIEW_LIMIT = 8;
+const QODER_TRASH_DIR_NAME = ".visual-console-trash";
 
 type QoderTargetContext = {
   targetId: string;
@@ -51,6 +53,12 @@ type QoderUsageAccumulator = {
   updatedAt?: string;
 };
 
+type QoderSessionMutationEntry = SessionMutationRef & {
+  filePath: string;
+  movedTo?: string;
+  deleted?: string;
+};
+
 export async function listCachedTargets(): Promise<CodexTarget[]> {
   return (await getCachedTargets()).filter((target) => target.provider === "qoder");
 }
@@ -67,22 +75,21 @@ export async function listTargets(): Promise<CodexTarget[]> {
   });
 }
 
-export async function listCachedSessions(targetId: string, _view: SessionView): Promise<CodexSession[]> {
-  return (await applySessionMetadataList(targetId, await listCachedProviderSessions<CodexSession>(getCacheKey(targetId)))).sort(sortSessions);
+export async function listCachedSessions(targetId: string, view: SessionView): Promise<CodexSession[]> {
+  return (await applySessionMetadataList(targetId, await listCachedProviderSessions<CodexSession>(getCacheKey(targetId, view)))).sort(sortSessions);
 }
 
 export async function listSessions(targetId: string): Promise<CodexSession[]> {
   return measure(`sessions.list.${targetId}`, async () => (await loadQoderSessions(targetId)).sort(sortSessions));
 }
 
-export async function listTrashSessions(): Promise<CodexSession[]> {
-  // Qoder CLI 仅提供删除命令，没有公开的回收站语义，不能擅自移动它的内部会话文件。
-  return [];
+export async function listTrashSessions(targetId: string): Promise<CodexSession[]> {
+  return measure(`sessions.trash.list.${targetId}`, async () => (await loadQoderSessions(targetId, "trash")).sort(sortSessions));
 }
 
-export async function searchSessions(targetId: string, _view: SessionView, query: string): Promise<CodexSession[]> {
+export async function searchSessions(targetId: string, view: SessionView, query: string): Promise<CodexSession[]> {
   const normalized = query.trim().toLowerCase();
-  const sessions = await listSessions(targetId);
+  const sessions = view === "trash" ? await listTrashSessions(targetId) : await listSessions(targetId);
   if (!normalized) return sessions;
   const context = await resolveTargetContext(targetId);
   const matches: CodexSession[] = [];
@@ -95,14 +102,14 @@ export async function searchSessions(targetId: string, _view: SessionView, query
 export async function getSession(targetId: string, sessionId: string, ref?: SessionFileRef): Promise<CodexSession> {
   const context = await resolveTargetContext(targetId);
   if (ref?.filePath) {
-    assertSessionPath(context, ref.filePath);
+    assertSessionPath(context, ref.filePath, getSessionViewForPath(context, ref.filePath));
     await verifySessionId(context, ref.filePath, sessionId);
     const session = await readSession(context, await sessionFileFromPath(context, ref.filePath));
     if (!session || session.id !== sessionId) throw new Error(`会话文件与会话编号不匹配：${sessionId}`);
     return (await applySessionMetadataList(targetId, [session]))[0];
   }
 
-  const cached = await findCachedProviderSession<CodexSession>([getCacheKey(targetId)], sessionId);
+  const cached = await findCachedProviderSession<CodexSession>([getCacheKey(targetId, "active"), getCacheKey(targetId, "trash")], sessionId);
   if (cached) {
     try {
       const session = await readSession(context, await sessionFileFromPath(context, cached.filePath));
@@ -112,15 +119,25 @@ export async function getSession(targetId: string, sessionId: string, ref?: Sess
     }
   }
 
-  const session = (await loadQoderSessions(targetId)).find((item) => item.id === sessionId);
+  const session = [...(await loadQoderSessions(targetId, "active")), ...(await loadQoderSessions(targetId, "trash"))]
+    .find((item) => item.id === sessionId);
   if (!session) throw new Error(`未找到 Qoder 会话：${sessionId}`);
   return session;
 }
 
 export async function getSessionSummary(targetId: string, sessionId: string): Promise<CodexSession> {
-  const cached = await findCachedProviderSession<CodexSession>([getCacheKey(targetId)], sessionId);
-  if (cached) return (await applySessionMetadataList(targetId, [cached]))[0];
-  const session = (await loadQoderSessions(targetId)).find((item) => item.id === sessionId);
+  const context = await resolveTargetContext(targetId);
+  const cached = await findCachedProviderSession<CodexSession>([getCacheKey(targetId, "active"), getCacheKey(targetId, "trash")], sessionId);
+  if (cached) {
+    try {
+      const file = await sessionFileFromPath(context, cached.filePath);
+      return (await applySessionMetadataList(targetId, [{ ...cached, ...file }]))[0];
+    } catch {
+      // 文件已被移入回收站或被 CLI 清理，重新发现后会覆盖旧缓存。
+    }
+  }
+  const session = [...(await loadQoderSessions(targetId, "active")), ...(await loadQoderSessions(targetId, "trash"))]
+    .find((item) => item.id === sessionId);
   if (!session) throw new Error(`未找到 Qoder 会话：${sessionId}`);
   return session;
 }
@@ -134,7 +151,7 @@ export async function getSessionMessagesPage(
   return measure(`sessions.page.${targetId}`, async () => {
     const context = await resolveTargetContext(targetId);
     const session = await getSessionSummary(targetId, sessionId);
-    assertSessionPath(context, session.filePath);
+    assertSessionPath(context, session.filePath, getSessionViewForPath(context, session.filePath));
     await verifySessionId(context, session.filePath, sessionId);
 
     const latest = offset === -1;
@@ -210,37 +227,225 @@ export async function duplicateSession(): Promise<CodexSession> {
   return unsupported("复制会话");
 }
 
-export async function deleteSession(): Promise<{ movedTo: string }> {
-  return unsupported("删除会话");
+export async function deleteSession(targetId: string, sessionId: string, ref?: SessionFileRef): Promise<{ movedTo: string }> {
+  return measure(`sessions.delete.${targetId}`, async () => {
+    const context = await resolveTargetContext(targetId);
+    const session = await getQoderSessionForMutation(targetId, context, sessionId, "active", ref);
+    const movedTo = await moveQoderSession(context, session.filePath, session.id, "active", "trash");
+    return { movedTo };
+  });
 }
 
-export async function deleteSessions(): Promise<SessionBatchMutationResult> {
-  return unsupported("批量删除会话");
+export async function deleteSessions(targetId: string, sessions: SessionMutationRef[]): Promise<SessionBatchMutationResult> {
+  return mutateQoderSessionsBatch(targetId, sessions, "active");
 }
 
-export async function restoreSession(): Promise<{ restoredTo: string }> {
-  return unsupported("恢复会话");
+export async function restoreSession(targetId: string, sessionId: string): Promise<{ restoredTo: string }> {
+  return measure(`sessions.restore.${targetId}`, async () => {
+    const context = await resolveTargetContext(targetId);
+    const session = await getQoderSessionForMutation(targetId, context, sessionId, "trash");
+    const restoredTo = await moveQoderSession(context, session.filePath, session.id, "trash", "active");
+    return { restoredTo };
+  });
 }
 
-export async function purgeSession(): Promise<{ deleted: string }> {
-  return unsupported("彻底删除会话");
+export async function purgeSession(targetId: string, sessionId: string, ref?: SessionFileRef): Promise<{ deleted: string }> {
+  return measure(`sessions.purge.${targetId}`, async () => {
+    const context = await resolveTargetContext(targetId);
+    const session = await getQoderSessionForMutation(targetId, context, sessionId, "trash", ref);
+    await purgeQoderSession(context, session.filePath, session.id);
+    return { deleted: session.filePath };
+  });
 }
 
-export async function purgeSessions(): Promise<SessionBatchMutationResult> {
-  return unsupported("批量彻底删除会话");
+export async function purgeSessions(targetId: string, sessions: SessionMutationRef[]): Promise<SessionBatchMutationResult> {
+  return mutateQoderSessionsBatch(targetId, sessions, "trash");
 }
 
-async function loadQoderSessions(targetId: string): Promise<CodexSession[]> {
+async function mutateQoderSessionsBatch(
+  targetId: string,
+  sessions: SessionMutationRef[],
+  view: SessionView
+): Promise<SessionBatchMutationResult> {
+  return measure(`sessions.${view === "trash" ? "purge" : "delete"}.batch.${targetId}`, async () => {
+    if (sessions.length === 0) return { processed: [] };
+    const context = await resolveTargetContext(targetId);
+    const processed: QoderSessionMutationEntry[] = [];
+    for (const ref of sessions) {
+      const session = await getQoderSessionForMutation(targetId, context, ref.id, view, ref);
+      if (view === "trash") {
+        await purgeQoderSession(context, session.filePath, session.id);
+        processed.push({ ...ref, filePath: session.filePath, deleted: session.filePath });
+      } else {
+        const movedTo = await moveQoderSession(context, session.filePath, session.id, "active", "trash");
+        processed.push({ ...ref, filePath: session.filePath, movedTo });
+      }
+    }
+    return { processed };
+  });
+}
+
+async function getQoderSessionForMutation(
+  targetId: string,
+  context: QoderTargetContext,
+  sessionId: string,
+  view: SessionView,
+  ref?: SessionFileRef
+): Promise<CodexSession> {
+  if (ref?.filePath) {
+    assertSessionPath(context, ref.filePath, view);
+    await verifySessionId(context, ref.filePath, sessionId);
+    const session = await readSession(context, await sessionFileFromPath(context, ref.filePath));
+    if (!session || session.id !== sessionId) throw new Error(`会话文件与会话编号不匹配：${sessionId}`);
+    return session;
+  }
+
+  const session = (await loadQoderSessions(targetId, view)).find((item) => item.id === sessionId);
+  if (!session) throw new Error(view === "trash" ? `未在 Qoder 回收站找到会话：${sessionId}` : `未找到 Qoder 会话：${sessionId}`);
+  return session;
+}
+
+async function moveQoderSession(
+  context: QoderTargetContext,
+  transcriptPath: string,
+  sessionId: string,
+  fromView: SessionView,
+  toView: SessionView
+): Promise<string> {
+  const paths = buildQoderSessionStoragePaths(context, transcriptPath, sessionId, fromView, toView);
+  await assertQoderMoveTargetsAvailable(context, paths);
+  if (context.kind === "wsl") await moveQoderSessionInWsl(context, paths);
+  else await moveQoderSessionLocally(paths);
+  return paths.find((item) => item.primary)!.destination;
+}
+
+async function purgeQoderSession(context: QoderTargetContext, transcriptPath: string, sessionId: string) {
+  const paths = buildQoderSessionStoragePaths(context, transcriptPath, sessionId, "trash");
+  if (context.kind === "wsl") {
+    const script = paths
+      .map((item) => `if [ -e ${shellQuote(item.source)} ]; then rm -rf -- ${shellQuote(item.source)}; fi`)
+      .join("\n");
+    await runWslShell(context.distro!, script);
+    return;
+  }
+  await Promise.all(paths.map((item) => fs.rm(item.source, { recursive: true, force: true })));
+}
+
+export type QoderStoragePath = {
+  source: string;
+  destination: string;
+  primary?: boolean;
+};
+
+export function buildQoderSessionStoragePaths(
+  context: { kind: "local" | "wsl"; configDir: string },
+  transcriptPath: string,
+  sessionId: string,
+  fromView: SessionView,
+  toView?: SessionView
+): QoderStoragePath[] {
+  const sourceProjectsRoot = getQoderProjectsRoot(context, fromView);
+  const pathApi = context.kind === "wsl" ? path.posix : path;
+  const relative = pathApi.relative(sourceProjectsRoot, transcriptPath);
+  const parts = relative.split(pathApi.sep);
+  if (
+    !relative || relative.startsWith("..") || pathApi.isAbsolute(relative) || parts.length !== 2 ||
+    !parts[0] || !parts[1]?.endsWith(".jsonl") || !isSinglePathSegment(sessionId, pathApi)
+  ) {
+    throw new Error("拒绝操作 Qoder projects 目录之外的会话文件。");
+  }
+
+  const targetView = toView || fromView;
+  const sourceBase = getQoderStorageRoot(context, fromView);
+  const destinationBase = getQoderStorageRoot(context, targetView);
+  const projectKey = parts[0];
+  const transcriptRelative = pathApi.join("projects", projectKey, parts[1]);
+  const related = [
+    pathApi.join("projects", projectKey, sessionId),
+    pathApi.join("tasks", sessionId),
+    pathApi.join("file-history", sessionId),
+    pathApi.join("logs", "sessions", projectKey, sessionId)
+  ];
+  return [
+    ...related.map((relativePath) => ({
+      source: pathApi.join(sourceBase, relativePath),
+      destination: pathApi.join(destinationBase, relativePath)
+    })),
+    {
+      source: pathApi.join(sourceBase, transcriptRelative),
+      destination: pathApi.join(destinationBase, transcriptRelative),
+      primary: true
+    }
+  ];
+}
+
+async function assertQoderMoveTargetsAvailable(context: QoderTargetContext, paths: QoderStoragePath[]) {
+  for (const item of paths) {
+    const sourceExists = context.kind === "wsl"
+      ? await wslPathExists(context.distro!, item.source).catch(() => false)
+      : await pathExists(item.source);
+    if (!sourceExists) continue;
+    const destinationExists = context.kind === "wsl"
+      ? await wslPathExists(context.distro!, item.destination).catch(() => false)
+      : await pathExists(item.destination);
+    if (destinationExists) throw new Error("目标会话已存在，已拒绝覆盖。");
+  }
+}
+
+async function moveQoderSessionLocally(paths: QoderStoragePath[]) {
+  const moved: QoderStoragePath[] = [];
+  try {
+    for (const item of paths) {
+      if (!await pathExists(item.source)) continue;
+      await fs.mkdir(path.dirname(item.destination), { recursive: true });
+      await fs.rename(item.source, item.destination);
+      moved.push(item);
+    }
+  } catch (error) {
+    for (const item of moved.reverse()) {
+      if (await pathExists(item.destination)) await fs.rename(item.destination, item.source).catch(() => undefined);
+    }
+    throw error;
+  }
+}
+
+async function moveQoderSessionInWsl(context: QoderTargetContext, paths: QoderStoragePath[]) {
+  const script = [
+    "set -e",
+    "moved_sources=()",
+    "moved_destinations=()",
+    "rollback() {",
+    "  for ((i=${#moved_sources[@]}-1; i>=0; i--)); do",
+    "    if [ -e \"${moved_destinations[i]}\" ]; then mv -- \"${moved_destinations[i]}\" \"${moved_sources[i]}\" || true; fi",
+    "  done",
+    "}",
+    "trap rollback ERR",
+    "move_if_present() {",
+    "  local source=$1 destination=$2",
+    "  if [ -e \"$source\" ]; then",
+    "    mkdir -p \"$(dirname \"$destination\")\"",
+    "    mv -- \"$source\" \"$destination\"",
+    "    moved_sources+=(\"$source\")",
+    "    moved_destinations+=(\"$destination\")",
+    "  fi",
+    "}",
+    ...paths.map((item) => `move_if_present ${shellQuote(item.source)} ${shellQuote(item.destination)}`),
+    "trap - ERR"
+  ].join("\n");
+  await runWslShell(context.distro!, script);
+}
+
+async function loadQoderSessions(targetId: string, view: SessionView = "active"): Promise<CodexSession[]> {
   const context = await resolveTargetContext(targetId);
-  const files = context.kind === "wsl" ? await listWslSessionFiles(context) : await listLocalSessionFiles(context);
-  const sessions = await loadProviderSessionCache(getCacheKey(targetId), files, (file) =>
+  const files = context.kind === "wsl" ? await listWslSessionFiles(context, view) : await listLocalSessionFiles(context, view);
+  const sessions = await loadProviderSessionCache(getCacheKey(targetId, view), files, (file) =>
     readSession(context, file, { maxMessages: QODER_LIST_PREVIEW_LIMIT })
   );
   return applySessionMetadataList(targetId, sessions);
 }
 
-function getCacheKey(targetId: string) {
-  return `sessions:qoder:${targetId}:active:v1`;
+function getCacheKey(targetId: string, view: SessionView) {
+  return `sessions:qoder:${targetId}:${view}:v1`;
 }
 
 async function resolveTargetContext(targetId: string): Promise<QoderTargetContext> {
@@ -268,8 +473,8 @@ function localConfigDir() {
   return process.env.QODERCN_CONFIG_DIR?.trim() || path.join(os.homedir(), QODER_CONFIG_DIR_NAME);
 }
 
-async function listLocalSessionFiles(context: QoderTargetContext): Promise<QoderSessionFile[]> {
-  const projectsRoot = path.join(context.configDir, "projects");
+async function listLocalSessionFiles(context: QoderTargetContext, view: SessionView): Promise<QoderSessionFile[]> {
+  const projectsRoot = getQoderProjectsRoot(context, view);
   const projectDirs = await fs.readdir(projectsRoot, { withFileTypes: true }).catch(() => []);
   const files: QoderSessionFile[] = [];
   for (const project of projectDirs) {
@@ -286,8 +491,8 @@ async function listLocalSessionFiles(context: QoderTargetContext): Promise<Qoder
   return files;
 }
 
-async function listWslSessionFiles(context: QoderTargetContext): Promise<QoderSessionFile[]> {
-  const root = path.posix.join(context.configDir, "projects");
+async function listWslSessionFiles(context: QoderTargetContext, view: SessionView): Promise<QoderSessionFile[]> {
+  const root = getQoderProjectsRoot(context, view);
   const output = await runWslShell(
     context.distro!,
     `find ${shellQuote(root)} -type f -name '*.jsonl' -printf '%p\\t%T@\\t%s\\n' 2>/dev/null || true`
@@ -480,14 +685,37 @@ async function sessionContains(context: QoderTargetContext, filePath: string, qu
   return found;
 }
 
-function assertSessionPath(context: QoderTargetContext, filePath: string) {
-  const root = context.kind === "wsl" ? path.posix.join(context.configDir, "projects") : path.join(context.configDir, "projects");
+function assertSessionPath(context: QoderTargetContext, filePath: string, view: SessionView) {
+  const root = getQoderProjectsRoot(context, view);
+  if (context.kind === "wsl" ? isInsidePosixDir(filePath, root) : isInsideLocal(filePath, root)) return;
+  throw new Error("拒绝操作 Qoder 会话目录之外的文件。");
+}
+
+function getSessionViewForPath(context: QoderTargetContext, filePath: string): SessionView {
   if (context.kind === "wsl") {
-    if (isInsidePosixDir(filePath, root)) return;
-  } else if (isInsideLocal(filePath, root)) {
-    return;
+    if (isInsidePosixDir(filePath, getQoderProjectsRoot(context, "active"))) return "active";
+    if (isInsidePosixDir(filePath, getQoderProjectsRoot(context, "trash"))) return "trash";
+  } else {
+    if (isInsideLocal(filePath, getQoderProjectsRoot(context, "active"))) return "active";
+    if (isInsideLocal(filePath, getQoderProjectsRoot(context, "trash"))) return "trash";
   }
   throw new Error("拒绝操作 Qoder 会话目录之外的文件。");
+}
+
+function getQoderStorageRoot(context: Pick<QoderTargetContext, "kind" | "configDir">, view: SessionView) {
+  if (view === "active") return context.configDir;
+  return context.kind === "wsl"
+    ? path.posix.join(context.configDir, QODER_TRASH_DIR_NAME)
+    : path.join(context.configDir, QODER_TRASH_DIR_NAME);
+}
+
+function getQoderProjectsRoot(context: Pick<QoderTargetContext, "kind" | "configDir">, view: SessionView) {
+  const base = getQoderStorageRoot(context, view);
+  return context.kind === "wsl" ? path.posix.join(base, "projects") : path.join(base, "projects");
+}
+
+function isSinglePathSegment(value: string, pathApi: typeof path | typeof path.posix) {
+  return Boolean(value) && value !== "." && value !== ".." && pathApi.basename(value) === value;
 }
 
 async function verifySessionId(context: QoderTargetContext, filePath: string, sessionId: string) {

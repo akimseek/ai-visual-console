@@ -1,15 +1,13 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type {
-  ClipboardEvent as ReactClipboardEvent,
-  KeyboardEvent as ReactKeyboardEvent,
   MouseEvent as ReactMouseEvent
 } from "react";
-import { FitAddon } from "@xterm/addon-fit";
-import { SearchAddon } from "@xterm/addon-search";
-import { Terminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
 import { TerminalSearchBar } from "./TerminalSearchBar";
 import { useTerminalSearch } from "./useTerminalSearch";
+import { useXtermHost, type XtermKeyHandler } from "./useXtermHost";
+import { ComposerInput, type ComposerAttachment, type ComposerSubmitPayload } from "./ComposerInput";
+import type { ApiVendor } from "./types";
 
 type EmbeddedTerminalProps = {
   targetId: string;
@@ -26,6 +24,7 @@ type EmbeddedTerminalProps = {
   onReady?: (terminalId?: string) => void;
   onExit?: (exitCode: number) => void;
   onInputModeChange?: (state: { mode: "composer" | "terminal"; composerVisible: boolean }) => void;
+  vendors?: ApiVendor[];
 };
 
 type PastedContentBlock = {
@@ -53,13 +52,11 @@ export function EmbeddedTerminal({
   requestedInputMode,
   onReady,
   onExit,
-  onInputModeChange
+  onInputModeChange,
+  vendors = []
 }: EmbeddedTerminalProps) {
   const initialInputMode = sessionId ? "terminal" : "composer";
-  const hostRef = useRef<HTMLDivElement | null>(null);
   const composerRef = useRef<HTMLTextAreaElement | null>(null);
-  const terminalRef = useRef<Terminal | null>(null);
-  const fitAddonRef = useRef<FitAddon | null>(null);
   const terminalIdRef = useRef("");
   const inputModeRef = useRef<"composer" | "terminal">(initialInputMode);
   const composerVisibleRef = useRef(!sessionId);
@@ -76,38 +73,67 @@ export function EmbeddedTerminal({
   const [composerText, setComposerText] = useState("");
   const [composerHeight, setComposerHeight] = useState(COMPOSER_DEFAULT_HEIGHT);
   const [lastSubmittedText, setLastSubmittedText] = useState("");
-  const [contextMenu, setContextMenu] = useState<{ x: number; y: number; canCopy: boolean } | null>(null);
   const [pasteDialog, setPasteDialog] = useState<{ text: string } | null>(null);
+
+  const showPasteDialog = useCallback((text: string) => {
+    if (!text) return;
+    setPasteDialog({ text });
+  }, []);
+
+  const xterm = useXtermHost({
+    customKeyHandler: useCallback<XtermKeyHandler>((event) => {
+      if (event.type === "keydown" && inputModeRef.current === "terminal") {
+        if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "c") {
+          if (xterm.terminalRef.current?.hasSelection()) {
+            void xterm.copyCurrentSelection();
+            return false;
+          }
+          sendRawInterrupt();
+          return false;
+        }
+        if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "v") {
+          void xterm.pasteClipboardText();
+          return false;
+        }
+        if (event.key === "Backspace") {
+          if (terminalIdRef.current) void window.codexConsole.writeTerminal(terminalIdRef.current, "\x7f");
+          return false;
+        }
+      }
+      if (inputModeRef.current === "composer" && event.type === "keydown") {
+        return false;
+      }
+      return undefined;
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []),
+    onPaste: useCallback((text: string) => {
+      showPasteDialog(text);
+    }, [showPasteDialog]),
+    terminalIdRef
+  });
+
   const search = useTerminalSearch({
     restoreFocus: () => {
       if (inputModeRef.current === "composer" && composerVisibleRef.current) composerRef.current?.focus();
-      else terminalRef.current?.focus();
+      else xterm.terminalRef.current?.focus();
     }
   });
 
-  function copyCurrentSelection() {
-    const selection = terminalRef.current?.getSelection();
-    if (!selection) return false;
-    void window.codexConsole.copyText(selection);
-    setContextMenu(null);
-    return true;
+  function sendRawInterrupt() {
+    const terminalId = terminalIdRef.current;
+    if (!terminalId) return;
+    void window.codexConsole.writeTerminal(terminalId, "\x03");
   }
 
-  async function pasteClipboardText() {
-    const text = await window.codexConsole.readText();
-    return showPasteDialog(text);
-  }
-
-  function showPasteDialog(text: string) {
-    if (!terminalIdRef.current) return false;
-    if (!text) return false;
-    setContextMenu(null);
-    setPasteDialog({ text });
-    return true;
+  function showPasteDialogFromClipboard() {
+    void window.codexConsole.readText().then((text) => {
+      if (!terminalIdRef.current || !text) return;
+      showPasteDialog(text);
+    });
   }
 
   function confirmPasteText() {
-    const terminal = terminalRef.current;
+    const terminal = xterm.terminalRef.current;
     if (!terminalIdRef.current || !pasteDialog) return;
     const text = pasteDialog.text.replace(/\r\n/g, "\n").replace(/\r/g, "\n").replace(/\n+$/, "");
     setPasteDialog(null);
@@ -122,13 +148,14 @@ export function EmbeddedTerminal({
     terminal.paste(text);
   }
 
-  async function submitComposerText() {
+  async function submitComposerText(payload: ComposerSubmitPayload) {
     const terminalId = terminalIdRef.current;
-    const displayText = normalizeComposerText(composerText);
-    const expandedText = expandPastedContent(displayText);
+    const displayText = normalizeComposerText(payload.text);
+    const attachmentText = formatAttachments(payload.attachments);
+    const fullText = attachmentText ? `${attachmentText}\n${displayText}` : displayText;
+    const expandedText = expandPastedContent(fullText);
     if (!terminalId || !expandedText.trim()) return;
     await writeBracketedPaste(terminalId, expandedText);
-    // Qoder 会在括号粘贴后的 40ms 内将 Enter 视为换行，避免误提交粘贴内容。
     if (targetId.startsWith("qoder:")) await wait(QODER_PASTE_SUBMIT_DELAY_MS);
     if (terminalIdRef.current !== terminalId) return;
     await window.codexConsole.writeTerminal(terminalId, "\r");
@@ -138,19 +165,31 @@ export function EmbeddedTerminal({
     setLastSubmittedText(displayText);
   }
 
-  async function writeBracketedPaste(terminalId: string, text: string) {
+  function formatAttachments(attachments: ComposerAttachment[]): string {
+    if (attachments.length === 0) return "";
+    const lines: string[] = [];
+    for (const attachment of attachments) {
+      // PTY 只能传输文本；使用完整路径让 CLI 在本地读取真实文件/目录，而不是伪造仅含文件名的附件。
+      const path = /\s/.test(attachment.path) ? `"${attachment.path.replace(/"/g, "\\\"")}"` : attachment.path;
+      lines.push(`@${path}`);
+    }
+    return lines.join("\n");
+  }
+
+  function selectComposerModel(modelId: string) {
+    const terminalId = terminalIdRef.current;
+    if (!terminalId || !modelId) return;
+    // 各 CLI 的交互终端均使用 /model 命令；选择后立即作用于当前会话。
+    void window.codexConsole.writeTerminal(terminalId, `/model ${modelId}\r`);
+  }
+
+  async function writeBracketedPaste(id: string, text: string) {
     const safeText = text.replace(/\x1b/g, "");
-    await window.codexConsole.writeTerminal(terminalId, `\x1b[200~${safeText}\x1b[201~`);
+    await window.codexConsole.writeTerminal(id, `\x1b[200~${safeText}\x1b[201~`);
   }
 
   function wait(delayMs: number) {
     return new Promise<void>((resolve) => window.setTimeout(resolve, delayMs));
-  }
-
-  function sendRawInterrupt() {
-    const terminalId = terminalIdRef.current;
-    if (!terminalId) return;
-    void window.codexConsole.writeTerminal(terminalId, "\x03");
   }
 
   function sendComposerInterrupt() {
@@ -176,7 +215,7 @@ export function EmbeddedTerminal({
     setInputMode(nextMode);
     window.setTimeout(() => {
       if (nextMode === "composer") composerRef.current?.focus();
-      else terminalRef.current?.focus();
+      else xterm.terminalRef.current?.focus();
     }, 0);
   }
 
@@ -189,25 +228,6 @@ export function EmbeddedTerminal({
     window.setTimeout(() => {
       if (active) composerRef.current?.focus();
     }, 0);
-  }
-
-  function insertComposerNewline(element: HTMLTextAreaElement) {
-    const start = element.selectionStart;
-    const end = element.selectionEnd;
-    setComposerText((current) => `${current.slice(0, start)}\n${current.slice(end)}`);
-    window.setTimeout(() => {
-      element.selectionStart = start + 1;
-      element.selectionEnd = start + 1;
-      element.scrollTop = element.scrollHeight;
-      element.focus();
-    }, 0);
-  }
-
-  function onComposerPaste(event: ReactClipboardEvent<HTMLTextAreaElement>) {
-    const text = event.clipboardData.getData("text/plain");
-    if (!shouldCompactPaste(text)) return;
-    event.preventDefault();
-    insertComposerText(text, { compact: true, target: event.currentTarget });
   }
 
   function insertComposerText(
@@ -269,26 +289,6 @@ export function EmbeddedTerminal({
     return text.length >= COMPACT_PASTE_MIN_CHARS || text.split(/\r\n|\r|\n/).length >= COMPACT_PASTE_MIN_LINES;
   }
 
-  function onComposerKeyDown(event: ReactKeyboardEvent<HTMLTextAreaElement>) {
-    if (event.nativeEvent.isComposing) return;
-    if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "c") {
-      const target = event.currentTarget;
-      if (target.selectionStart === target.selectionEnd) {
-        event.preventDefault();
-        sendComposerInterrupt();
-      }
-      return;
-    }
-    if (event.key !== "Enter") return;
-    if (event.altKey) {
-      event.preventDefault();
-      insertComposerNewline(event.currentTarget);
-      return;
-    }
-    event.preventDefault();
-    void submitComposerText();
-  }
-
   function resetComposerSubmitted() {
     composerSubmittedRef.current = false;
   }
@@ -312,6 +312,8 @@ export function EmbeddedTerminal({
   useEffect(() => {
     if (!requestedInputMode || requestedInputMode === inputModeRef.current) return;
     switchInputMode(requestedInputMode);
+    // switchInputMode 仅依赖当前终端 refs，身份 effect 外保持稳定即可。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [requestedInputMode]);
 
   useEffect(() => {
@@ -319,8 +321,10 @@ export function EmbeddedTerminal({
     if (!active) return;
     window.setTimeout(() => {
       if (inputMode === "composer" && composerVisible) composerRef.current?.focus();
-      else terminalRef.current?.focus();
+      else xterm.terminalRef.current?.focus();
     }, 0);
+    // xterm refs 是稳定容器，不作为状态依赖。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [active, inputMode, composerVisible, focusRequest]);
 
   useEffect(() => {
@@ -348,26 +352,7 @@ export function EmbeddedTerminal({
   }, []);
 
   useEffect(() => {
-    if (!contextMenu) return;
-
-    const close = () => setContextMenu(null);
-    window.addEventListener("mousedown", close);
-    window.addEventListener("scroll", close, true);
-    window.addEventListener("keydown", onKeyDown);
-
-    function onKeyDown(event: KeyboardEvent) {
-      if (event.key === "Escape") close();
-    }
-
-    return () => {
-      window.removeEventListener("mousedown", close);
-      window.removeEventListener("scroll", close, true);
-      window.removeEventListener("keydown", onKeyDown);
-    };
-  }, [contextMenu]);
-
-  useEffect(() => {
-    const host = hostRef.current;
+    const host = xterm.hostRef.current;
     if (!host) return;
     let disposed = false;
     const nextComposerVisible = !sessionId;
@@ -377,162 +362,19 @@ export function EmbeddedTerminal({
     inputModeRef.current = nextInputMode;
     setInputMode(nextInputMode);
 
-    const terminal = new Terminal({
-      cursorBlink: true,
-      convertEol: true,
-      fontFamily: 'Consolas, "Cascadia Mono", "Courier New", monospace',
-      fontSize: 13,
-      lineHeight: 1.25,
-      scrollback: 10000,
-      theme: {
-        background: "#111827",
-        foreground: "#e5e7eb",
-        cursor: "#f9fafb"
-      }
-    });
-    const fitAddon = new FitAddon();
-    const searchAddon = new SearchAddon();
-    terminal.loadAddon(fitAddon);
-    terminal.loadAddon(searchAddon);
-    const detachSearchAddon = search.attachAddon(searchAddon, terminal);
-    terminalRef.current = terminal;
-    fitAddonRef.current = fitAddon;
-    terminal.open(host);
-    fitAddon.fit();
-    if (active) setTimeout(() => (nextComposerVisible ? composerRef.current?.focus() : terminal.focus()), 0);
+    const { writeTerminalOutput, flushOutput, scheduleFitTerminal, dispose: mountDispose } = xterm.mountTerminal(host);
 
-    function copySelection() {
-      const selection = terminal.getSelection();
-      if (!selection) return false;
-      void window.codexConsole.copyText(selection);
-      return true;
-    }
+    const detachSearchAddon = search.attachAddon(xterm.searchAddonRef.current!, xterm.terminalRef.current!);
+    if (active) setTimeout(() => (nextComposerVisible ? composerRef.current?.focus() : xterm.terminalRef.current?.focus()), 0);
 
-    terminal.attachCustomKeyEventHandler((event) => {
-      if (event.type === "keydown" && inputModeRef.current === "terminal") {
-        if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "c" && !terminal.hasSelection()) {
-          sendRawInterrupt();
-          return false;
-        }
-        if (event.key === "Backspace") {
-          if (terminalIdRef.current) void window.codexConsole.writeTerminal(terminalIdRef.current, "\x7f");
-          return false;
-        }
-      }
-      if (
-        event.type === "keydown" &&
-        (event.ctrlKey || event.metaKey) &&
-        event.key.toLowerCase() === "c" &&
-        terminal.hasSelection()
-      ) {
-        copySelection();
-        return false;
-      }
-      if (
-        event.type === "keydown" &&
-        (event.ctrlKey || event.metaKey) &&
-        event.key.toLowerCase() === "v"
-      ) {
-        void pasteClipboardText();
-        return false;
-      }
-      if (inputModeRef.current === "composer" && event.type === "keydown") {
-        return false;
-      }
-      return true;
-    });
-
-    function submitInput() {
-      if (terminalIdRef.current) void window.codexConsole.writeTerminal(terminalIdRef.current, "\r");
-    }
-
-    function onTerminalKeyDown(event: KeyboardEvent) {
-      if (inputModeRef.current === "terminal") {
-        if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "c" && !terminal.hasSelection()) {
-          event.preventDefault();
-          event.stopPropagation();
-          sendRawInterrupt();
-          return;
-        }
-        if (event.key === "Backspace") {
-          event.preventDefault();
-          event.stopPropagation();
-          if (terminalIdRef.current) void window.codexConsole.writeTerminal(terminalIdRef.current, "\x7f");
-          return;
-        }
-      }
-      const isEnter = event.key === "Enter" || event.code === "Enter" || event.code === "NumpadEnter";
-      if (!isEnter || event.altKey || event.ctrlKey || event.metaKey || event.isComposing) return;
-      event.preventDefault();
-      event.stopPropagation();
-      submitInput();
-    }
-
-    let outputBuffer = "";
-    let outputFrame = 0;
-    let resizeFrame = 0;
-
-    function flushOutput() {
-      outputFrame = 0;
-      if (!outputBuffer) return;
-      const data = outputBuffer;
-      outputBuffer = "";
-      terminal.write(data);
-    }
-
-    function writeTerminalOutput(data: string) {
-      outputBuffer += data;
-      if (!outputFrame) outputFrame = requestAnimationFrame(flushOutput);
-    }
-
-    function fitTerminal() {
-      fitAddon.fit();
-      if (terminalIdRef.current) {
-        void window.codexConsole.resizeTerminal(terminalIdRef.current, terminal.cols, terminal.rows);
-      }
-    }
-
-    function scheduleFitTerminal() {
-      if (resizeFrame) return;
-      resizeFrame = requestAnimationFrame(() => {
-        resizeFrame = 0;
-        fitTerminal();
-      });
-    }
-
-    const resizeObserver = new ResizeObserver(() => {
-      scheduleFitTerminal();
-    });
-    resizeObserver.observe(host);
-
-    const onContextMenu = (event: Event) => {
-      event.preventDefault();
-      const mouseEvent = event as MouseEvent;
-      setContextMenu({
-        x: mouseEvent.clientX,
-        y: mouseEvent.clientY,
-        canCopy: terminal.hasSelection()
-      });
-    };
-    const onPaste = (event: ClipboardEvent) => {
-      event.preventDefault();
-      const text = event.clipboardData?.getData("text/plain") ?? "";
-      showPasteDialog(text);
-    };
     const onMouseDown = () => {
       if (inputModeRef.current !== "composer") return;
       inputModeRef.current = "terminal";
       setInputMode("terminal");
-      window.setTimeout(() => terminal.focus(), 0);
+      window.setTimeout(() => xterm.terminalRef.current?.focus(), 0);
     };
-    host.addEventListener("contextmenu", onContextMenu);
-    host.addEventListener("paste", onPaste);
     host.addEventListener("mousedown", onMouseDown);
-    host.addEventListener("keydown", onTerminalKeyDown, true);
 
-    const dataDisposable = terminal.onData((data) => {
-      if (terminalIdRef.current) void window.codexConsole.writeTerminal(terminalIdRef.current, data);
-    });
     const removeDataListener = window.codexConsole.onTerminalData((terminalId, data) => {
       if (terminalId !== terminalIdRef.current) return;
       writeTerminalOutput(data);
@@ -551,8 +393,8 @@ export function EmbeddedTerminal({
         return;
       }
       setStatus(`Codex 已退出，退出码 ${exitCode}`);
-      terminal.writeln("");
-      terminal.writeln(`Codex 已退出，退出码 ${exitCode}`);
+      xterm.terminalRef.current?.writeln("");
+      xterm.terminalRef.current?.writeln(`Codex 已退出，退出码 ${exitCode}`);
       terminalIdRef.current = "";
     });
 
@@ -564,11 +406,11 @@ export function EmbeddedTerminal({
         codexHome,
         useCodexCwdFlag,
         cliArgs,
-        cols: terminal.cols,
-        rows: terminal.rows
+        cols: xterm.terminalRef.current!.cols,
+        rows: xterm.terminalRef.current!.rows
       })
       .then(({ terminalId }) => {
-        if (disposed) {
+        if (disposed || xterm.disposeRef.current.disposed) {
           void window.codexConsole.stopTerminal(terminalId);
           return;
         }
@@ -579,11 +421,11 @@ export function EmbeddedTerminal({
           void window.codexConsole.writeTerminal(terminalId, `${prompt.trim()}\r`);
         }
       })
-      .catch((error: any) => {
-        if (disposed) return;
-        const message = error?.message || "启动 Codex 失败。";
+      .catch((error: unknown) => {
+        if (disposed || xterm.disposeRef.current.disposed) return;
+        const message = error instanceof Error ? error.message : "启动 Codex 失败。";
         setStatus("启动 Codex 失败");
-        terminal.writeln(message);
+        xterm.terminalRef.current?.writeln(message);
         onReadyRef.current?.();
       });
 
@@ -594,42 +436,31 @@ export function EmbeddedTerminal({
       if (terminalId) void window.codexConsole.stopTerminal(terminalId);
       removeDataListener();
       removeExitListener();
-      dataDisposable.dispose();
-      resizeObserver.disconnect();
-      if (outputFrame) cancelAnimationFrame(outputFrame);
-      if (resizeFrame) cancelAnimationFrame(resizeFrame);
-      host.removeEventListener("contextmenu", onContextMenu);
-      host.removeEventListener("paste", onPaste);
-      host.removeEventListener("mousedown", onMouseDown);
-      host.removeEventListener("keydown", onTerminalKeyDown, true);
       detachSearchAddon();
-      searchAddon.dispose();
-      fitAddon.dispose();
-      terminal.dispose();
-      terminalRef.current = null;
-      fitAddonRef.current = null;
+      host.removeEventListener("mousedown", onMouseDown);
+      mountDispose();
     };
-    // 依赖为终端“身份”参数：纳入 active/composer 等会销毁并重建 PTY，属错误
+    // 依赖为终端"身份"参数：纳入 active/composer 等会销毁并重建 PTY，属错误
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [targetId, sessionId, cwd, codexHome, useCodexCwdFlag, prompt, cliArgs]);
+  }, [targetId, sessionId, cwd, codexHome, useCodexCwdFlag, prompt, cliArgs, xterm.mountTerminal, xterm.hostRef, xterm.terminalRef, xterm.searchAddonRef, xterm.disposeRef, search.attachAddon]);
 
   useEffect(() => {
     if (!active) return;
     setTimeout(() => {
-      const host = hostRef.current;
-      const terminal = terminalRef.current;
-      const fitAddon = fitAddonRef.current;
-      if (!host || !terminal || !fitAddon) return;
-      fitAddon.fit();
-      if (terminalIdRef.current) void window.codexConsole.resizeTerminal(terminalIdRef.current, terminal.cols, terminal.rows);
+      xterm.fitAddonRef.current?.fit();
+      if (xterm.terminalIdRef.current) {
+        void window.codexConsole.resizeTerminal(xterm.terminalIdRef.current, xterm.terminalRef.current!.cols, xterm.terminalRef.current!.rows);
+      }
       if (inputMode === "composer" && composerVisible) composerRef.current?.focus();
-      else terminal.focus();
+      else xterm.terminalRef.current?.focus();
     }, 0);
+    // xterm refs 是稳定容器，不作为状态依赖。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [active, inputMode, composerVisible]);
 
   return (
     <section className={`terminal-panel ${active ? "active" : ""}`} onKeyDownCapture={search.onPanelKeyDownCapture}>
-      <div className="terminal-host" ref={hostRef} />
+      <div className="terminal-host" ref={xterm.hostRef} />
       {search.open && (
         <TerminalSearchBar
           inputRef={search.inputRef}
@@ -646,53 +477,40 @@ export function EmbeddedTerminal({
         />
       )}
       {composerVisible && (
-        <div className={`terminal-composer ${inputMode === "composer" ? "active" : ""}`}>
-          <div
-            className="terminal-composer-resize"
-            role="separator"
-            aria-orientation="horizontal"
-            title="拖动调整输入框高度"
-            onMouseDown={startComposerResize}
-          />
-          <textarea
-            ref={composerRef}
-            value={composerText}
-            style={{ height: `${composerHeight}px` }}
-            spellCheck={false}
-            placeholder="输入对话内容，Enter 发送，Alt + Enter 换行"
-            onFocus={() => {
-              if (inputModeRef.current !== "composer") switchInputMode("composer");
-            }}
-            onMouseDown={() => {
-              if (inputModeRef.current !== "composer") switchInputMode("composer");
-            }}
-            onChange={(event) => {
-              setComposerText(event.target.value);
-              resetComposerSubmitted();
-            }}
-            onKeyDown={onComposerKeyDown}
-            onPaste={onComposerPaste}
-          />
-          <button
-            type="button"
-            onClick={() => void submitComposerText()}
-            disabled={!terminalIdRef.current || !composerText.trim()}
-          >
-            发送
-          </button>
-        </div>
+        <ComposerInput
+          composerRef={composerRef}
+          text={composerText}
+          onTextChange={(text) => {
+            setComposerText(text);
+            resetComposerSubmitted();
+          }}
+          onSubmit={(payload) => void submitComposerText(payload)}
+          onInterrupt={sendComposerInterrupt}
+          canSubmit={Boolean(terminalIdRef.current && composerText.trim())}
+          height={composerHeight}
+          onResizeStart={startComposerResize}
+          onFocus={() => {
+            if (inputModeRef.current !== "composer") switchInputMode("composer");
+          }}
+          onMouseDown={() => {
+            if (inputModeRef.current !== "composer") switchInputMode("composer");
+          }}
+          onModelSelect={selectComposerModel}
+          vendors={vendors}
+        />
       )}
-      {contextMenu && (
+      {xterm.contextMenu && (
         <div
           className="terminal-context-menu"
-          style={{ left: `${contextMenu.x}px`, top: `${contextMenu.y}px` }}
+          style={{ left: `${xterm.contextMenu.x}px`, top: `${xterm.contextMenu.y}px` }}
           role="menu"
           onMouseDown={(event) => event.stopPropagation()}
+          onPointerDown={(event) => event.stopPropagation()}
         >
-          <button type="button" role="menuitem" disabled={!contextMenu.canCopy} onClick={() => copyCurrentSelection()}>
+          <button type="button" role="menuitem" disabled={!xterm.contextMenu.canCopy} onClick={xterm.copyCurrentSelection}>
             复制
           </button>
-          <button type="button" role="menuitem" disabled={!terminalIdRef.current} onClick={() => void pasteClipboardText()}>
+          <button type="button" role="menuitem" disabled={!terminalIdRef.current} onClick={showPasteDialogFromClipboard}>
             粘贴
           </button>
         </div>

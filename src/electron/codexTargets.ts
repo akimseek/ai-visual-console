@@ -1039,7 +1039,9 @@ async function probeWslDistro(
       codexFound,
       detail: `${hasSessions ? "找到 Codex 会话" : hasCodexHome ? "找到 Codex 目录" : "找到 Codex 命令"}${userInfo}`
     };
-  } catch (error: any) {
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.error(`[wsl-codex-detection] ${message}`, error);
     return {
       codexHome: "",
       codexFound: false,
@@ -1316,12 +1318,16 @@ async function pathExists(filePath: string) {
   }
 }
 
-function formatProcessError(error: any) {
-  const detail = [error?.stderr, error?.stdout, error?.message]
-    .filter(Boolean)
-    .map((value) => String(value).trim())
-    .find(Boolean);
-  return clampText(detail || "未知错误", 160);
+function formatProcessError(error: unknown) {
+  if (error && typeof error === "object") {
+    const obj = error as Record<string, unknown>;
+    const detail = [obj.stderr, obj.stdout, obj.message]
+      .filter(Boolean)
+      .map((value) => String(value).trim())
+      .find(Boolean);
+    if (detail) return clampText(detail, 160);
+  }
+  return clampText(error instanceof Error ? error.message : String(error) || "未知错误", 160);
 }
 
 function clampText(value: string, maxLength: number) {
