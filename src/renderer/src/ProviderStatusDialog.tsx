@@ -194,6 +194,12 @@ function buildProviderPathRows(providerId?: AiProviderId, target?: AiTarget): Pr
       { label: "Telemetry", value: joinDisplayPath(home, "telemetry"), path: joinDisplayPath(home, "telemetry"), openable }
     ];
   }
+  if (providerId === "qoder") {
+    return [
+      { label: "配置目录", value: home, path: home, openable },
+      { label: "历史目录", value: joinDisplayPath(home, "projects"), path: joinDisplayPath(home, "projects"), openable }
+    ];
+  }
   return [
     { label: "配置目录", value: home, path: home, openable },
     { label: "历史目录", value: joinDisplayPath(home, "sessions"), path: joinDisplayPath(home, "sessions"), openable },
@@ -214,6 +220,12 @@ function buildProviderCommandRows(providerId?: AiProviderId): ProviderStatusRow[
       { label: "继续会话", value: "claude --resume <sessionId>" }
     ];
   }
+  if (providerId === "qoder") {
+    return [
+      { label: "新会话", value: "qodercn" },
+      { label: "继续会话", value: "qodercn --resume <sessionId>" }
+    ];
+  }
   return [
     { label: "新会话", value: "codex" },
     { label: "指定目录", value: "codex -C <path>" },
@@ -230,7 +242,9 @@ function buildProviderCapabilityRows(capabilities?: AiProviderSummary["capabilit
     { label: "批量", enabled: Boolean(capabilities?.batchActions) },
     { label: "工作目录", enabled: Boolean(capabilities?.customCwd) },
     { label: "导出", enabled: Boolean(capabilities?.export) },
-    { label: "会话设置", enabled: Boolean(capabilities?.sessionSettings) }
+    { label: "会话设置", enabled: Boolean(capabilities?.sessionSettings) },
+    { label: "复制", enabled: Boolean(capabilities?.duplicate) },
+    { label: "供应商管理", enabled: Boolean(capabilities?.vendorManagement) }
   ];
 }
 
@@ -244,6 +258,7 @@ function providerStatusLabel(status: ProviderStatusLevel) {
 function providerDefaultHome(providerId?: AiProviderId) {
   if (providerId === "gemini") return "~/.gemini";
   if (providerId === "claude") return "~/.claude";
+  if (providerId === "qoder") return "~/.qoder-cn";
   return "~/.codex";
 }
 

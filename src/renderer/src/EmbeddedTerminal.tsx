@@ -38,6 +38,7 @@ const COMPACT_PASTE_MIN_LINES = 20;
 const COMPOSER_MIN_HEIGHT = 54;
 const COMPOSER_MAX_HEIGHT = 240;
 const COMPOSER_DEFAULT_HEIGHT = 64;
+const QODER_PASTE_SUBMIT_DELAY_MS = 60;
 
 export function EmbeddedTerminal({
   targetId,
@@ -121,24 +122,29 @@ export function EmbeddedTerminal({
     terminal.paste(text);
   }
 
-  function submitComposerText() {
+  async function submitComposerText() {
     const terminalId = terminalIdRef.current;
     const displayText = normalizeComposerText(composerText);
     const expandedText = expandPastedContent(displayText);
     if (!terminalId || !expandedText.trim()) return;
-    writeBracketedPaste(terminalId, expandedText);
+    await writeBracketedPaste(terminalId, expandedText);
+    // Qoder 会在括号粘贴后的 40ms 内将 Enter 视为换行，避免误提交粘贴内容。
+    if (targetId.startsWith("qoder:")) await wait(QODER_PASTE_SUBMIT_DELAY_MS);
+    if (terminalIdRef.current !== terminalId) return;
+    await window.codexConsole.writeTerminal(terminalId, "\r");
     setComposerText("");
     lastSubmittedTextRef.current = displayText;
     composerSubmittedRef.current = true;
     setLastSubmittedText(displayText);
-    window.setTimeout(() => {
-      if (terminalIdRef.current === terminalId) void window.codexConsole.writeTerminal(terminalId, "\r");
-    }, 0);
   }
 
-  function writeBracketedPaste(terminalId: string, text: string) {
+  async function writeBracketedPaste(terminalId: string, text: string) {
     const safeText = text.replace(/\x1b/g, "");
-    void window.codexConsole.writeTerminal(terminalId, `\x1b[200~${safeText}\x1b[201~`);
+    await window.codexConsole.writeTerminal(terminalId, `\x1b[200~${safeText}\x1b[201~`);
+  }
+
+  function wait(delayMs: number) {
+    return new Promise<void>((resolve) => window.setTimeout(resolve, delayMs));
   }
 
   function sendRawInterrupt() {
@@ -280,7 +286,7 @@ export function EmbeddedTerminal({
       return;
     }
     event.preventDefault();
-    submitComposerText();
+    void submitComposerText();
   }
 
   function resetComposerSubmitted() {
@@ -669,7 +675,7 @@ export function EmbeddedTerminal({
           />
           <button
             type="button"
-            onClick={submitComposerText}
+            onClick={() => void submitComposerText()}
             disabled={!terminalIdRef.current || !composerText.trim()}
           >
             发送

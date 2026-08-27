@@ -6,6 +6,8 @@ export type TerminalTab = {
   session?: AiSession;
   title: string;
   cwd?: string;
+  // 标签创建后目标列表可能因切换平台而替换，保留终端启动所需的配置快照。
+  codexHome?: string;
   useCodexCwdFlag?: boolean;
   prompt?: string;
   cliArgs?: string;

@@ -652,6 +652,7 @@ async function writeBranchSession(
         payload: {
           ...(item.payload || {}),
           id: branchId,
+          session_id: branchId,
           timestamp: metaTimestamp,
           cwd: session.cwd,
           model: session.model,
@@ -663,7 +664,10 @@ async function writeBranchSession(
 
     const message = extractMessage(item);
     const messageKey = message && shouldKeepMessage(message) ? `${message.role}\u0000${message.text}` : "";
-    if (cutoffKey && messageKey !== cutoffKey) {
+    // 到达截断消息后，仍需保留该轮消息之后的 turn_context、事件和完成标记。
+    // Codex resume 依赖这些控制记录；不能在遇到第一条非 message JSONL 时提前结束。
+    // 只有下一条可见消息开始时才真正截断，避免把后续对话复制进分支。
+    if (cutoffKey && messageKey && messageKey !== cutoffKey) {
       complete = true;
       return false;
     }
@@ -801,7 +805,7 @@ function buildDuplicateSessionText(sourceText: string, duplicateId: string) {
     lines.push(JSON.stringify({
       ...item,
       timestamp: now,
-      payload: { ...(item.payload || {}), id: duplicateId, timestamp: now }
+      payload: { ...(item.payload || {}), id: duplicateId, session_id: duplicateId, timestamp: now }
     }));
     rewrittenMeta = true;
   }

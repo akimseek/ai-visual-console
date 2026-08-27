@@ -1,6 +1,6 @@
 # AI 可视化控制台
 
-AI 可视化控制台是一款跨平台 Electron 桌面应用，用于集中管理和操作 Codex、Gemini、Claude Code 等 CLI 会话。
+AI 可视化控制台是一款跨平台 Electron 桌面应用，用于集中管理和操作 Codex、Gemini、Claude Code、Qoder CN 等 CLI 会话。
 
 它把会话列表、历史恢复、分支、搜索、终端和供应商配置整合在一个工作台中，同时支持本机与 WSL 环境。
 
@@ -44,17 +44,17 @@ AI 可视化控制台是一款跨平台 Electron 桌面应用，用于集中管�
 
 ## 功能特性
 
-- 支持 Codex、Gemini 和 Claude Code 会话
+- 支持 Codex、Gemini、Claude Code 和 Qoder CN 会话
 - 支持本机与 WSL 目标自动探测和切换
 - 历史会话列表使用轻量摘要加载，详情按需读取
-- 支持继续会话、创建分支、复制会话、删除和恢复
+- 支持继续会话；Codex、Gemini 和 Claude Code 支持创建分支、复制会话、删除和恢复
 - 详情页支持分页加载、全文搜索、Token/上下文信息和会话导出
 - 支持多个 API 供应商的新增、编辑、启用和删除
 - 通过本地 Gateway 在同一终端会话中切换供应商
 - 支持 Codex Skill 的导入、启用、禁用、删除和恢复
 - 内置 AI 会话终端和系统终端
 - 支持终端内容搜索：`Ctrl + F`
-- Claude/Gemini 使用流式 JSONL 读取，降低大文件加载开销
+- Claude Code、Gemini 和 Qoder CN 使用流式 JSONL 读取，降低大文件加载开销
 - SQLite 保存摘要、元数据和可重建索引，不缓存完整会话正文
 
 ## 支持环境
@@ -120,6 +120,8 @@ pnpm dist:linux
 
 历史会话进入工作区时只加载列表摘要；完整 JSONL 会在打开详情或恢复会话时按需读取。
 
+Qoder CN 使用其官方 `qodercn` CLI 和 `~/.qoder-cn` 会话目录。Qoder 的模型、认证和 BYOK 配置由 CLI 内的 `/model` 管理，不经过本地 Gateway；分支、复制和回收站操作也保留在 Qoder CLI 内执行。
+
 ### 供应商切换
 
 在“供应商管理”中保存多个同协议供应商，启用其中一个后：
@@ -139,7 +141,7 @@ pnpm dist:linux
 - SQLite 数据库保存供应商信息、会话摘要、元数据和索引，不保存完整会话正文缓存。
 - API Key 在系统支持时使用 Electron `safeStorage` 加密后保存。
 - 原始会话仍由各 CLI 保存在自己的 JSONL 文件中。
-- CLI 配置仍写入对应运行环境的 `~/.codex`、`~/.gemini` 和 `~/.claude`。
+- CLI 配置仍写入对应运行环境的 `~/.codex`、`~/.gemini`、`~/.claude` 和 `~/.qoder-cn`。
 - 本地 Gateway 只监听 `127.0.0.1`，用于在终端进程与供应商接口之间转发请求。
 
 ## 项目结构
@@ -160,6 +162,7 @@ Provider 相关实现位于 `src/electron/`，可以从以下文件开始了解�
 - [`src/electron/aiProviders.ts`](src/electron/aiProviders.ts)：Provider 注册与统一入口
 - [`src/electron/claudeProvider.ts`](src/electron/claudeProvider.ts)：Claude Code 会话实现
 - [`src/electron/geminiProvider.ts`](src/electron/geminiProvider.ts)：Gemini 会话实现
+- [`src/electron/qoderProvider.ts`](src/electron/qoderProvider.ts)：Qoder CN 会话实现
 - [`src/electron/codexTargets.ts`](src/electron/codexTargets.ts)：Codex 本机与 WSL 目标实现
 
 共享类型、解析器和路径工具位于 `src/shared/`。新增 Provider 时，请同时补充对应的类型、目标探测、会话读取和测试。

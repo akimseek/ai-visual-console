@@ -36,7 +36,7 @@ describe("branchSession", () => {
     const meta = JSON.stringify({
       timestamp: "2026-06-15T14:33:16.000Z",
       type: "session_meta",
-      payload: { id: SESSION_ID, timestamp: "2026-06-15T14:33:16.000Z", cwd: "/workspace", model: "gpt-5" }
+      payload: { id: SESSION_ID, session_id: SESSION_ID, timestamp: "2026-06-15T14:33:16.000Z", cwd: "/workspace", model: "gpt-5" }
     });
     const user = JSON.stringify({
       timestamp: "2026-06-15T14:33:17.000Z",
@@ -48,6 +48,11 @@ describe("branchSession", () => {
       type: "response_item",
       payload: { type: "message", role: "assistant", content: [{ type: "output_text", text: "回答" }] }
     });
+    const turnContext = JSON.stringify({
+      timestamp: "2026-06-15T14:33:18.100Z",
+      type: "turn_context",
+      payload: { model: "gpt-5", model_provider: "openai", effort: "high" }
+    });
     const followUp = JSON.stringify({
       timestamp: "2026-06-15T14:33:19.000Z",
       type: "response_item",
@@ -57,7 +62,7 @@ describe("branchSession", () => {
     const padding = `${JSON.stringify({ type: "event_msg", payload: { type: "token_count", info: {}, pad: "x".repeat(700 * 1024) } })}\n`;
 
     await fs.mkdir(sessionsDir, { recursive: true });
-    await fs.writeFile(source, `${meta}\n${user}\n${assistant}\n`, "utf8");
+    await fs.writeFile(source, `${meta}\n${user}\n${assistant}\n${turnContext}\n`, "utf8");
     await fs.appendFile(source, padding);
     await fs.appendFile(source, `${followUp}\n`, "utf8");
     for (let index = 0; index < 48; index += 1) await fs.appendFile(source, trailing, "utf8");
@@ -71,6 +76,8 @@ describe("branchSession", () => {
     expect(branch.id).not.toBe(SESSION_ID);
     expect(parsed?.id).toBe(branch.id);
     expect(parsed?.preview.map((message) => message.text)).toEqual(["问题", "回答", "追问"]);
+    expect(branchText).toContain('"type":"turn_context"');
+    expect(branchText).toContain(`"session_id":"${branch.id}"`);
     expect((await fs.stat(branch.filePath)).size).toBeLessThan(32 * 1024 * 1024);
   });
 });

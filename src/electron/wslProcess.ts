@@ -9,11 +9,16 @@ export const WSL_COMMAND_TIMEOUT_MS = 60_000;
 
 // 给 spawn 出的子进程挂看门狗：超时则 SIGKILL 并 reject；返回的清理函数在正常结束时取消计时器。
 // execFile 自带 timeout 选项，无需此辅助；spawn 不带，故统一在此处理。
-export function attachSpawnTimeout(child: ChildProcess, reject: (error: Error) => void, label: string) {
+export function attachSpawnTimeout(
+  child: ChildProcess,
+  reject: (error: Error) => void,
+  label: string,
+  timeoutMs: number = WSL_COMMAND_TIMEOUT_MS
+) {
   const timer = setTimeout(() => {
     child.kill("SIGKILL");
-    reject(new Error(`WSL 操作超时（${WSL_COMMAND_TIMEOUT_MS} ms）：${label}`));
-  }, WSL_COMMAND_TIMEOUT_MS);
+    reject(new Error(`WSL 操作超时（${timeoutMs} ms）：${label}`));
+  }, timeoutMs);
   return () => clearTimeout(timer);
 }
 
@@ -95,7 +100,7 @@ export async function readWslLines(
   }
 }
 
-async function getWslExe() {
+export async function getWslExe() {
   const candidates = process.platform === "win32"
     ? [
         process.env.SystemRoot ? path.join(process.env.SystemRoot, "System32", "wsl.exe") : "",
@@ -118,4 +123,60 @@ async function getWslExe() {
     return candidate;
   }
   return null;
+}
+
+// 单引号 shell 引用：bash/POSIX 通用转义。
+export function shellQuote(value: string) {
+  return `'${value.replace(/'/g, "'\\''")}'`;
+}
+
+// 在指定 WSL 发行版内执行 bash 脚本（base64 透传避免参数转义），返回 stdout。
+// 统一了此前散落在 vendorManager 中的私有实现，供网关地址探测等场景复用。
+export async function runWslShell(distro: string, script: string, timeoutMs: number = WSL_COMMAND_TIMEOUT_MS) {
+  const wslExe = await getWslExe();
+  if (!wslExe) throw new Error("未找到 wsl.exe。");
+  const encodedScript = Buffer.from(script, "utf8").toString("base64");
+  const shellScript = `printf %s ${shellQuote(encodedScript)} | base64 -d | bash`;
+  return new Promise<string>((resolve, reject) => {
+    const child = spawn(wslExe, ["-d", distro, "--", "bash", "-lc", shellScript], {
+      windowsHide: true,
+      stdio: ["pipe", "pipe", "pipe"]
+    });
+    let stdout = "";
+    let stderr = "";
+    const clearTimer = attachSpawnTimeout(child, reject, `WSL 执行（${distro}）`, timeoutMs);
+    child.stdout.setEncoding("utf8");
+    child.stderr.setEncoding("utf8");
+    child.stdout.on("data", (chunk) => { stdout += chunk; });
+    child.stderr.on("data", (chunk) => { stderr += chunk; });
+    child.on("error", (error) => { clearTimer(); reject(error); });
+    child.on("close", (code) => {
+      clearTimer();
+      if (code === 0) resolve(stdout);
+      else reject(new Error(stderr.trim() || `WSL 执行失败，退出码 ${code}`));
+    });
+    child.stdin.end();
+  });
+}
+
+// 在 WSL 内探测可达宿主网关的网络地址。
+// 顺序：mirrored/localhost 转发直连 127.0.0.1 → 默认路由网关 → resolv.conf nameserver → 退回 127.0.0.1。
+// 用于 WSL2 NAT 模式下让 CLI 进程访问宿主上的本地 Gateway。
+const WSL_GATEWAY_DETECT_TIMEOUT_MS = 5_000;
+
+export async function detectWslGatewayHost(distro: string, port: number): Promise<string> {
+  const script = [
+    "set -e",
+    `port=${port}`,
+    // 1. mirrored 模式或 localhost 转发：127.0.0.1 直连
+    "if (exec 3<>/dev/tcp/127.0.0.1/$port) 2>/dev/null; then exec 3>&- 3<&-; echo 127.0.0.1; exit 0; fi",
+    // 2. NAT 模式：默认路由网关通常即宿主
+    "host=$(ip route show default 2>/dev/null | awk '{print $3; exit}')",
+    'if [ -n "$host" ]; then echo "$host"; exit 0; fi',
+    // 3. 退路：resolv.conf nameserver
+    "awk '/^nameserver/{print $2; exit}' /etc/resolv.conf 2>/dev/null || echo 127.0.0.1"
+  ].join("\n");
+  const result = await runWslShell(distro, script, WSL_GATEWAY_DETECT_TIMEOUT_MS);
+  const host = result.trim().split("\n").pop()?.trim() || "127.0.0.1";
+  return host || "127.0.0.1";
 }

@@ -5,10 +5,11 @@ import type { CodexSessionFile } from "./types";
 // 这些函数承载安全边界（路径遍历防护、targetId 解析、distro 名净化、WSL 输出解码），
 // 从 terminalSessions.ts / codexTargets.ts 抽出，逻辑保持不变。
 
-// 从 targetId 中解析出 WSL 发行版名称，兼容 gemini:/claude: 前缀；非 WSL 目标返回空串。
+// 从 targetId 中解析出 WSL 发行版名称，兼容各平台前缀；非 WSL 目标返回空串。
 export function getWslDistroFromTargetId(targetId: string) {
   if (targetId.startsWith("gemini:wsl:")) return targetId.slice("gemini:wsl:".length);
   if (targetId.startsWith("claude:wsl:")) return targetId.slice("claude:wsl:".length);
+  if (targetId.startsWith("qoder:wsl:")) return targetId.slice("qoder:wsl:".length);
   if (targetId.startsWith("wsl:")) return targetId.slice("wsl:".length);
   return "";
 }

@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import type { BranchPanelState } from "./BranchPanel";
 import type { AiSession } from "./types";
 import type { SessionView } from "./useSessionLoader";
+import { captureError } from "./errorUtils";
 
 type UseSessionDetailsOptions = {
   targetId: string;
@@ -56,8 +57,8 @@ export function useSessionDetails({
         setSelectedSessionDetails(session);
         setDetailHasMore(page.offset > 0);
       })
-      .catch((error: any) => {
-        if (!cancelled) notifyError(error?.message || "加载完整会话失败。");
+      .catch((error) => {
+        if (!cancelled) notifyError(captureError(error, "loadSessionDetails", "加载完整会话失败。"));
       })
       .finally(() => {
         if (!cancelled) setSelectedSessionLoading(false);
@@ -94,8 +95,16 @@ export function useSessionDetails({
     const parentSessionId = session.metadata?.branch?.parentSessionId;
     const parentTargetId = session.metadata?.branch?.parentTargetId || targetId;
     void Promise.all([
-      parentSessionId ? window.codexConsole.getSessionSummary(parentTargetId, parentSessionId).catch(() => null) : Promise.resolve(null),
-      window.codexConsole.listSessionChildren(targetId, session.id).catch(() => [])
+      parentSessionId
+        ? window.codexConsole.getSessionSummary(parentTargetId, parentSessionId).catch((error) => {
+          captureError(error, `loadParentSession:${parentSessionId}`);
+          return null;
+        })
+        : Promise.resolve(null),
+      window.codexConsole.listSessionChildren(targetId, session.id).catch((error) => {
+        captureError(error, `loadSessionChildren:${session.id}`);
+        return [];
+      })
     ]).then(([parent, children]) => {
       if (!cancelled) setBranchPanel({ sessionId: session.id, parent, children, loading: false });
     });
@@ -113,7 +122,8 @@ export function useSessionDetails({
       setSelectedSessionDetails((current) => (current?.id === session.id ? session : current));
       setDetailDialogSession((current) => (current?.id === session.id ? session : current));
       return session;
-    } catch {
+    } catch (error) {
+      captureError(error, `refreshSessionSnapshot:${sessionId}`);
       return null;
     }
   }
@@ -137,6 +147,8 @@ export function useSessionDetails({
         ? { ...current, preview: [...page.messages, ...current.preview], previewOffset: page.offset }
         : current);
       setDetailHasMore(page.offset > 0);
+    } catch (error) {
+      notifyError(captureError(error, "loadMoreSessionDetails", "加载更多会话消息失败。"));
     } finally {
       setDetailLoadingMore(false);
     }

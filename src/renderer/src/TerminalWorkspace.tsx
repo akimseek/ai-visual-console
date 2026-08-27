@@ -1,5 +1,5 @@
 import { lazy, Suspense, type MouseEvent, type RefObject, type WheelEvent } from "react";
-import type { AiSession, AiTarget } from "./types";
+import type { AiSession } from "./types";
 import type { TerminalTab } from "./terminalTabState";
 import { TerminalTabs } from "./TerminalTabs";
 
@@ -32,7 +32,6 @@ export function TerminalWorkspace({
   onSelectTab,
   onTabContextMenu,
   onCloseTab,
-  targets,
   focusRequest,
   terminalInputStates,
   onTerminalReady,
@@ -61,7 +60,6 @@ export function TerminalWorkspace({
   onSelectTab: (tabKey: string, sessionId: string) => void;
   onTabContextMenu: (event: MouseEvent<HTMLElement>, tabKey: string) => void;
   onCloseTab: (tabKey: string) => void;
-  targets: AiTarget[];
   focusRequest: number;
   terminalInputStates: Record<string, TerminalInputState>;
   onTerminalReady: (tabKey: string, terminalId?: string) => void;
@@ -112,7 +110,7 @@ export function TerminalWorkspace({
                 targetId={tab.targetId}
                 sessionId={tab.session?.id}
                 cwd={tab.cwd || tab.session?.cwd}
-                codexHome={targets.find((target) => target.id === tab.targetId)?.codexHome}
+                codexHome={tab.codexHome}
                 useCodexCwdFlag={tab.useCodexCwdFlag}
                 prompt={tab.prompt}
                 cliArgs={tab.cliArgs}

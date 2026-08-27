@@ -29,14 +29,6 @@ export function useCliInstaller({
   const [cliEnvironmentLoading, setCliEnvironmentLoading] = useState(false);
 
   useEffect(() => {
-    return window.codexConsole.onOpenCliInstaller(() => {
-      openCliInstallerDialog();
-    });
-    // IPC 监听只注册一次；openCliInstallerDialog 通过闭包读取最新状态
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  useEffect(() => {
     if (!cliInstallerOpen) return;
     void refreshCliEnvironments();
     // 仅在弹框打开/目标变化时刷新环境；refreshCliEnvironments 每渲染重建

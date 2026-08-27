@@ -258,6 +258,7 @@ async function runPosixSnapshot(targetId: string) {
     'printf "CODEX_VERSION=%s\\n" "$(codex --version 2>/dev/null || true)"',
     'printf "GEMINI_VERSION=%s\\n" "$(gemini --version 2>/dev/null || true)"',
     'printf "CLAUDE_VERSION=%s\\n" "$(claude --version 2>/dev/null || true)"',
+    'printf "QODER_VERSION=%s\\n" "$(qodercn --version 2>/dev/null || true)"',
     'printf "NODE_PATH=%s\\n" "$NODE_BIN"',
     'printf "NPM_PATH=%s\\n" "$NPM_BIN"',
     "exit 0"
@@ -274,6 +275,7 @@ async function runWindowsSnapshot() {
     'set "CODEX_VERSION="',
     'set "GEMINI_VERSION="',
     'set "CLAUDE_VERSION="',
+    'set "QODER_VERSION="',
     'set "NODE_PATH="',
     'set "NPM_PATH="',
     'for /f "delims=" %i in (\'nvm version 2^>nul\') do set "NVM_VERSION=%i"',
@@ -287,12 +289,14 @@ async function runWindowsSnapshot() {
     'for /f "delims=" %i in (\'codex --version 2^>nul\') do set "CODEX_VERSION=%i"',
     'for /f "delims=" %i in (\'gemini --version 2^>nul\') do set "GEMINI_VERSION=%i"',
     'for /f "delims=" %i in (\'claude --version 2^>nul\') do set "CLAUDE_VERSION=%i"',
+    'for /f "delims=" %i in (\'qodercn --version 2^>nul\') do set "QODER_VERSION=%i"',
     'echo NODE_VERSION=%NODE_VERSION%',
     'echo NPM_VERSION=%NPM_VERSION%',
     'echo NVM_VERSION=%NVM_VERSION%',
     'echo CODEX_VERSION=%CODEX_VERSION%',
     'echo GEMINI_VERSION=%GEMINI_VERSION%',
     'echo CLAUDE_VERSION=%CLAUDE_VERSION%',
+    'echo QODER_VERSION=%QODER_VERSION%',
     'echo NODE_PATH=%NODE_PATH%',
     'echo NPM_PATH=%NPM_PATH%'
   ].join(" & ");
@@ -346,13 +350,14 @@ function buildEnvironmentMessages(input: {
 
 function minimumNodeMajorForProvider(providerId: AiProviderId) {
   if (providerId === "codex") return 22;
-  if (providerId === "gemini") return 20;
+  if (providerId === "gemini" || providerId === "qoder") return 20;
   return 18;
 }
 
 function cliVersionKey(providerId: AiProviderId) {
   if (providerId === "codex") return "CODEX_VERSION";
   if (providerId === "gemini") return "GEMINI_VERSION";
+  if (providerId === "qoder") return "QODER_VERSION";
   return "CLAUDE_VERSION";
 }
 
@@ -362,12 +367,13 @@ function parseNodeMajor(version?: string) {
 }
 
 function isWslTarget(targetId: string) {
-  return targetId.startsWith("wsl:") || targetId.startsWith("gemini:wsl:") || targetId.startsWith("claude:wsl:");
+  return targetId.startsWith("wsl:") || targetId.startsWith("gemini:wsl:") || targetId.startsWith("claude:wsl:") || targetId.startsWith("qoder:wsl:");
 }
 
 function parseWslDistro(targetId: string) {
   if (targetId.startsWith("gemini:wsl:")) return targetId.slice("gemini:wsl:".length);
   if (targetId.startsWith("claude:wsl:")) return targetId.slice("claude:wsl:".length);
+  if (targetId.startsWith("qoder:wsl:")) return targetId.slice("qoder:wsl:".length);
   if (targetId.startsWith("wsl:")) return targetId.slice("wsl:".length);
   throw new Error("目标不是 WSL 环境。");
 }

@@ -1,11 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { FitAddon } from "@xterm/addon-fit";
-import { SearchAddon } from "@xterm/addon-search";
-import { Terminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
 import { TerminalSearchBar } from "./TerminalSearchBar";
 import type { SystemTerminalKind } from "./types";
 import { useTerminalSearch } from "./useTerminalSearch";
+import { useXtermHost } from "./useXtermHost";
 
 type SystemTerminalTab = {
   key: string;
@@ -99,7 +97,8 @@ export function SystemTerminal({ targetId, cwd, minimized, createSignal, onClose
     event.preventDefault();
     event.stopPropagation();
     const menuWidth = 132;
-    const menuHeight = 104;
+    // 菜单高度用于边界裁剪避免溢出窗口；114 与 App.tsx 的终端标签菜单一致，值略大于实际菜单高度（~80px）以留出余量。
+    const menuHeight = 114;
     const gap = 8;
     const x = Math.min(event.clientX, window.innerWidth - menuWidth - gap);
     const y = Math.min(event.clientY, window.innerHeight - menuHeight - gap);
@@ -277,137 +276,31 @@ export function SystemTerminal({ targetId, cwd, minimized, createSignal, onClose
 }
 
 function SystemTerminalPane({ tab, active, hidden }: { tab: SystemTerminalTab; active: boolean; hidden: boolean }) {
-  const hostRef = useRef<HTMLDivElement | null>(null);
-  const terminalRef = useRef<Terminal | null>(null);
-  const fitAddonRef = useRef<FitAddon | null>(null);
-  const terminalIdRef = useRef("");
-  const [contextMenu, setContextMenu] = useState<{ x: number; y: number; canCopy: boolean } | null>(null);
-  const search = useTerminalSearch({ restoreFocus: () => terminalRef.current?.focus() });
-
-  function copyCurrentSelection() {
-    const selection = terminalRef.current?.getSelection();
-    if (!selection) return false;
-    void window.codexConsole.copyText(selection);
-    setContextMenu(null);
-    return true;
-  }
-
-  async function pasteClipboardText() {
-    const text = await window.codexConsole.readText();
-    if (!text || !terminalIdRef.current) return;
-    terminalRef.current?.paste(text);
-    setContextMenu(null);
-  }
+  const xterm = useXtermHost();
+  const search = useTerminalSearch({ restoreFocus: () => xterm.terminalRef.current?.focus() });
 
   useEffect(() => {
-    const host = hostRef.current;
+    const host = xterm.hostRef.current;
     if (!host) return;
+    let effectDisposed = false;
 
-    let disposed = false;
-    const terminal = new Terminal({
-      cursorBlink: true,
-      convertEol: true,
-      fontFamily: 'Consolas, "Cascadia Mono", "Courier New", monospace',
-      fontSize: 13,
-      lineHeight: 1.25,
-      scrollback: 10000,
-      theme: {
-        background: "#111827",
-        foreground: "#e5e7eb",
-        cursor: "#f9fafb"
-      }
-    });
-    const fitAddon = new FitAddon();
-    const searchAddon = new SearchAddon();
-    terminal.loadAddon(fitAddon);
-    terminal.loadAddon(searchAddon);
-    const detachSearchAddon = search.attachAddon(searchAddon, terminal);
-    terminalRef.current = terminal;
-    fitAddonRef.current = fitAddon;
-    terminal.open(host);
-    fitAddon.fit();
+    // 安装 Terminal + FitAddon + SearchAddon + 输出缓冲 + 右键菜单 + 按键处理
+    const { writeTerminalOutput, flushOutput, dispose: mountDispose } = xterm.mountTerminal(host);
 
-    terminal.attachCustomKeyEventHandler((event) => {
-      if (
-        event.type === "keydown" &&
-        (event.ctrlKey || event.metaKey) &&
-        event.key.toLowerCase() === "c" &&
-        terminal.hasSelection()
-      ) {
-        const selection = terminal.getSelection();
-        if (selection) void window.codexConsole.copyText(selection);
-        return false;
-      }
-      if (
-        event.type === "keydown" &&
-        (event.ctrlKey || event.metaKey) &&
-        event.key.toLowerCase() === "v"
-      ) {
-        void pasteClipboardText();
-        return false;
-      }
-      return true;
-    });
+    // 挂载搜索插件
+    const detachSearchAddon = search.attachAddon(xterm.searchAddonRef.current!, xterm.terminalRef.current!);
 
-    let outputBuffer = "";
-    let outputFrame = 0;
-    let resizeFrame = 0;
-
-    function flushOutput() {
-      outputFrame = 0;
-      if (!outputBuffer) return;
-      const data = outputBuffer;
-      outputBuffer = "";
-      terminal.write(data);
-    }
-
-    function writeTerminalOutput(data: string) {
-      outputBuffer += data;
-      if (!outputFrame) outputFrame = requestAnimationFrame(flushOutput);
-    }
-
-    function fitTerminal() {
-      fitAddon.fit();
-      if (terminalIdRef.current) {
-        void window.codexConsole.resizeTerminal(terminalIdRef.current, terminal.cols, terminal.rows);
-      }
-    }
-
-    function scheduleFitTerminal() {
-      if (resizeFrame) return;
-      resizeFrame = requestAnimationFrame(() => {
-        resizeFrame = 0;
-        fitTerminal();
-      });
-    }
-
-    const resizeObserver = new ResizeObserver(scheduleFitTerminal);
-    resizeObserver.observe(host);
-
-    const onContextMenu = (event: Event) => {
-      event.preventDefault();
-      const mouseEvent = event as MouseEvent;
-      setContextMenu({
-        x: mouseEvent.clientX,
-        y: mouseEvent.clientY,
-        canCopy: terminal.hasSelection()
-      });
-    };
-    host.addEventListener("contextmenu", onContextMenu);
-
-    const dataDisposable = terminal.onData((data) => {
-      if (terminalIdRef.current) void window.codexConsole.writeTerminal(terminalIdRef.current, data);
-    });
+    // IPC 数据转发
     const removeDataListener = window.codexConsole.onTerminalData((terminalId, data) => {
-      if (terminalId !== terminalIdRef.current) return;
+      if (terminalId !== xterm.terminalIdRef.current) return;
       writeTerminalOutput(data);
     });
     const removeExitListener = window.codexConsole.onTerminalExit((terminalId, exitCode) => {
-      if (terminalId !== terminalIdRef.current) return;
+      if (terminalId !== xterm.terminalIdRef.current) return;
       flushOutput();
-      terminal.writeln("");
-      terminal.writeln(`终端已退出，退出码 ${exitCode}`);
-      terminalIdRef.current = "";
+      xterm.terminalRef.current?.writeln("");
+      xterm.terminalRef.current?.writeln(`终端已退出，退出码 ${exitCode}`);
+      xterm.terminalIdRef.current = "";
     });
 
     void window.codexConsole
@@ -415,55 +308,47 @@ function SystemTerminalPane({ tab, active, hidden }: { tab: SystemTerminalTab; a
         targetId: tab.targetId,
         kind: tab.kind,
         cwd: tab.cwd,
-        cols: terminal.cols,
-        rows: terminal.rows
+        cols: xterm.terminalRef.current!.cols,
+        rows: xterm.terminalRef.current!.rows
       })
       .then(({ terminalId }) => {
-        if (disposed) {
+        if (effectDisposed || xterm.disposeRef.current.disposed) {
           void window.codexConsole.stopTerminal(terminalId);
           return;
         }
-        terminalIdRef.current = terminalId;
+        xterm.terminalIdRef.current = terminalId;
       })
       .catch((error: any) => {
-        if (disposed) return;
-        terminal.writeln(error?.message || "启动终端失败。");
+        if (effectDisposed || xterm.disposeRef.current.disposed) return;
+        xterm.terminalRef.current?.writeln(error?.message || "启动终端失败。");
       });
 
     return () => {
-      disposed = true;
-      const terminalId = terminalIdRef.current;
-      terminalIdRef.current = "";
+      effectDisposed = true;
+      const terminalId = xterm.terminalIdRef.current;
+      xterm.terminalIdRef.current = "";
       if (terminalId) void window.codexConsole.stopTerminal(terminalId);
       removeDataListener();
       removeExitListener();
-      dataDisposable.dispose();
-      resizeObserver.disconnect();
-      if (outputFrame) cancelAnimationFrame(outputFrame);
-      if (resizeFrame) cancelAnimationFrame(resizeFrame);
-      host.removeEventListener("contextmenu", onContextMenu);
       detachSearchAddon();
-      searchAddon.dispose();
-      fitAddon.dispose();
-      terminal.dispose();
-      terminalRef.current = null;
-      fitAddonRef.current = null;
+      mountDispose();
     };
     // tab.key 是终端身份；纳入 tab.cwd/kind 会销毁并重建该标签的终端
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tab.key]);
+  }, [tab.key, xterm.mountTerminal, xterm.disposeRef, xterm.terminalIdRef, xterm.terminalRef, xterm.searchAddonRef, xterm.hostRef, search.attachAddon]);
 
   useEffect(() => {
     if (!active) return;
     setTimeout(() => {
-      fitAddonRef.current?.fit();
-      terminalRef.current?.focus();
+      xterm.fitAddonRef.current?.fit();
+      xterm.terminalRef.current?.focus();
     }, 0);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [active]);
 
   return (
     <div className={`system-terminal-pane ${hidden ? "hidden" : ""}`} onKeyDownCapture={search.onPanelKeyDownCapture}>
-      <div className="system-terminal-host" ref={hostRef} />
+      <div className="system-terminal-host" ref={xterm.hostRef} />
       {search.open && !hidden && (
         <TerminalSearchBar
           inputRef={search.inputRef}
@@ -479,17 +364,17 @@ function SystemTerminalPane({ tab, active, hidden }: { tab: SystemTerminalTab; a
           onClose={search.closeSearch}
         />
       )}
-      {contextMenu && !hidden && (
+      {xterm.contextMenu && !hidden && (
         <div
           className="terminal-context-menu"
-          style={{ left: `${contextMenu.x}px`, top: `${contextMenu.y}px` }}
+          style={{ left: `${xterm.contextMenu.x}px`, top: `${xterm.contextMenu.y}px` }}
           role="menu"
           onMouseDown={(event) => event.stopPropagation()}
         >
-          <button type="button" role="menuitem" disabled={!contextMenu.canCopy} onClick={copyCurrentSelection}>
+          <button type="button" role="menuitem" disabled={!xterm.contextMenu.canCopy} onClick={xterm.copyCurrentSelection}>
             复制
           </button>
-          <button type="button" role="menuitem" disabled={!terminalIdRef.current} onClick={() => void pasteClipboardText()}>
+          <button type="button" role="menuitem" disabled={!xterm.terminalIdRef.current} onClick={() => void xterm.pasteClipboardText()}>
             粘贴
           </button>
         </div>

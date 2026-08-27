@@ -1,5 +1,4 @@
 import { safeStorage } from "electron";
-import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -14,7 +13,8 @@ import type {
   CodexTarget
 } from "./types";
 import { assertAllowedConfigPath } from "../shared/shellArgs";
-import { attachSpawnTimeout } from "./wslProcess";
+import { runWslShell, shellQuote } from "./wslProcess";
+import { logGatewayEvent } from "./gatewayLog";
 import {
   readAppDatabase,
   setSessionDatabasePath,
@@ -271,7 +271,15 @@ function decodeVendor(vendor: StoredApiVendor): ApiVendor {
       ...vendor,
       apiKey: safeStorage.decryptString(Buffer.from(vendor.apiKey, "base64"))
     };
-  } catch {
+  } catch (error) {
+    // 解密失败通常因系统账户/密钥链变更（重装、换用户、跨机迁移）。静默返回空 Key 会让
+    // 网关返回 503 且用户无从分辨原因，这里打事件日志便于排障，UI 侧另行提示重新输入。
+    logGatewayEvent("error", "vendor-decrypt-failed", {
+      vendorId: vendor.id,
+      provider: vendor.providerId,
+      name: vendor.name,
+      error: error instanceof Error ? error.message : String(error)
+    });
     return { ...vendor, apiKey: "" };
   }
 }
@@ -378,42 +386,6 @@ function resolveLocalHomePath(filePath: string) {
   return filePath;
 }
 
-function runWslShell(distro: string, script: string) {
-  const encodedScript = Buffer.from(script, "utf8").toString("base64");
-  const shellScript = `printf %s ${shellQuote(encodedScript)} | base64 -d | bash`;
-  return new Promise<string>((resolve, reject) => {
-    const child = spawn(getWslExe(), ["-d", distro, "--", "bash", "-lc", shellScript], {
-      windowsHide: true,
-      stdio: ["pipe", "pipe", "pipe"]
-    });
-    let stdout = "";
-    let stderr = "";
-    const clearTimer = attachSpawnTimeout(child, reject, `WSL 写入（${distro}）`);
-    child.stdout.setEncoding("utf8");
-    child.stderr.setEncoding("utf8");
-    child.stdout.on("data", (chunk) => {
-      stdout += chunk;
-    });
-    child.stderr.on("data", (chunk) => {
-      stderr += chunk;
-    });
-    child.on("error", (error) => {
-      clearTimer();
-      reject(error);
-    });
-    child.on("close", (code) => {
-      clearTimer();
-      if (code === 0) resolve(stdout);
-      else reject(new Error(stderr.trim() || `WSL 写入失败，退出码 ${code}`));
-    });
-    child.stdin.end();
-  });
-}
-
-function getWslExe() {
-  return process.platform === "win32" ? "wsl.exe" : "wsl";
-}
-
 async function ensureVendorSchema() {
   if (!vendorDatabasePath) throw new Error("供应商数据库路径未初始化。");
   if (vendorSchemaPath === vendorDatabasePath) return;
@@ -501,8 +473,4 @@ function listVendorConfigs(db: SqliteDatabase, vendorId: string): ApiVendorConfi
 
 function safeName(value: string) {
   return value.replace(/[\\/:*?"<>|\u0000-\u001F]/g, "_").slice(0, 100) || "vendor";
-}
-
-function shellQuote(value: string) {
-  return `'${value.replace(/'/g, "'\\''")}'`;
 }

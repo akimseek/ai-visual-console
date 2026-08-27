@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import type { InstalledSkill } from "./types";
 import { skillSourceName } from "./sessionFormat";
 
@@ -18,14 +18,6 @@ export function useSkills({
   const [skillView, setSkillView] = useState<SkillView>("active");
   const [skills, setSkills] = useState<InstalledSkill[]>([]);
   const [skillsLoading, setSkillsLoading] = useState(false);
-
-  useEffect(() => {
-    return window.codexConsole.onOpenSkillManager(() => {
-      void openSkillManager();
-    });
-    // 仅在目标变化时重订阅 IPC；openSkillManager 每渲染重建
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [targetId]);
 
   async function openSkillManager() {
     setSkillManagerOpen(true);

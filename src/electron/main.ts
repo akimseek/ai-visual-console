@@ -76,7 +76,8 @@ import {
   saveApiVendor,
   setVendorDatabasePath
 } from "./vendorManager";
-import { getVendorGatewayPort, stopVendorGateway } from "./vendorGateway";
+import { getVendorGatewayPort, invalidateWslGatewayCache, stopVendorGateway } from "./vendorGateway";
+import { flushGatewayLogs, getRecentGatewayEvents, getRecentGatewayRequests, setGatewayLogPath } from "./gatewayLog";
 import {
   resizeTerminalSession,
   getTerminalSessionCount,
@@ -291,6 +292,7 @@ app.whenReady().then(() => {
   setSessionMetadataPath(path.join(app.getPath("userData"), "session-metadata.json"));
   setVendorDatabasePath(applicationDatabasePath, path.join(applicationDataDir, "vendor-backups"));
   setPerformanceLogPath(path.join(getLogDir(), "performance.log"));
+  setGatewayLogPath(getLogDir());
   void writePerformanceLog("app.ready", 0);
   void writePerformanceLog("app.whenReady", performance.now() - processStartedAt);
 
@@ -342,6 +344,8 @@ app.whenReady().then(() => {
   ipcMain.handle("gateway:set-port", async (_event, port: unknown) => {
     const checkedPort = requireGatewayPort(port);
     const configuredPort = await setGatewayPort(checkedPort);
+    // 端口变更后，WSL 探测缓存中的 host:port 已失效，必须清空以便下次重新探测。
+    invalidateWslGatewayCache();
     const activePort = getVendorGatewayPort();
     return { configuredPort, activePort, applied: activePort === 0 || activePort === configuredPort };
   });
@@ -608,6 +612,8 @@ async function exportDiagnosticsReport() {
   const dataDir = getApplicationDataDir();
   const logDir = getLogDir();
   const databasePath = path.join(dataDir, "app.db");
+  // 先把内存环形缓冲中的网关日志落盘，再读取快照供诊断导出。
+  await flushGatewayLogs().catch(() => undefined);
   const [database, databaseWal, performanceLog, appDatabase] = await Promise.all([
     fileSize(databasePath),
     fileSize(`${databasePath}-wal`),
@@ -633,6 +639,11 @@ async function exportDiagnosticsReport() {
       performanceLogBytes: performanceLog
     },
     database: appDatabase,
+    gateway: {
+      activePort: getVendorGatewayPort(),
+      recentRequests: getRecentGatewayRequests(20),
+      recentEvents: getRecentGatewayEvents(20)
+    },
     runtime: {
       activeTerminalSessions: getTerminalSessionCount()
     },
@@ -710,7 +721,7 @@ function requireView(value: unknown) {
 }
 
 function requireProviderId(value: unknown): AiProviderId {
-  if (value !== "codex" && value !== "gemini" && value !== "claude") throw new Error("参数无效：providerId");
+  if (value !== "codex" && value !== "gemini" && value !== "claude" && value !== "qoder") throw new Error("参数无效：providerId");
   return value;
 }
 
@@ -885,7 +896,9 @@ async function findTargetForVendor(targetId: string) {
     ? "gemini"
     : targetId.startsWith("claude:")
       ? "claude"
-      : "codex";
+      : targetId.startsWith("qoder:")
+        ? "qoder"
+        : "codex";
   const targets = await listTargets(providerId);
   return targets.find((item) => item.id === targetId) || null;
 }
@@ -943,11 +956,13 @@ function requireSessionMutationRefs(value: unknown) {
 }
 
 function toShellOpenPath(targetId: string, folderPath: string) {
-  if (targetId.startsWith("wsl:") || targetId.startsWith("gemini:wsl:") || targetId.startsWith("claude:wsl:")) {
+  if (targetId.startsWith("wsl:") || targetId.startsWith("gemini:wsl:") || targetId.startsWith("claude:wsl:") || targetId.startsWith("qoder:wsl:")) {
     const distro = targetId.startsWith("gemini:wsl:")
       ? targetId.slice("gemini:wsl:".length)
       : targetId.startsWith("claude:wsl:")
         ? targetId.slice("claude:wsl:".length)
+        : targetId.startsWith("qoder:wsl:")
+          ? targetId.slice("qoder:wsl:".length)
         : targetId.slice("wsl:".length);
     return `\\\\wsl.localhost\\${distro}${folderPath.replace(/\//g, "\\")}`;
   }
@@ -965,11 +980,13 @@ async function pathExists(filePath: string) {
 
 async function pathExistsForTarget(targetId: string, folderPath: string) {
   if (!folderPath) return false;
-  if (targetId.startsWith("wsl:") || targetId.startsWith("gemini:wsl:") || targetId.startsWith("claude:wsl:")) {
+  if (targetId.startsWith("wsl:") || targetId.startsWith("gemini:wsl:") || targetId.startsWith("claude:wsl:") || targetId.startsWith("qoder:wsl:")) {
     const distro = targetId.startsWith("gemini:wsl:")
       ? targetId.slice("gemini:wsl:".length)
       : targetId.startsWith("claude:wsl:")
         ? targetId.slice("claude:wsl:".length)
+        : targetId.startsWith("qoder:wsl:")
+          ? targetId.slice("qoder:wsl:".length)
         : targetId.slice("wsl:".length);
     if (!distro) return false;
     try {

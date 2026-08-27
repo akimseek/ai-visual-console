@@ -141,9 +141,6 @@ export type CodexConsoleApi = {
   exportDiagnostics: () => Promise<{ filePath: string }>;
   onTerminalData: (handler: (terminalId: string, data: string) => void) => () => void;
   onTerminalExit: (handler: (terminalId: string, exitCode: number) => void) => () => void;
-  onOpenSessionSettings: (handler: () => void) => () => void;
-  onOpenSkillManager: (handler: () => void) => () => void;
-  onOpenCliInstaller: (handler: () => void) => () => void;
   openSessionFolder: (targetId: string, sessionId: string) => Promise<void>;
   openPath: (params: OpenPathRequest) => Promise<void>;
   pathExists: (params: OpenPathRequest) => Promise<boolean>;

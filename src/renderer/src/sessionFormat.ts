@@ -132,6 +132,7 @@ export function usageSourceLabel(source?: SessionUsage["source"]) {
   if (source === "codex-token-count") return "Codex token_count";
   if (source === "gemini-message-tokens") return "Gemini tokens";
   if (source === "claude-message-usage") return "Claude usage";
+  if (source === "qoder-message-usage") return "Qoder usage";
   return "无 usage 数据";
 }
 

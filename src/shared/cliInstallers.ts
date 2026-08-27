@@ -33,6 +33,14 @@ export const CLI_INSTALLERS: CliInstallerDefinition[] = [
     installArgs: ["install", "-g", "@anthropic-ai/claude-code"],
     docsUrl: "https://docs.anthropic.com/en/docs/claude-code/setup",
     iconLabel: "A"
+  },
+  {
+    providerId: "qoder",
+    label: "Qoder CN",
+    description: "Qoder CN CLI",
+    installArgs: ["install", "-g", "@qodercn-ai/qoderclicn"],
+    docsUrl: "https://docs.qoder.cn/cli/installation",
+    iconLabel: "Q"
   }
 ];
 

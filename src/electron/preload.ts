@@ -154,21 +154,6 @@ const api = {
     ipcRenderer.on("terminal:exit", listener);
     return () => ipcRenderer.off("terminal:exit", listener);
   },
-  onOpenSessionSettings: (handler: () => void) => {
-    const listener = () => handler();
-    ipcRenderer.on("menu:open-session-settings", listener);
-    return () => ipcRenderer.off("menu:open-session-settings", listener);
-  },
-  onOpenSkillManager: (handler: () => void) => {
-    const listener = () => handler();
-    ipcRenderer.on("menu:open-skill-manager", listener);
-    return () => ipcRenderer.off("menu:open-skill-manager", listener);
-  },
-  onOpenCliInstaller: (handler: () => void) => {
-    const listener = () => handler();
-    ipcRenderer.on("menu:open-cli-installer", listener);
-    return () => ipcRenderer.off("menu:open-cli-installer", listener);
-  },
   openSessionFolder: (targetId: string, sessionId: string) =>
     ipcRenderer.invoke("shell:open-session-folder", targetId, sessionId) as Promise<void>,
   openPath: (params: OpenPathRequest) =>

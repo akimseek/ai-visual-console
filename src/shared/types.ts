@@ -62,7 +62,7 @@ export type SessionUsage = {
     secondary?: RateLimitUsage;
   };
   updatedAt?: string;
-  source: "codex-token-count" | "gemini-message-tokens" | "claude-message-usage";
+  source: "codex-token-count" | "gemini-message-tokens" | "claude-message-usage" | "qoder-message-usage";
 };
 
 export type SessionModelStatus = {
@@ -85,7 +85,7 @@ export type SessionBranchMetadata = {
   createdBy?: "branch" | "manual";
 };
 
-export type AiProviderId = "codex" | "gemini" | "claude";
+export type AiProviderId = "codex" | "gemini" | "claude" | "qoder";
 
 export type AiProviderCapabilities = {
   skills: boolean;
@@ -96,6 +96,8 @@ export type AiProviderCapabilities = {
   customCwd: boolean;
   export: boolean;
   sessionSettings: boolean;
+  duplicate: boolean;
+  vendorManagement: boolean;
 };
 
 export type AiProviderSummary = {

@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import type { AiProviderId, AiTarget, ApiVendor } from "./types";
+import { captureError } from "./errorUtils";
 import {
   buildVendorConfigTemplateFromExisting,
   buildVendorDraft,
@@ -59,8 +60,8 @@ export function useVendors({
       const list = await window.codexConsole.listApiVendors(selectedTarget?.id || targetId);
       setVendors(list);
       setVendorDraft((current) => current.id ? current : list[0] ? vendorToDraft(list[0]) : current);
-    } catch (vendorLoadError: any) {
-      setVendorError(vendorLoadError?.message || "加载供应商失败。");
+    } catch (error: unknown) {
+      setVendorError(captureError(error, "loadVendor"));
     } finally {
       setVendorBusy("");
     }
@@ -110,8 +111,8 @@ export function useVendors({
           ? baseMessage
           : `${baseMessage} ⚠ 当前系统不可用安全存储，API Key 以明文形式保存在本地，请谨慎使用。`
       );
-    } catch (vendorSaveError: any) {
-      setVendorError(vendorSaveError?.message || "保存供应商失败。");
+    } catch (error: unknown) {
+      setVendorError(captureError(error, "saveVendor"));
     } finally {
       setVendorBusy("");
     }
@@ -165,8 +166,8 @@ export function useVendors({
           }))
         };
       });
-    } catch (previewError: any) {
-      setVendorError(previewError?.message || "读取本地配置失败。");
+    } catch (error: unknown) {
+      setVendorError(captureError(error, "previewConfig"));
     }
   }
 
@@ -182,8 +183,8 @@ export function useVendors({
       setVendorDraft(list[0] ? vendorToDraft(list[0]) : createEmptyVendorDraft());
       setVendorManagerMode("list");
       setVendorToast({ message: "供应商已删除。", tone: "success" });
-    } catch (vendorDeleteError: any) {
-      setVendorToast({ message: vendorDeleteError?.message || "删除供应商失败。", tone: "error" });
+    } catch (error: unknown) {
+      setVendorToast({ message: captureError(error, "deleteVendor"), tone: "error" });
     } finally {
       setVendorBusy("");
     }
@@ -205,11 +206,11 @@ export function useVendors({
         switched
           ? `供应商已启用，写入 ${result.written.length} 个配置文件；当前终端路由已切换，后续请求使用新供应商。已发出的请求按原供应商处理。`
           : result.switchReason === "gateway-not-active"
-            ? `供应商已启用，写入 ${result.written.length} 个配置文件；当前终端未接入本地 Gateway，请关闭并重新打开一次，之后可直接切换。`
-            : `供应商已启用，写入 ${result.written.length} 个配置文件；新终端将使用该供应商。`
+            ? `供应商已启用，写入 ${result.written.length} 个配置文件；当前终端未接入本地 Gateway，请关闭并重新打开一次，之后可直接切换。磁盘中的真实 Key 作为 fallback 保留。`
+            : `供应商已启用，写入 ${result.written.length} 个配置文件；新终端将使用该供应商。磁盘中的真实 Key 作为 fallback 保留。`
       );
-    } catch (vendorEnableError: any) {
-      setVendorError(vendorEnableError?.message || "启用供应商失败。");
+    } catch (error: unknown) {
+      setVendorError(captureError(error, "enableVendor"));
     } finally {
       setVendorBusy("");
     }

@@ -79,7 +79,10 @@ export function VendorManagerDialog({
         <header>
           <div>
             <h2 id="vendor-manager-title">供应商管理</h2>
-            <p>保存 API 供应商并按当前目标环境写入 CLI 配置文件。启用后，已打开的同协议终端会在下一次请求时切换。</p>
+            <p>
+              保存 API 供应商并按当前目标环境写入 CLI 配置文件。启用后，已打开的同协议终端会在下一次请求时切换。
+              接入本地网关的终端仅使用本地令牌、不读取磁盘 Key；写入配置文件的真实 Key 作为未接入网关终端的 fallback。
+            </p>
           </div>
           <button type="button" title="关闭" onClick={onClose} disabled={Boolean(busy)}>
             x

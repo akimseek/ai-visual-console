@@ -1,12 +1,22 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import { pipeline } from "node:stream/promises";
 import crypto from "node:crypto";
-import { Readable } from "node:stream";
+import { Readable, Transform } from "node:stream";
+import { performance } from "node:perf_hooks";
 import type { AiProviderId, ApiVendor } from "./types";
 import { listApiVendors } from "./vendorManager";
 import { getGatewayPort } from "./settings";
+import { detectWslGatewayHost } from "./wslProcess";
+import { logGatewayEvent, recordGatewayRequest } from "./gatewayLog";
 
 const MAX_REQUEST_BYTES = 32 * 1024 * 1024;
 const ROUTE_PREFIX = "/gateway";
+const UPSTREAM_TIMEOUT_MS = 10 * 60 * 1000;
+
+// 拼接某路由在指定 host 上的完整 URL。host 形如 http://127.0.0.1:port 或 WSL 探测到的宿主地址。
+export function buildRouteUrl(host: string, providerId: AiProviderId, routeId: string) {
+  return `${host}${ROUTE_PREFIX}/${providerId}/${routeId}`;
+}
 
 export type VendorRoute = {
   routeId: string;
@@ -27,6 +37,7 @@ let gatewayServer: ReturnType<typeof createServer> | null = null;
 let gatewayAddress = "";
 let gatewayStartPromise: Promise<void> | null = null;
 const routes = new Map<string, MutableVendorRoute>();
+const wslBaseUrlCache = new Map<string, { host: string; port: number }>();
 
 export async function ensureVendorGateway() {
   if (gatewayServer?.listening && gatewayAddress) return gatewayAddress;
@@ -43,27 +54,66 @@ export async function ensureVendorGateway() {
 
 async function startVendorGateway() {
   const configuredPort = await getGatewayPort();
-  await new Promise<void>((resolve, reject) => {
+  try {
+    await listenOn(configuredPort);
+  } catch (error) {
+    // 固定端口被占用时回退到随机端口，避免终端启动整体失败；随机端口冲突属真异常，向上抛。
+    if (!isAddrInUse(error) || configuredPort === 0) throw error;
+    logGatewayEvent("warn", "fixed-port-busy", { configuredPort });
+    await listenOn(0);
+  }
+}
+
+function listenOn(port: number) {
+  return new Promise<void>((resolve, reject) => {
     const server = createServer((request, response) => {
       void handleGatewayRequest(request, response);
     });
-    server.once("error", reject);
-    server.listen(configuredPort, "127.0.0.1", () => {
+    server.on("error", reject);
+    server.listen(port, "127.0.0.1", () => {
       const address = server.address();
       if (!address || typeof address === "string") {
         reject(new Error("本地 Gateway 未返回有效监听地址。"));
         return;
       }
       gatewayServer = server;
+      // listen 阶段的 once 监听已失效；运行时换成持久监听，记录而非崩溃。
+      server.off("error", reject);
+      server.on("error", (error) => {
+        logGatewayEvent("error", "server-runtime-error", { error: String(error) });
+      });
       gatewayAddress = `http://127.0.0.1:${address.port}`;
+      logGatewayEvent("info", "gateway-started", { configuredPort: port, actualPort: address.port });
       resolve();
     });
   });
 }
 
+function isAddrInUse(error: unknown) {
+  return (error as NodeJS.ErrnoException)?.code === "EADDRINUSE";
+}
+
 export function getVendorGatewayPort() {
   if (!gatewayAddress) return 0;
   return Number(new URL(gatewayAddress).port) || 0;
+}
+
+// 给 WSL 内的 CLI 进程解析可达宿主网关的 base URL。NAT 模式下 127.0.0.1 指向 WSL 自身，
+// 必须改用默认路由网关地址；mirrored 模式下仍为 127.0.0.1。结果按 (distro,port) 缓存。
+export async function resolveWslGatewayBaseUrl(distro: string): Promise<string> {
+  const port = getVendorGatewayPort();
+  if (!port) throw new Error("本地 Gateway 未启动。");
+  const cached = wslBaseUrlCache.get(distro);
+  if (cached && cached.port === port) {
+    return `http://${cached.host}:${port}`;
+  }
+  const host = await detectWslGatewayHost(distro, port);
+  wslBaseUrlCache.set(distro, { host, port });
+  return `http://${host}:${port}`;
+}
+
+export function invalidateWslGatewayCache() {
+  wslBaseUrlCache.clear();
 }
 
 export async function createVendorRoute(providerId: AiProviderId, vendorId?: string) {
@@ -78,6 +128,7 @@ export async function createVendorRoute(providerId: AiProviderId, vendorId?: str
     providerId,
     vendorId: vendor.id,
     localToken,
+    // 宿主进程（Windows/macOS/Linux 本地）访问用 127.0.0.1；WSL 终端启动时另行覆盖为探测地址。
     baseUrl: `${gatewayUrl}${ROUTE_PREFIX}/${providerId}/${routeId}`,
     createdAt: Date.now()
   };
@@ -93,19 +144,19 @@ export function switchVendorRoute(routeId: string, providerId: AiProviderId, ven
   return { switched: 1 };
 }
 
-export async function destroyVendorRoute(routeId: string) {
-  const route = routes.get(routeId);
-  if (!route) return;
+export function destroyVendorRoute(routeId: string) {
   routes.delete(routeId);
 }
 
 export async function stopVendorGateway() {
-  const routeIds = [...routes.keys()];
-  await Promise.all(routeIds.map((routeId) => destroyVendorRoute(routeId)));
+  routes.clear();
+  invalidateWslGatewayCache();
   const server = gatewayServer;
   gatewayServer = null;
   gatewayAddress = "";
   if (!server) return;
+  // closeAllConnections 强制关闭残留的 keep-alive 连接，避免 close 因等待空闲连接而挂起。
+  server.closeAllConnections();
   await new Promise<void>((resolve) => server.close(() => resolve()));
 }
 
@@ -113,58 +164,204 @@ export function getVendorRoute(routeId: string) {
   return routes.get(routeId);
 }
 
+// 路由前缀形如 /gateway/{provider}/{routeId}，routeId 是路径第三段，可直接 O(1) 命中。
+function findRoute(pathname: string) {
+  const segments = pathname.split("/").filter(Boolean);
+  if (segments.length < 3 || segments[0] !== ROUTE_PREFIX.slice(1)) return undefined;
+  const providerId = segments[1] as AiProviderId;
+  const routeId = segments[2];
+  const route = routes.get(routeId);
+  if (!route || route.providerId !== providerId) return undefined;
+  const prefix = routePrefix(route);
+  if (pathname !== prefix && !pathname.startsWith(`${prefix}/`)) return undefined;
+  return route;
+}
+
 async function handleGatewayRequest(request: IncomingMessage, response: ServerResponse) {
+  const startedAt = performance.now();
+  const controller = new AbortController();
+  const timeoutSignal = AbortSignal.timeout(UPSTREAM_TIMEOUT_MS);
+  let bytesIn = 0;
+  let bytesOut = 0;
+  let outcome: "ok" | "client-aborted" | "timeout" | "error" = "error";
+  let upstreamStatus: number | undefined;
+  let routeId = extractRouteId(request.url || "");
+  let providerId = extractProvider(request.url || "");
+  let vendorId = "";
+
+  // 客户端断开（CLI 被 Ctrl+C / 标签关闭）→ 取消上游 fetch，止血并避免继续计费。
+  // 注意：request 的 readable 侧在正常请求结束（body 读尽）时也会触发 close，不能据此判断断开；
+  // 仅当 response 在尚未写完时被关闭，才视为客户端提前断开。
+  const onClientClose = () => {
+    if (response.writableEnded || controller.signal.aborted) return;
+    controller.abort(new GatewayAbort("client-disconnected"));
+  };
+  response.on("close", onClientClose);
+
   try {
     const parsed = new URL(request.url || "/", "http://127.0.0.1");
     const route = findRoute(parsed.pathname);
-    if (!route) return respondJson(response, 404, { error: "gateway route not found" });
-    if (!hasRouteToken(request, route.localToken)) return respondJson(response, 401, { error: "gateway unauthorized" });
+    if (!route) {
+      respondJson(response, 404, { error: "gateway route not found" });
+      outcome = "ok";
+      return;
+    }
+    routeId = route.routeId;
+    providerId = route.providerId;
+    if (!hasRouteToken(request, route.localToken)) {
+      respondJson(response, 401, { error: "gateway unauthorized" });
+      outcome = "ok";
+      return;
+    }
 
     // 在读取数据库或请求体之前固定供应商，后续切换只影响新进入的请求。
     const selectedVendorId = route.vendorId;
     const vendors = await listApiVendors();
     const vendor = vendors.find((item) => item.id === selectedVendorId && item.providerId === route.providerId);
-    if (!vendor || !vendor.apiKey) return respondJson(response, 503, { error: "gateway vendor unavailable" });
+    if (!vendor || !vendor.apiKey) {
+      respondJson(response, 503, { error: "gateway vendor unavailable" });
+      outcome = "ok";
+      return;
+    }
+    vendorId = vendor.id;
 
-    const body = await readRequestBody(request);
+    // 流式请求体：先按声明值拦截超大请求，再零缓冲透传给上游。
+    const hasBody = request.method !== "GET" && request.method !== "HEAD";
+    const declaredLength = Number(request.headers["content-length"] || 0);
+    if (declaredLength > MAX_REQUEST_BYTES) throw new Error("请求体超过本地 Gateway 限制。");
+
     const suffix = parsed.pathname.slice(routePrefix(route).length) || "/";
     const upstreamUrl = joinUpstreamUrl(vendor.apiBaseUrl, suffix, parsed.search);
     if (gatewayAddress && upstreamUrl.startsWith(gatewayAddress)) {
       throw new Error("供应商地址不能指向本地 Gateway。");
     }
     const upstreamHeaders = buildUpstreamHeaders(request, vendor);
+    const bodyStream = hasBody
+      ? sizeGuardStream(Readable.toWeb(request) as ReadableStream<Uint8Array>, MAX_REQUEST_BYTES, controller, (n) => { bytesIn += n; })
+      : undefined;
+
     const upstream = await fetch(upstreamUrl, {
       method: request.method || "GET",
       headers: upstreamHeaders,
-      body: body.length > 0 && request.method !== "GET" && request.method !== "HEAD" ? body : undefined,
-      signal: AbortSignal.timeout(10 * 60 * 1000)
-    });
+      body: bodyStream as BodyInit | undefined,
+      // 流式请求体（ReadableStream）必须声明 duplex，否则 Node fetch 会拒绝发送。
+      duplex: bodyStream ? "half" : undefined,
+      signal: AbortSignal.any([controller.signal, timeoutSignal])
+    } as RequestInit);
+    upstreamStatus = upstream.status;
     response.statusCode = upstream.status;
     upstream.headers.forEach((value, key) => {
       if (key === "content-length" || key === "transfer-encoding" || key === "connection") return;
       response.setHeader(key, value);
     });
-    if (!upstream.body) return response.end();
-    for await (const chunk of Readable.fromWeb(upstream.body as any)) response.write(chunk);
-    response.end();
+    if (!upstream.body) {
+      response.end();
+      outcome = "ok";
+      return;
+    }
+    // pipeline：自动处理 write 返回 false 时的 drain 背压、自动 end(response)、传播上游/下游错误。
+    // 中间插入计数 Transform 统计下行字节。
+    await pipeline(
+      Readable.fromWeb(upstream.body as any),
+      byteCountingTransform((n) => { bytesOut += n; }),
+      response
+    );
+    outcome = "ok";
   } catch (error: any) {
+    if (isClientAbort(error, controller)) {
+      outcome = "client-aborted";
+      return;
+    }
+    if (error?.name === "TimeoutError") {
+      outcome = "timeout";
+      if (!response.headersSent) respondJson(response, 504, { error: "上游响应超时。" });
+      else response.destroy();
+      return;
+    }
+    outcome = "error";
     if (!response.headersSent) respondJson(response, 502, { error: error?.message || "gateway upstream request failed" });
     else response.destroy();
+  } finally {
+    response.off("close", onClientClose);
+    recordGatewayRequest({
+      routeId,
+      provider: providerId,
+      vendorId,
+      method: request.method || "GET",
+      path: request.url || "/",
+      upstreamStatus,
+      durationMs: Math.round(performance.now() - startedAt),
+      bytesIn,
+      bytesOut,
+      outcome
+    });
   }
+}
+
+class GatewayAbort extends Error {
+  constructor(public reason: string) {
+    super(reason);
+    this.name = "AbortError";
+  }
+}
+
+function isClientAbort(error: unknown, controller: AbortController) {
+  if (!(error instanceof Error) || error.name !== "AbortError") return false;
+  const reason = controller.signal.reason;
+  return reason instanceof GatewayAbort && reason.reason === "client-disconnected";
+}
+
+// 流式体积守卫：累计超限则 abort 上游，并统计上行字节，避免把整个请求体缓冲进内存。
+function sizeGuardStream(
+  webStream: ReadableStream<Uint8Array>,
+  max: number,
+  controller: AbortController,
+  onChunk: (bytes: number) => void
+): ReadableStream<Uint8Array> {
+  const reader = webStream.getReader();
+  let totalSeen = 0;
+  return new ReadableStream({
+    async pull(controller2) {
+      const { done, value } = await reader.read();
+      if (done) { controller2.close(); return; }
+      onChunk(value.byteLength);
+      totalSeen += value.byteLength;
+      if (totalSeen > max) {
+        controller.abort(new GatewayAbort("body-too-large"));
+        try { await reader.cancel(); } catch { /* 已 abort */ }
+        controller2.error(new Error("请求体超过本地 Gateway 限制。"));
+        return;
+      }
+      controller2.enqueue(value);
+    },
+    cancel(reason) { reader.cancel(reason).catch(() => undefined); }
+  });
+}
+
+// 计数 Transform：插入 pipeline 中间，统计下行字节数，对数据本身不做改动。
+function byteCountingTransform(onByte: (bytes: number) => void) {
+  return new Transform({
+    transform(chunk, _encoding, callback) {
+      onByte(Buffer.byteLength(chunk));
+      callback(null, chunk);
+    }
+  });
+}
+
+function extractRouteId(url: string) {
+  const segments = url.split("?")[0].split("/").filter(Boolean);
+  return segments[2] || "";
+}
+
+function extractProvider(url: string) {
+  const segments = url.split("?")[0].split("/").filter(Boolean);
+  return segments[1] || "";
 }
 
 function resolveVendor(vendors: ApiVendor[], providerId: AiProviderId, vendorId?: string) {
   const explicit = vendorId?.trim() ? vendors.find((item) => item.id === vendorId) : undefined;
   if (explicit && explicit.providerId !== providerId) throw new Error("供应商协议与终端类型不匹配。");
   return explicit || vendors.find((item) => item.providerId === providerId && item.enabled);
-}
-
-function findRoute(pathname: string) {
-  for (const route of routes.values()) {
-    const prefix = routePrefix(route);
-    if (pathname === prefix || pathname.startsWith(`${prefix}/`)) return route;
-  }
-  return undefined;
 }
 
 function routePrefix(route: VendorRoute) {
@@ -187,7 +384,8 @@ function hasRouteToken(request: IncomingMessage, token: string) {
 function buildUpstreamHeaders(request: IncomingMessage, vendor: ApiVendor) {
   const headers = new Headers();
   for (const [name, value] of Object.entries(request.headers)) {
-    if (["host", "authorization", "x-api-key", "x-goog-api-key", "content-length", "connection"].includes(name)) continue;
+    // transfer-encoding 必须剔除：流式 body 由 undici 自行 chunking，手动透传会导致 invalid transfer-encoding。
+    if (["host", "authorization", "x-api-key", "x-goog-api-key", "content-length", "transfer-encoding", "connection"].includes(name)) continue;
     for (const item of Array.isArray(value) ? value : [value]) if (item !== undefined) headers.append(name, item);
   }
   if (vendor.providerId === "claude") headers.set("x-api-key", vendor.apiKey);
@@ -207,18 +405,6 @@ function joinUpstreamUrl(baseUrl: string, suffix: string, search: string) {
   base.pathname = `${basePath}${normalizedSuffix.startsWith("/") ? normalizedSuffix : `/${normalizedSuffix}`}`;
   base.search = search;
   return base.toString();
-}
-
-async function readRequestBody(request: IncomingMessage) {
-  const chunks: Buffer[] = [];
-  let size = 0;
-  for await (const chunk of request) {
-    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
-    size += buffer.length;
-    if (size > MAX_REQUEST_BYTES) throw new Error("请求体超过本地 Gateway 限制。");
-    chunks.push(buffer);
-  }
-  return Buffer.concat(chunks);
 }
 
 function respondJson(response: ServerResponse, status: number, value: unknown) {

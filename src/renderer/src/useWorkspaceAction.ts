@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { captureError } from "./errorUtils";
 
 export function useWorkspaceAction({
   setError,
@@ -21,8 +22,8 @@ export function useWorkspaceAction({
     setWorkspaceBusyMessage(message);
     try {
       await action();
-    } catch (error: any) {
-      const failureMessage = error?.message || "操作失败。";
+    } catch (error) {
+      const failureMessage = captureError(error, "workspaceAction");
       if (options.errorAsNotice) setNotice(failureMessage, undefined, "error");
       else setError(failureMessage);
     } finally {

@@ -13,8 +13,10 @@ import {
 } from "../shared/shellArgs";
 import { getWslDistroFromTargetId, wslMountPathToWindowsPath } from "../shared/wslPaths";
 import {
+  buildRouteUrl,
   createVendorRoute,
   destroyVendorRoute,
+  resolveWslGatewayBaseUrl,
   switchVendorRoute,
   type VendorRoute
 } from "./vendorGateway";
@@ -37,9 +39,10 @@ type TerminalCommand = {
 };
 
 type TerminalProvider = {
-  id: "codex" | "gemini" | "claude";
+  id: AiProviderId;
   canHandle: (targetId: string) => boolean;
   buildCommand: (params: TerminalStartParams & { vendorRoute?: VendorRoute }) => Promise<TerminalCommand>;
+  supportsVendorGateway?: boolean;
 };
 
 const sessions = new Map<string, TerminalSession>();
@@ -63,14 +66,23 @@ const claudeTerminalProvider: TerminalProvider = {
   buildCommand: buildClaudeCommand
 };
 
-const terminalProviders: TerminalProvider[] = [claudeTerminalProvider, geminiTerminalProvider, codexTerminalProvider];
+const qoderTerminalProvider: TerminalProvider = {
+  id: "qoder",
+  canHandle: (targetId) => targetId.startsWith("qoder:"),
+  buildCommand: buildQoderCommand,
+  supportsVendorGateway: false
+};
+
+const terminalProviders: TerminalProvider[] = [qoderTerminalProvider, claudeTerminalProvider, geminiTerminalProvider, codexTerminalProvider];
 
 export async function startTerminalSession(
   window: BrowserWindow,
   params: TerminalStartParams & { cols?: number; rows?: number }
 ) {
   const provider = resolveTerminalProvider(params.targetId);
-  const route = await createVendorRoute(provider.id, params.vendorId);
+  const route = provider.supportsVendorGateway !== false
+    ? await createVendorRoute(provider.id, params.vendorId)
+    : undefined;
   try {
     const command = await provider.buildCommand({ ...params, vendorRoute: route });
     return await startPtySession(window, command, params.cols, params.rows, route?.routeId);
@@ -309,18 +321,19 @@ function resolveTerminalProvider(targetId: string) {
 
 async function buildCodexCommand(params: TerminalStartParams & { vendorRoute?: VendorRoute }) {
   const extraArgs = parseCliArgs(params.cliArgs || "");
+  const route = await withResolvedBaseUrl(params.targetId, params.vendorRoute);
   if (params.targetId.startsWith("wsl:")) {
     const distro = params.targetId.slice("wsl:".length);
     const providerNames = await readCodexProviderNames(params.codexHome, distro);
-    const codexInvocation = buildCodexInvocation(extraArgs, params.vendorRoute, providerNames);
+    const codexInvocation = buildCodexInvocation(extraArgs, route, providerNames);
     const command = params.sessionId
-      ? `${params.cwd ? `cd ${shellQuote(params.cwd)} && ` : ""}exec ${buildCodexInvocation(["resume", params.sessionId], params.vendorRoute, providerNames)}`
+      ? `${params.cwd ? `cd ${shellQuote(params.cwd)} && ` : ""}exec ${buildCodexInvocation(["resume", params.sessionId], route, providerNames)}`
       : params.cwd && params.useCodexCwdFlag
-        ? `exec ${buildCodexInvocation(["-C", params.cwd, ...extraArgs], params.vendorRoute, providerNames)}`
+        ? `exec ${buildCodexInvocation(["-C", params.cwd, ...extraArgs], route, providerNames)}`
         : params.cwd
           ? `mkdir -p ${shellQuote(params.cwd)} && cd ${shellQuote(params.cwd)} && exec ${codexInvocation}`
           : `mkdir -p "$HOME/.akim" && cd "$HOME/.akim" && exec ${codexInvocation}`;
-    const environment = buildCodexEnvironment(params.vendorRoute, params.codexHome);
+    const environment = buildCodexEnvironment(route, params.codexHome);
     const exportCommand = environment
       ? `unset CODEX_API_KEY CODEX_ACCESS_TOKEN; export ${Object.entries(environment).map(([key, value]) => `${key}=${shellQuote(value)}`).join(" ")}; `
       : "";
@@ -348,9 +361,9 @@ async function buildCodexCommand(params: TerminalStartParams & { vendorRoute?: V
         : extraArgs;
     return {
       file: "codex.cmd",
-      args: buildCodexArgs(args, params.vendorRoute, providerNames),
+      args: buildCodexArgs(args, route, providerNames),
       cwd: windowsCwd,
-      env: buildCodexEnvironment(params.vendorRoute, codexHome)
+      env: buildCodexEnvironment(route, codexHome)
     };
   }
 
@@ -358,23 +371,24 @@ async function buildCodexCommand(params: TerminalStartParams & { vendorRoute?: V
     await fs.mkdir(cwd, { recursive: true });
   }
 
-  const codexInvocation = buildCodexInvocation(extraArgs, params.vendorRoute, providerNames);
+  const codexInvocation = buildCodexInvocation(extraArgs, route, providerNames);
   const command = params.sessionId
-    ? `exec ${buildCodexInvocation(["resume", params.sessionId], params.vendorRoute, providerNames)}`
+    ? `exec ${buildCodexInvocation(["resume", params.sessionId], route, providerNames)}`
     : params.cwd && params.useCodexCwdFlag
-      ? `exec ${buildCodexInvocation(["-C", params.cwd, ...extraArgs], params.vendorRoute, providerNames)}`
+      ? `exec ${buildCodexInvocation(["-C", params.cwd, ...extraArgs], route, providerNames)}`
       : `exec ${codexInvocation}`;
   return {
     file: process.env.SHELL || "bash",
     args: ["-ic", command],
     cwd,
-    env: buildCodexEnvironment(params.vendorRoute, codexHome)
+    env: buildCodexEnvironment(route, codexHome)
   };
 }
 
 async function buildGeminiCommand(params: TerminalStartParams & { vendorRoute?: VendorRoute }) {
   const extraArgs = parseCliArgs(params.cliArgs || "");
   const resumeArgs = params.sessionId ? ["--resume", params.sessionId] : [];
+  const route = await withResolvedBaseUrl(params.targetId, params.vendorRoute);
   if (params.targetId.startsWith("gemini:wsl:")) {
     const distro = params.targetId.slice("gemini:wsl:".length);
     const invocation = buildShellCommand("gemini", [...resumeArgs, ...extraArgs]);
@@ -384,8 +398,8 @@ async function buildGeminiCommand(params: TerminalStartParams & { vendorRoute?: 
 
     return {
       file: "wsl.exe",
-      args: ["-d", distro, "--", "bash", "-ic", params.vendorRoute
-        ? `export GOOGLE_GEMINI_BASE_URL=${shellQuote(params.vendorRoute.baseUrl)} GEMINI_API_KEY=${shellQuote(params.vendorRoute.localToken)}; ${command}`
+      args: ["-d", distro, "--", "bash", "-ic", route
+        ? `export GOOGLE_GEMINI_BASE_URL=${shellQuote(route.baseUrl)} GEMINI_API_KEY=${shellQuote(route.localToken)}; ${command}`
         : command],
       cwd: os.homedir()
     };
@@ -399,18 +413,18 @@ async function buildGeminiCommand(params: TerminalStartParams & { vendorRoute?: 
       file: "cmd.exe",
       args: ["/d", "/s", "/c", buildCmdCommand("gemini", [...resumeArgs, ...extraArgs])],
       cwd,
-      env: params.vendorRoute ? {
-        GOOGLE_GEMINI_BASE_URL: params.vendorRoute.baseUrl,
-        GEMINI_API_KEY: params.vendorRoute.localToken
+      env: route ? {
+        GOOGLE_GEMINI_BASE_URL: route.baseUrl,
+        GEMINI_API_KEY: route.localToken
       } : undefined
     };
   }
 
   return {
     file: process.env.SHELL || "bash",
-    args: ["-ic", `exec ${buildGatewayInvocation("gemini", [...resumeArgs, ...extraArgs], params.vendorRoute, {
-      GOOGLE_GEMINI_BASE_URL: params.vendorRoute?.baseUrl || "",
-      GEMINI_API_KEY: params.vendorRoute?.localToken || ""
+    args: ["-ic", `exec ${buildGatewayInvocation("gemini", [...resumeArgs, ...extraArgs], route, {
+      GOOGLE_GEMINI_BASE_URL: route?.baseUrl || "",
+      GEMINI_API_KEY: route?.localToken || ""
     })}`],
     cwd,
     env: undefined
@@ -420,6 +434,7 @@ async function buildGeminiCommand(params: TerminalStartParams & { vendorRoute?: 
 async function buildClaudeCommand(params: TerminalStartParams & { vendorRoute?: VendorRoute }) {
   const extraArgs = parseCliArgs(params.cliArgs || "");
   const resumeArgs = params.sessionId ? ["--resume", params.sessionId] : [];
+  const route = await withResolvedBaseUrl(params.targetId, params.vendorRoute);
   if (params.targetId.startsWith("claude:wsl:")) {
     const distro = params.targetId.slice("claude:wsl:".length);
     const invocation = buildShellCommand("claude", [...resumeArgs, ...extraArgs]);
@@ -429,8 +444,8 @@ async function buildClaudeCommand(params: TerminalStartParams & { vendorRoute?: 
 
     return {
       file: "wsl.exe",
-      args: ["-d", distro, "--", "bash", "-ic", params.vendorRoute
-        ? `export ANTHROPIC_BASE_URL=${shellQuote(params.vendorRoute.baseUrl)} ANTHROPIC_AUTH_TOKEN=${shellQuote(params.vendorRoute.localToken)}; ${command}`
+      args: ["-d", distro, "--", "bash", "-ic", route
+        ? `export ANTHROPIC_BASE_URL=${shellQuote(route.baseUrl)} ANTHROPIC_AUTH_TOKEN=${shellQuote(route.localToken)}; ${command}`
         : command],
       cwd: os.homedir()
     };
@@ -444,25 +459,89 @@ async function buildClaudeCommand(params: TerminalStartParams & { vendorRoute?: 
       file: "cmd.exe",
       args: ["/d", "/s", "/c", buildCmdCommand("claude", [...resumeArgs, ...extraArgs])],
       cwd,
-      env: params.vendorRoute ? {
-        ANTHROPIC_BASE_URL: params.vendorRoute.baseUrl,
-        ANTHROPIC_AUTH_TOKEN: params.vendorRoute.localToken
+      env: route ? {
+        ANTHROPIC_BASE_URL: route.baseUrl,
+        ANTHROPIC_AUTH_TOKEN: route.localToken
       } : undefined
     };
   }
 
   return {
     file: process.env.SHELL || "bash",
-    args: ["-ic", `exec ${buildGatewayInvocation("claude", [...resumeArgs, ...extraArgs], params.vendorRoute, {
-      ANTHROPIC_BASE_URL: params.vendorRoute?.baseUrl || "",
-      ANTHROPIC_AUTH_TOKEN: params.vendorRoute?.localToken || ""
+    args: ["-ic", `exec ${buildGatewayInvocation("claude", [...resumeArgs, ...extraArgs], route, {
+      ANTHROPIC_BASE_URL: route?.baseUrl || "",
+      ANTHROPIC_AUTH_TOKEN: route?.localToken || ""
     })}`],
     cwd,
     env: undefined
   };
 }
 
+async function buildQoderCommand(params: TerminalStartParams & { vendorRoute?: VendorRoute }) {
+  const extraArgs = parseCliArgs(params.cliArgs || "");
+  const resumeArgs = params.sessionId ? ["--resume", params.sessionId] : [];
+  const cwd = params.cwd || path.join(os.homedir(), ".akim");
+  const args = [...resumeArgs, ...(params.cwd && params.useCodexCwdFlag ? ["--cwd", params.cwd] : []), ...extraArgs];
+
+  if (params.targetId.startsWith("qoder:wsl:")) {
+    const distro = params.targetId.slice("qoder:wsl:".length);
+    const command = params.cwd && !params.useCodexCwdFlag
+      ? `mkdir -p ${shellQuote(params.cwd)} && cd ${shellQuote(params.cwd)} && exec ${buildShellCommand("qodercn", args)}`
+      : `exec ${buildShellCommand("qodercn", args)}`;
+    return {
+      file: "wsl.exe",
+      args: ["-d", distro, "--", "bash", "-ic", command],
+      cwd: os.homedir()
+    };
+  }
+
+  if (process.platform === "win32") {
+    if (!params.sessionId) await fs.mkdir(cwd, { recursive: true });
+    return {
+      file: "cmd.exe",
+      args: ["/d", "/s", "/c", buildCmdCommand("qodercn", args)],
+      cwd: toWindowsShellCwd(cwd)
+    };
+  }
+
+  if (!params.sessionId) await fs.mkdir(cwd, { recursive: true });
+  return {
+    file: process.env.SHELL || "bash",
+    args: ["-ic", `exec ${buildShellCommand("qodercn", args)}`],
+    cwd
+  };
+}
+
 const CODEX_ROUTE_PROVIDER = "akim_gateway";
+
+// WSL 目标下 127.0.0.1 指向 WSL 自身而非宿主，需探测可达宿主地址后再拼路由 URL。
+// 本地（Windows/macOS/Linux 宿主）终端直接复用 route.baseUrl（已为 127.0.0.1）。
+async function resolveRouteBaseUrl(targetId: string, route?: VendorRoute) {
+  if (!route) return undefined;
+  if (targetId.startsWith("wsl:") || targetId.startsWith("gemini:wsl:") || targetId.startsWith("claude:wsl:")) {
+    const distro = extractWslDistro(targetId);
+    if (distro) {
+      const base = await resolveWslGatewayBaseUrl(distro);
+      return buildRouteUrl(base, route.providerId, route.routeId);
+    }
+  }
+  return route.baseUrl;
+}
+
+function extractWslDistro(targetId: string) {
+  if (targetId.startsWith("gemini:wsl:")) return targetId.slice("gemini:wsl:".length);
+  if (targetId.startsWith("claude:wsl:")) return targetId.slice("claude:wsl:".length);
+  if (targetId.startsWith("wsl:")) return targetId.slice("wsl:".length);
+  return "";
+}
+
+// 返回 baseUrl 已按目标环境解析的 route 副本。WSL 目标会探测宿主地址；本地目标保持原值。
+// baseUrl 未变时返回原对象，避免无谓复制。下游 buildCodexInvocation 等读取 route.baseUrl 即可获得正确地址。
+async function withResolvedBaseUrl(targetId: string, route?: VendorRoute): Promise<VendorRoute | undefined> {
+  if (!route) return undefined;
+  const baseUrl = await resolveRouteBaseUrl(targetId, route);
+  return baseUrl === route.baseUrl ? route : { ...route, baseUrl: baseUrl! };
+}
 
 function buildCodexArgs(args: string[], route?: VendorRoute, providerNames: string[] = []) {
   return [...buildCodexRouteConfigArgs(route, providerNames), ...args];

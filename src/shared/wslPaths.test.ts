@@ -17,6 +17,7 @@ describe("getWslDistroFromTargetId", () => {
   it("解析 gemini:/claude: 复合前缀", () => {
     expect(getWslDistroFromTargetId("gemini:wsl:Debian")).toBe("Debian");
     expect(getWslDistroFromTargetId("claude:wsl:Arch")).toBe("Arch");
+    expect(getWslDistroFromTargetId("qoder:wsl:Fedora")).toBe("Fedora");
   });
 
   it("非 WSL 目标返回空串", () => {

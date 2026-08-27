@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { MouseEvent, WheelEvent } from "react";
 import type {
   AiSession,
@@ -32,6 +32,7 @@ import { SessionContextMenu, TabContextMenu } from "./ContextMenus";
 import { StatusBar } from "./StatusBar";
 import { SessionList } from "./SessionList";
 import { useStableCallback } from "./useStableCallback";
+import { useDismissableOverlay } from "./useDismissableOverlay";
 import { SidebarControls } from "./SidebarControls";
 import { NoticeToast } from "./NoticeToast";
 import { SidebarHeader } from "./SidebarHeader";
@@ -42,6 +43,7 @@ import { useProviderTargets } from "./useProviderTargets";
 import { useSessionTitleDialogs } from "./useSessionTitleDialogs";
 import { useTerminalTabs } from "./useTerminalTabs";
 import { useNewSessionDialog } from "./useNewSessionDialog";
+import { captureError } from "./errorUtils";
 import { createSessionActions } from "./useSessionActions";
 import { useSessionDetails } from "./useSessionDetails";
 import { useSessionSearch } from "./useSessionSearch";
@@ -102,8 +104,8 @@ export function App() {
       setGatewayPortStatus(status);
       setGatewayPortDraft(String(status.configuredPort));
       setGatewayPortOpen(true);
-    } catch (error: any) {
-      setNotice(error?.message || "读取网关端口失败。");
+    } catch (error) {
+      setNotice(captureError(error, "getGatewayPort", "读取网关端口失败。"));
     }
   }
 
@@ -122,8 +124,8 @@ export function App() {
       setNotice(result.applied
         ? `网关端口已设置为 ${result.configuredPort === 0 ? "自动分配" : result.configuredPort}。`
         : `网关端口已保存为 ${result.configuredPort}，当前 Gateway 仍使用端口 ${result.activePort}；新建终端时生效。`);
-    } catch (error: any) {
-      setGatewayPortError(error?.message || "保存网关端口失败。");
+    } catch (error) {
+      setGatewayPortError(captureError(error, "setGatewayPort", "保存网关端口失败。"));
     } finally {
       setGatewayPortBusy(false);
     }
@@ -149,13 +151,14 @@ export function App() {
     setActiveTabKey,
     terminalIdsByTabKey,
     terminalInputStatesByTabKey,
-    resetTerminalTabs,
     activateTerminalTab,
     closeTerminalTabs,
     setTerminalInputState,
     registerTerminalReady,
     clearPendingTerminalTab
   } = useTerminalTabs({ setSelectedId });
+  const activeTab = openTabs.find((tab) => tab.key === activeTabKey) || openTabs[0] || null;
+  const activeSession = activeTab?.session || null;
 
   useEffect(() => {
     void logPerformance("renderer.mounted", performance.now());
@@ -220,6 +223,8 @@ export function App() {
   const selectedProvider = providers.find((provider) => provider.id === providerId);
   const capabilities = selectedProvider?.capabilities;
   const selectedTarget = targets.find((target) => target.id === targetId);
+  const activeTabForSelectedTarget = activeTab?.targetId === targetId ? activeTab : null;
+  const activeSessionForSelectedTarget = activeTabForSelectedTarget?.session || null;
   const {
     sessionSettingsOpen,
     setSessionSettingsOpen,
@@ -313,10 +318,8 @@ export function App() {
     selectedTarget,
     targetId,
     providerId,
-    activeTerminalId: terminalIdsByTabKey[activeTabKey]
+    activeTerminalId: activeTabForSelectedTarget ? terminalIdsByTabKey[activeTabForSelectedTarget.key] : undefined
   });
-  const activeTab = openTabs.find((tab) => tab.key === activeTabKey) || openTabs[0] || null;
-  const activeSession = activeTab?.session || null;
   const {
     detailDialogSession,
     setDetailDialogSession,
@@ -437,7 +440,7 @@ export function App() {
     purgeInstalledSkill,
     switchSkillView
   } = useSkills({ targetId, setNotice, setError });
-  const activeCwd = activeTab?.cwd || activeSession?.cwd;
+  const activeCwd = activeTabForSelectedTarget?.cwd || activeSessionForSelectedTarget?.cwd;
   const activeTerminalInputState = activeTab ? terminalInputStatesByTabKey[activeTab.key] : null;
   const canToggleTerminalInput = Boolean(activeTab && activeTerminalInputState?.composerVisible);
   const terminalInputButtonLabel = activeTerminalInputState?.mode === "composer" ? "终端输入" : "自管输入";
@@ -456,6 +459,8 @@ export function App() {
   const supportsCustomCwd = Boolean(capabilities?.customCwd);
   const supportsExport = Boolean(capabilities?.export);
   const supportsSessionSettings = Boolean(capabilities?.sessionSettings);
+  const supportsDuplicate = Boolean(capabilities?.duplicate);
+  const supportsVendorManagement = Boolean(capabilities?.vendorManagement);
   const workspaceOverlayMessage =
     workspaceBusyMessage ||
     (sessionLoading ? "正在加载会话..." : "");
@@ -499,40 +504,17 @@ export function App() {
     if (!targetId) return;
     setSelectedId("");
     resetSessionDetails();
-    resetTerminalTabs();
-    // reset 函数每次渲染重建；仅目标切换时清空终端与详情状态。
+    // 目标切换只清理当前列表和详情状态；已打开终端保留其标签快照继续运行。
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [targetId]);
 
-  useEffect(() => {
-    return window.codexConsole.onOpenSessionSettings(() => {
-      openSessionSettingsDialog();
-    });
-    // 仅在目标变化时重订阅 IPC；handler 每渲染重建，纳入会每帧重订阅
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedTarget?.id, selectedTarget?.codexHome, selectedTarget?.kind]);
-
-  useEffect(() => {
-    if (!contextMenu && !tabContextMenu) return;
-
-    const close = () => {
+  useDismissableOverlay(
+    Boolean(contextMenu || tabContextMenu),
+    useCallback(() => {
       setContextMenu(null);
       setTabContextMenu(null);
-    };
-    window.addEventListener("mousedown", close);
-    window.addEventListener("scroll", close, true);
-    window.addEventListener("keydown", onKeyDown);
-
-    function onKeyDown(event: KeyboardEvent) {
-      if (event.key === "Escape") close();
-    }
-
-    return () => {
-      window.removeEventListener("mousedown", close);
-      window.removeEventListener("scroll", close, true);
-      window.removeEventListener("keydown", onKeyDown);
-    };
-  }, [contextMenu, tabContextMenu]);
+    }, [])
+  );
 
   function updateCachedSessions(
     nextTargetId: string,
@@ -661,7 +643,17 @@ export function App() {
     }
 
     const key = tabKey(targetId, session.id);
-    activateTerminalTab({ key, targetId, session, title: historyTabTitle(session) });
+    const requiresSessionCwd = selectedTarget?.provider === "qoder";
+    activateTerminalTab({
+      key,
+      targetId,
+      session,
+      title: historyTabTitle(session),
+      // Qoder 按项目目录定位 --resume 的历史文件，恢复时必须保留原始工作目录。
+      cwd: requiresSessionCwd ? sessionCwd : undefined,
+      codexHome: selectedTarget?.codexHome,
+      useCodexCwdFlag: requiresSessionCwd
+    });
     setError("");
     setNotice("");
   }
@@ -694,6 +686,7 @@ export function App() {
     if (!nextTargetId) return;
     const index = newSessionIndex;
     const key = `new:${nextTargetId}:${Date.now()}:${index}`;
+    const nextTarget = targets.find((target) => target.id === nextTargetId);
     const usesDefaultCwd = cwd === DEFAULT_NEW_SESSION_CWD;
     const displayTitle = customTitle.trim() || (index === 1 ? "新会话" : `新会话 ${index}`);
     setNewSessionIndex(index + 1);
@@ -703,6 +696,7 @@ export function App() {
         targetId: nextTargetId,
         title: displayTitle,
         cwd: usesDefaultCwd ? undefined : cwd,
+        codexHome: nextTarget?.codexHome,
         useCodexCwdFlag: !usesDefaultCwd,
         prompt: prompt.trim() || undefined,
         cliArgs: cliArgs.trim() || undefined,
@@ -718,7 +712,15 @@ export function App() {
 
   function openResumeSessionWithDirectory(session: AiSession, cwd: string) {
     const key = tabKey(targetId, session.id);
-    activateTerminalTab({ key, targetId, session, title: historyTabTitle(session), cwd, useCodexCwdFlag: true });
+    activateTerminalTab({
+      key,
+      targetId,
+      session,
+      title: historyTabTitle(session),
+      cwd,
+      codexHome: selectedTarget?.codexHome,
+      useCodexCwdFlag: true
+    });
     setError("");
     setNotice("");
   }
@@ -727,7 +729,13 @@ export function App() {
     const key = tabKey(targetId, session.id);
     setView("active");
     setDetailDialogSession(null);
-    activateTerminalTab({ key, targetId, session, title: historyTabTitle(session) }, true);
+    activateTerminalTab({
+      key,
+      targetId,
+      session,
+      title: historyTabTitle(session),
+      codexHome: selectedTarget?.codexHome
+    }, true);
     setError("");
     setNotice("已创建新的分支会话。");
   }
@@ -762,6 +770,7 @@ export function App() {
     event.stopPropagation();
     const workspace = workspaceRef.current;
     const menuWidth = 132;
+    // 菜单高度用于边界裁剪避免溢出窗口；值略大于实际菜单高度以留出余量。
     const menuHeight = 114;
     const gap = 8;
     const bounds = workspace?.getBoundingClientRect();
@@ -846,6 +855,7 @@ export function App() {
     supportsSkills,
     supportsSessionSettings,
     supportsExport,
+    supportsVendorManagement,
     hasTarget: Boolean(targetId),
     isWslTarget: selectedTarget?.kind === "wsl",
     hasActiveSession: Boolean(activeSession),
@@ -903,7 +913,7 @@ export function App() {
           sessions={filtered}
           loading={sessionLoading || searchLoading}
           emptyMessage={searchQuery ? "未找到匹配会话。" : view === "trash" ? "回收站为空。" : "未找到会话。"}
-          activeSessionId={activeSession?.id}
+          activeSessionId={activeSessionForSelectedTarget?.id}
           selectedId={selected?.id}
           selectedBatchIds={selectedBatchIds}
           onContextMenu={handleSessionContextMenu}
@@ -918,7 +928,7 @@ export function App() {
           workspaceRef={workspaceRef}
           sidebarCollapsed={sidebarCollapsed}
           activeTitle={activeTitle}
-          activeSession={activeSession}
+          activeSession={activeSessionForSelectedTarget}
           providerId={providerId}
           targetId={targetId}
           onToggleSidebar={() => setSidebarCollapsed((current) => !current)}
@@ -934,7 +944,6 @@ export function App() {
           }}
           onTabContextMenu={openTerminalTabContextMenu}
           onCloseTab={closeSessionTab}
-          targets={targets}
           focusRequest={workspaceFocusRequest}
           terminalInputStates={terminalInputStatesByTabKey}
           onTerminalReady={handleTerminalReady}
@@ -968,7 +977,7 @@ export function App() {
           <SessionContextMenu
             menu={contextMenu}
             supportsTrash={supportsTrash}
-            canDuplicate={contextMenu.view === "active"}
+            canDuplicate={contextMenu.view === "active" && supportsDuplicate}
             onRename={() => openRenameSession(contextMenu.session)}
             onDuplicate={() => openDuplicateSession(contextMenu.session)}
             onOpenFolder={() =>

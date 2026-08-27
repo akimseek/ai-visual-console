@@ -20,6 +20,7 @@ export function createAppMenus({
   supportsSkills,
   supportsSessionSettings,
   supportsExport,
+  supportsVendorManagement,
   hasTarget,
   isWslTarget,
   hasActiveSession,
@@ -28,6 +29,7 @@ export function createAppMenus({
   supportsSkills: boolean;
   supportsSessionSettings: boolean;
   supportsExport: boolean;
+  supportsVendorManagement: boolean;
   hasTarget: boolean;
   isWslTarget: boolean;
   hasActiveSession: boolean;
@@ -60,7 +62,7 @@ export function createAppMenus({
       id: "toolbox",
       label: "工具箱",
       items: [
-        { label: "供应商管理", disabled: !hasTarget, action: actions.manageVendors },
+        { label: "供应商管理", disabled: !supportsVendorManagement || !hasTarget, action: actions.manageVendors },
         { label: "压缩提示", action: actions.manageCompressionPrompts }
       ]
     },

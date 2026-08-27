@@ -12,6 +12,7 @@ import type {
 import * as codexTargets from "./codexTargets";
 import * as geminiProvider from "./geminiProvider";
 import * as claudeProvider from "./claudeProvider";
+import * as qoderProvider from "./qoderProvider";
 import { applySessionMetadata, deleteSessionMetadata, setSessionCustomTitle } from "./sessionMetadata";
 
 export type SessionView = "active" | "trash";
@@ -51,7 +52,9 @@ const codexProvider: AiProvider = {
     batchActions: true,
     customCwd: true,
     export: true,
-    sessionSettings: true
+    sessionSettings: true,
+    duplicate: true,
+    vendorManagement: true
   },
   listCachedTargets: codexTargets.listCachedTargets,
   listTargets: codexTargets.listTargets,
@@ -84,7 +87,9 @@ const geminiAiProvider: AiProvider = {
     batchActions: true,
     customCwd: true,
     export: true,
-    sessionSettings: false
+    sessionSettings: false,
+    duplicate: true,
+    vendorManagement: true
   },
   listCachedTargets: geminiProvider.listCachedTargets,
   listTargets: geminiProvider.listTargets,
@@ -117,7 +122,9 @@ const claudeAiProvider: AiProvider = {
     batchActions: true,
     customCwd: true,
     export: true,
-    sessionSettings: false
+    sessionSettings: false,
+    duplicate: true,
+    vendorManagement: true
   },
   listCachedTargets: claudeProvider.listCachedTargets,
   listTargets: claudeProvider.listTargets,
@@ -139,7 +146,42 @@ const claudeAiProvider: AiProvider = {
   purgeSessions: claudeProvider.purgeSessions
 };
 
-const providers: AiProvider[] = [codexProvider, geminiAiProvider, claudeAiProvider];
+const qoderAiProvider: AiProvider = {
+  id: "qoder",
+  label: "Qoder CN",
+  capabilities: {
+    skills: false,
+    branch: false,
+    usage: true,
+    trash: false,
+    batchActions: false,
+    customCwd: true,
+    export: true,
+    sessionSettings: false,
+    duplicate: false,
+    vendorManagement: false
+  },
+  listCachedTargets: qoderProvider.listCachedTargets,
+  listTargets: qoderProvider.listTargets,
+  listCachedSessions: qoderProvider.listCachedSessions,
+  listSessions: qoderProvider.listSessions,
+  listTrashSessions: qoderProvider.listTrashSessions,
+  searchSessions: qoderProvider.searchSessions,
+  getSession: qoderProvider.getSession,
+  getSessionMessagesPage: qoderProvider.getSessionMessagesPage,
+  getSessionSummary: qoderProvider.getSessionSummary,
+  listSessionsByParent: qoderProvider.listSessionsByParent,
+  getSessionFolderPath: qoderProvider.getSessionFolderPath,
+  branchSession: qoderProvider.branchSession,
+  duplicateSession: qoderProvider.duplicateSession,
+  deleteSession: qoderProvider.deleteSession,
+  deleteSessions: qoderProvider.deleteSessions,
+  restoreSession: qoderProvider.restoreSession,
+  purgeSession: qoderProvider.purgeSession,
+  purgeSessions: qoderProvider.purgeSessions
+};
+
+const providers: AiProvider[] = [codexProvider, geminiAiProvider, claudeAiProvider, qoderAiProvider];
 
 export function listAiProviders() {
   return providers;
@@ -252,6 +294,7 @@ export const clearWslCodexHome = codexTargets.clearWslCodexHome;
 function getProviderIdFromTargetId(targetId: string): AiProviderId {
   if (targetId.startsWith("gemini:")) return "gemini";
   if (targetId.startsWith("claude:")) return "claude";
+  if (targetId.startsWith("qoder:")) return "qoder";
   if (targetId.startsWith("codex:")) return "codex";
   return "codex";
 }

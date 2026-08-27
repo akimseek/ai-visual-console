@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import type { AiProviderId, AiTarget } from "./types";
 import type { SessionView } from "./useSessionLoader";
+import { captureError } from "./errorUtils";
 
 export function useSessionSettings({
   selectedTarget,
@@ -50,8 +51,8 @@ export function useSessionSettings({
       setNotice("WSL Codex 目录已保存。");
       setSessionSettingsOpen(false);
       await refreshWslTarget(distro);
-    } catch (error: any) {
-      setNotice(error?.message || "保存 WSL Codex 目录失败。");
+    } catch (error) {
+      setNotice(captureError(error, "configureWslCodexHome", "保存 WSL Codex 目录失败。"));
     }
   }
 
@@ -65,8 +66,8 @@ export function useSessionSettings({
       setNotice("已恢复自动探测会话目录。");
       setSessionSettingsOpen(false);
       await refreshWslTarget(distro);
-    } catch (error: any) {
-      setNotice(error?.message || "恢复自动探测失败。");
+    } catch (error) {
+      setNotice(captureError(error, "clearWslCodexHome", "恢复自动探测失败。"));
     }
   }
 

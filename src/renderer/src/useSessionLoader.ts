@@ -1,5 +1,6 @@
 import { useCallback, useRef, type Dispatch, type SetStateAction } from "react";
 import type { AiSession } from "./types";
+import { captureError } from "./errorUtils";
 
 export type SessionView = "active" | "trash";
 export type SessionCacheKey = `${string}:${SessionView}`;
@@ -61,7 +62,8 @@ export function useSessionLoader({
           setSessionLoading(false);
           return;
         }
-      } catch {
+      } catch (error) {
+        captureError(error, `loadCachedSessions:${nextTargetId}`);
         void logPerformance(`renderer.sessions.${nextView}.cached.${nextTargetId}`, performance.now() - startedAt, "error");
       }
     }
@@ -77,13 +79,13 @@ export function useSessionLoader({
       setLoadedViews((current) => ({ ...current, [cacheKey]: true }));
       setSelectedId((current) => (sessions.some((item) => item.id === current) ? current : ""));
       void logPerformance(`renderer.sessions.${nextView}.loaded.${nextTargetId}`, performance.now() - startedAt);
-    } catch (error: any) {
+    } catch (error) {
       if (!isCurrent()) return;
       if (!hasCachedSessions) {
         setSessionCache((current) => ({ ...current, [cacheKey]: [] }));
         setLoadedViews((current) => ({ ...current, [cacheKey]: true }));
         setSelectedId("");
-        setError(error?.message || "加载 AI 会话失败。");
+        setError(captureError(error, `loadSessions:${nextTargetId}`, "加载 AI 会话失败。"));
       }
       void logPerformance(`renderer.sessions.${nextView}.loaded.${nextTargetId}`, performance.now() - startedAt, "error");
     } finally {

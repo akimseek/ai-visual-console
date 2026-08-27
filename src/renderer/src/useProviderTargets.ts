@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { AiProviderId, AiProviderSummary, AiTarget } from "./types";
+import { captureError } from "./errorUtils";
 
 type LoadTargetOptions = {
   showLoading?: boolean;
@@ -30,9 +31,11 @@ export function useProviderTargets({ setError, logPerformance }: UseProviderTarg
       if (providerIdRef.current !== nextProviderId) return;
       applyTargets(items);
       void logPerformance(`targets.fresh.loaded.${nextProviderId}`, performance.now() - startedAt);
-    } catch (loadError: any) {
+    } catch (loadError) {
       void logPerformance(`targets.fresh.loaded.${nextProviderId}`, performance.now() - startedAt, "error");
-      if (providerIdRef.current === nextProviderId) setError(loadError?.message || "加载 AI 平台目标失败。");
+      if (providerIdRef.current === nextProviderId) {
+        setError(captureError(loadError, `loadTargets:${nextProviderId}`, "加载 AI 平台目标失败。"));
+      }
     }
   }, [applyTargets, logPerformance, setError]);
 
@@ -49,7 +52,8 @@ export function useProviderTargets({ setError, logPerformance }: UseProviderTarg
         hasCachedTargets = true;
         applyTargets(cachedTargets);
       }
-    } catch {
+    } catch (error) {
+      captureError(error, `loadCachedTargets:${nextProviderId}`);
       void logPerformance(`targets.cached.loaded.${nextProviderId}`, performance.now() - cachedStartedAt, "error");
     }
 
@@ -68,8 +72,8 @@ export function useProviderTargets({ setError, logPerformance }: UseProviderTarg
       setError("");
       try {
         setProviders(await window.codexConsole.listProviders());
-      } catch (loadError: any) {
-        setError(loadError?.message || "加载 AI 平台失败。");
+      } catch (loadError) {
+        setError(captureError(loadError, "loadProviders", "加载 AI 平台失败。"));
       }
     };
     void loadProviders();
