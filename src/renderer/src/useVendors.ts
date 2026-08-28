@@ -6,7 +6,6 @@ import {
   buildVendorDraft,
   createEmptyVendorDraft,
   prepareVendorDraftForSave,
-  shouldApplyVendorConfigAfterSave,
   validateVendorDraft,
   vendorToDraft,
   type ApiVendorDraft,
@@ -21,12 +20,10 @@ export function useVendors({
   selectedTarget,
   targetId,
   providerId,
-  activeTerminalId
 }: {
   selectedTarget: AiTarget | undefined;
   targetId: string;
   providerId: AiProviderId | "";
-  activeTerminalId?: string;
 }) {
   const [vendorManagerOpen, setVendorManagerOpen] = useState(false);
   const [vendorManagerMode, setVendorManagerMode] = useState<"list" | "form">("list");
@@ -37,6 +34,8 @@ export function useVendors({
   const [vendorFieldErrors, setVendorFieldErrors] = useState<VendorFieldErrors>({});
   const [vendorMessage, setVendorMessage] = useState("");
   const [vendorToast, setVendorToast] = useState<VendorToast>(null);
+  const [refreshingVendorIds, setRefreshingVendorIds] = useState<string[]>([]);
+  const [refreshingAllBalances, setRefreshingAllBalances] = useState(false);
 
   useEffect(() => {
     if (!vendorToast) return;
@@ -53,8 +52,8 @@ export function useVendors({
     await loadApiVendors();
   }
 
-  async function loadApiVendors() {
-    setVendorBusy("正在加载供应商...");
+  async function loadApiVendors(showBusy = true) {
+    if (showBusy) setVendorBusy("正在加载供应商...");
     setVendorError("");
     try {
       const list = await window.codexConsole.listApiVendors(selectedTarget?.id || targetId);
@@ -63,7 +62,7 @@ export function useVendors({
     } catch (error: unknown) {
       setVendorError(captureError(error, "loadVendor"));
     } finally {
-      setVendorBusy("");
+      if (showBusy) setVendorBusy("");
     }
   }
 
@@ -80,37 +79,13 @@ export function useVendors({
     setVendorFieldErrors({});
     setVendorMessage("");
     try {
-      const wasEnabled = Boolean(vendorDraft.id && vendors.some((vendor) => vendor.id === vendorDraft.id && vendor.enabled));
-      const shouldApplyConfig = shouldApplyVendorConfigAfterSave(vendorDraft, vendors);
       const saved = await window.codexConsole.saveApiVendor(prepareVendorDraftForSave(vendorDraft));
-      let switched = false;
-      let switchReason: string | undefined;
-      if (shouldApplyConfig) {
-        const result = await window.codexConsole.enableApiVendor({
-          vendorId: saved.id,
-          targetId: selectedTarget?.id || targetId || undefined,
-          terminalId: activeTerminalId
-        });
-        switched = result.switched === true;
-        switchReason = result.switchReason;
-      }
       const list = await window.codexConsole.listApiVendors(selectedTarget?.id || targetId);
       setVendors(list);
       setVendorDraft(vendorToDraft(list.find((vendor) => vendor.id === saved.id) || saved));
       setVendorManagerMode("list");
-      const encryptionAvailable = await window.codexConsole.isApiKeyEncryptionAvailable().catch(() => true);
-      const baseMessage = wasEnabled
-        ? switched
-          ? "供应商已保存，当前终端路由已切换；已发出的请求按原供应商处理，后续请求使用新供应商。"
-          : switchReason === "gateway-not-active"
-            ? "供应商已保存；当前终端未接入本地 Gateway，请关闭并重新打开一次，之后可直接切换。"
-            : "供应商已保存并更新当前配置。"
-        : shouldApplyConfig ? "供应商已保存并启用。" : "供应商已保存。";
-      setVendorMessage(
-        encryptionAvailable
-          ? baseMessage
-          : `${baseMessage} ⚠ 当前系统不可用安全存储，API Key 以明文形式保存在本地，请谨慎使用。`
-      );
+      const baseMessage = "供应商已保存。候选池状态和费率配置已立即生效。";
+      setVendorMessage(baseMessage);
     } catch (error: unknown) {
       setVendorError(captureError(error, "saveVendor"));
     } finally {
@@ -130,7 +105,9 @@ export function useVendors({
         name: "",
         apiKey: "",
         apiBaseUrl: "",
-        writeCommonConfig: false,
+        pricing: {},
+        enabled: true,
+        sort: vendors.reduce((max, item) => Math.max(max, item.sort), 0) + 1,
         configs: []
       });
     setVendorDraft(base);
@@ -149,6 +126,8 @@ export function useVendors({
   }
 
   async function loadVendorConfigPreview(sourceDraft: ApiVendorDraft) {
+    // 新建供应商没有现成文件可预览，避免打开表单时无意义地调用 WSL。
+    if (!sourceDraft.id) return;
     setVendorError("");
     try {
       const result = await window.codexConsole.readApiVendorConfigs({
@@ -190,29 +169,47 @@ export function useVendors({
     }
   }
 
-  async function enableVendorById(vendorId: string) {
-    setVendorBusy("正在启用供应商...");
+  async function setVendorEnabledById(vendorId: string, enabled: boolean) {
     setVendorError("");
-    setVendorMessage("");
     try {
-      const result = await window.codexConsole.enableApiVendor({
-        vendorId,
-        targetId: selectedTarget?.id || targetId || undefined,
-        terminalId: activeTerminalId
-      });
-      const switched = result.switched === true;
-      await loadApiVendors();
-      setVendorMessage(
-        switched
-          ? `供应商已启用，写入 ${result.written.length} 个配置文件；当前终端路由已切换，后续请求使用新供应商。已发出的请求按原供应商处理。`
-          : result.switchReason === "gateway-not-active"
-            ? `供应商已启用，写入 ${result.written.length} 个配置文件；当前终端未接入本地 Gateway，请关闭并重新打开一次，之后可直接切换。磁盘中的真实 Key 作为 fallback 保留。`
-            : `供应商已启用，写入 ${result.written.length} 个配置文件；新终端将使用该供应商。磁盘中的真实 Key 作为 fallback 保留。`
-      );
+      await window.codexConsole.setApiVendorEnabled(vendorId, enabled);
+      await loadApiVendors(false);
     } catch (error: unknown) {
-      setVendorError(captureError(error, "enableVendor"));
+      setVendorError(captureError(error, "setVendorEnabled"));
+    }
+  }
+
+  async function refreshVendorBalanceById(vendorId: string) {
+    if (refreshingAllBalances || refreshingVendorIds.includes(vendorId)) return;
+    setVendorError("");
+    setRefreshingVendorIds((current) => [...current, vendorId]);
+    setVendors((current) => current.map((vendor) => vendor.id === vendorId
+      ? { ...vendor, balanceStatus: "loading", balanceError: undefined }
+      : vendor));
+    try {
+      const result = await window.codexConsole.refreshVendorBalance(vendorId);
+      await loadApiVendors(false);
+      setVendorMessage(result.ok ? "供应商余额已更新。" : `余额刷新失败：${result.message || "未知错误"}`);
+    } catch (error: unknown) {
+      setVendorError(captureError(error, "refreshBalance"));
     } finally {
-      setVendorBusy("");
+      setRefreshingVendorIds((current) => current.filter((id) => id !== vendorId));
+    }
+  }
+
+  async function refreshAllVendorBalances() {
+    if (refreshingAllBalances || refreshingVendorIds.length > 0) return;
+    setVendorError("");
+    setRefreshingAllBalances(true);
+    setVendors((current) => current.map((vendor) => ({ ...vendor, balanceStatus: "loading", balanceError: undefined })));
+    try {
+      const result = await window.codexConsole.refreshVendorBalances();
+      await loadApiVendors(false);
+      setVendorMessage(`余额刷新完成：成功 ${result.succeeded} 个，失败 ${result.failed} 个。`);
+    } catch (error: unknown) {
+      setVendorError(captureError(error, "refreshBalances"));
+    } finally {
+      setRefreshingAllBalances(false);
     }
   }
 
@@ -230,11 +227,16 @@ export function useVendors({
     setVendorFieldErrors,
     vendorMessage,
     vendorToast,
+    loadApiVendors,
     openVendorManager,
     editVendorDraft,
     changeVendorDraftProvider,
     saveVendorDraft,
     deleteVendorById,
-    enableVendorById
+    setVendorEnabledById,
+    refreshVendorBalanceById,
+    refreshAllVendorBalances,
+    refreshingVendorIds,
+    refreshingAllBalances
   };
 }

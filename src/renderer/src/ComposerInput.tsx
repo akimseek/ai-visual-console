@@ -37,6 +37,7 @@ type ComposerInputProps = {
   onModelSelect?: (modelId: string) => void;
   modelSelectionSupported?: boolean;
   vendors: ApiVendor[];
+  targetId: string;
   placeholder?: string;
 };
 
@@ -61,6 +62,7 @@ export function ComposerInput({
   onModelSelect,
   modelSelectionSupported = true,
   vendors,
+  targetId,
   placeholder = "按 ALT + ENTER 换行"
 }: ComposerInputProps) {
   const [attachments, setAttachments] = useState<ComposerAttachment[]>([]);
@@ -77,9 +79,10 @@ export function ComposerInput({
   const dropdownRef = useRef<HTMLDivElement | null>(null);
 
   const enabledVendor = vendors.find((v) => v.enabled) || vendors[0];
+  const isQoderTarget = targetId.startsWith("qoder:");
 
   useEffect(() => {
-    if (!enabledVendor) {
+    if (!isQoderTarget && !enabledVendor) {
       setModels([]);
       setModelsError("");
       return;
@@ -87,11 +90,16 @@ export function ComposerInput({
     let cancelled = false;
     setModelsLoading(true);
     setModelsError("");
-    window.codexConsole.listVendorModels(enabledVendor.id)
+    setModels([]);
+    setSelectedModelId("");
+    const request = isQoderTarget
+      ? window.codexConsole.listModels(targetId)
+      : window.codexConsole.listVendorModels(enabledVendor!.id);
+    request
       .then((result) => {
         if (!cancelled) {
           setModels(result);
-          if (!selectedModelId && result.length > 0) {
+          if (result.length > 0) {
             setSelectedModelId(result[0].id);
           }
         }
@@ -107,7 +115,7 @@ export function ComposerInput({
       });
     return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [enabledVendor?.id]);
+  }, [targetId, isQoderTarget, enabledVendor?.id]);
 
   useEffect(() => {
     if (!modelDropdownOpen) return;

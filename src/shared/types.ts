@@ -121,12 +121,85 @@ export type ApiVendor = {
   name: string;
   apiKey: string;
   apiBaseUrl: string;
-  writeCommonConfig?: boolean;
+  sort: number;
+  pricing?: VendorPricing;
   configs: ApiVendorConfigTemplate[];
   enabled?: boolean;
   createdAt: string;
   updatedAt: string;
   lastEnabledAt?: string;
+  balance?: VendorBalanceSnapshot;
+  balanceStatus?: VendorBalanceStatus;
+  balanceError?: string;
+  balanceQueriedAt?: string;
+  gatewayHealth?: GatewayVendorHealth;
+};
+
+export type VendorBalanceProtocol = "generic" | "new-api";
+
+export type VendorBalanceStatus = "idle" | "loading" | "success" | "error";
+
+export type VendorBalanceSnapshot = {
+  remaining?: number;
+  total?: number;
+  used?: number;
+  unit?: string;
+  planName?: string;
+  isValid: boolean;
+};
+
+export type VendorBalanceRefreshResult = {
+  vendorId: string;
+  ok: boolean;
+  balance?: VendorBalanceSnapshot;
+  message?: string;
+  queriedAt: string;
+  latencyMs: number;
+};
+
+export type VendorBalanceBatchResult = {
+  items: VendorBalanceRefreshResult[];
+  succeeded: number;
+  failed: number;
+};
+
+export type GatewayVendorHealthStatus = "healthy" | "degraded" | "open" | "half-open";
+
+export type GatewayVendorHealth = {
+  vendorId: string;
+  providerId: AiProviderId;
+  status: GatewayVendorHealthStatus;
+  failureCount: number;
+  successCount: number;
+  failureRate: number;
+  lastFailureAt?: string;
+  lastSuccessAt?: string;
+  circuitUntil?: string;
+  lastFailureReason?: string;
+};
+
+export type ApiVendorEnabledResult = {
+  vendorId: string;
+  enabled: boolean;
+};
+
+export type GatewayUsage = {
+  model?: string;
+  inputTokens?: number;
+  outputTokens?: number;
+  cachedInputTokens?: number;
+  reasoningTokens?: number;
+  totalTokens?: number;
+  costUsd?: number;
+};
+
+export type GatewayUsageSummary = GatewayUsage & {
+  requestCount: number;
+  successCount: number;
+  failureCount: number;
+  switchedCount: number;
+  periodStart: string;
+  periodEnd: string;
 };
 
 export type ApiVendorInput = {
@@ -135,8 +208,16 @@ export type ApiVendorInput = {
   name: string;
   apiKey: string;
   apiBaseUrl: string;
-  writeCommonConfig?: boolean;
+  sort?: number;
+  pricing?: VendorPricing;
+  enabled?: boolean;
   configs: ApiVendorConfigTemplate[];
+};
+
+/** 供应商按百万 token 计价的美元费率。空值表示尚未配置。 */
+export type VendorPricing = {
+  inputPerMillionUsd?: number;
+  outputPerMillionUsd?: number;
 };
 
 export type ApiVendorConfigReadRequest = {
@@ -230,6 +311,9 @@ export type AppCommand =
 export type GatewayPortStatus = {
   configuredPort: number;
   activePort: number;
+  configuredFailureThreshold: number;
+  configuredCircuitFailureThreshold: number;
+  configuredCircuitDurationSeconds: number;
 };
 
 export type GatewayPortUpdateResult = GatewayPortStatus & {
@@ -293,6 +377,17 @@ export type SessionBranchParams = {
 export type TerminalStartRequest = TerminalStartParams & {
   cols?: number;
   rows?: number;
+};
+
+export type TerminalStartResult = {
+  terminalId: string;
+  vendorId?: string;
+};
+
+export type GatewayVendorSwitchEvent = {
+  terminalId: string;
+  vendorId: string;
+  reason: "manual" | "candidate-pool" | "failure";
 };
 
 export type SystemTerminalKind =

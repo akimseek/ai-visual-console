@@ -4,11 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import type { ApiVendorInput } from "./types";
 
-// vendorManager 是安全敏感模块：API Key 经 safeStorage 加密落盘、配置写入受路径白名单约束。
-// 这里 mock electron 的 safeStorage（用可逆前缀模拟加解密）和 node:sqlite，
-// 并把 os.homedir 指向临时目录，以覆盖加解密往返、去重、过滤排序、启用模板渲染与备份等关键路径。
-
-const electronMock = vi.hoisted(() => ({ encryptionAvailable: true }));
+// 供应商 API Key 按要求以明文保存在 SQLite；这里仅 mock node:sqlite，覆盖保存、排序、模板渲染和备份路径。
 const sqliteMock = vi.hoisted(() => {
   type MockVendorRow = Record<string, any>;
   type MockDatabaseState = {
@@ -34,10 +30,10 @@ const sqliteMock = vi.hoisted(() => {
       if (sql.startsWith("SELECT * FROM api_vendors WHERE provider_id = ?")) {
         return this.state.vendors
           .filter((vendor) => vendor.provider_id === params[0])
-          .sort((left, right) => Date.parse(right.updated_at) - Date.parse(left.updated_at));
+          .sort((left, right) => (left.sort ?? 0) - (right.sort ?? 0) || Date.parse(left.created_at) - Date.parse(right.created_at));
       }
-      if (sql.startsWith("SELECT * FROM api_vendors ORDER BY updated_at DESC")) {
-        return [...this.state.vendors].sort((left, right) => Date.parse(right.updated_at) - Date.parse(left.updated_at));
+      if (sql.startsWith("SELECT * FROM api_vendors ORDER BY sort ASC")) {
+        return [...this.state.vendors].sort((left, right) => (left.sort ?? 0) - (right.sort ?? 0) || Date.parse(left.created_at) - Date.parse(right.created_at));
       }
       if (sql.startsWith("SELECT * FROM api_vendor_configs WHERE vendor_id = ?")) {
         return this.state.configs
@@ -54,6 +50,12 @@ const sqliteMock = vi.hoisted(() => {
       if (sql.startsWith("SELECT id FROM api_vendors WHERE name_norm = ? AND id <> ?")) {
         return this.state.vendors.find((vendor) => vendor.name_norm === params[0] && vendor.id !== params[1]);
       }
+      if (sql.startsWith("SELECT id FROM api_vendors WHERE sort = ? AND id <> ?")) {
+        return this.state.vendors.find((vendor) => vendor.sort === params[0] && vendor.id !== params[1]);
+      }
+      if (sql.startsWith("SELECT MAX(sort) AS max_sort FROM api_vendors")) {
+        return { max_sort: this.state.vendors.reduce((max, vendor) => Math.max(max, Number(vendor.sort) || 0), 0) || null };
+      }
       throw new Error(`Unsupported get SQL: ${sql}`);
     }
     run(...params: unknown[]) {
@@ -65,13 +67,14 @@ const sqliteMock = vi.hoisted(() => {
           name: params[2],
           name_norm: params[3],
           api_key: params[4],
-          api_key_encrypted: params[5],
-          api_base_url: params[6],
-          write_common_config: params[7],
-          enabled: params[8],
-          created_at: params[9],
-          updated_at: params[10],
-          last_enabled_at: params[11]
+          api_base_url: params[5],
+          input_price_usd: params[6],
+          output_price_usd: params[7],
+          sort: params[8],
+          enabled: params[9],
+          created_at: params[10],
+          updated_at: params[11],
+          last_enabled_at: params[12]
         };
         this.state.vendors = [row, ...this.state.vendors.filter((vendor) => vendor.id !== row.id)];
         return { changes: 1, lastInsertRowid: 0 };
@@ -128,18 +131,6 @@ const sqliteMock = vi.hoisted(() => {
   return { databases, MockDatabaseSync };
 });
 
-vi.mock("electron", () => ({
-  safeStorage: {
-    isEncryptionAvailable: () => electronMock.encryptionAvailable,
-    encryptString: (value: string) => Buffer.from(`enc:${value}`, "utf8"),
-    decryptString: (buffer: Buffer) => {
-      const text = buffer.toString("utf8");
-      if (!text.startsWith("enc:")) throw new Error("解密失败");
-      return text.slice(4);
-    }
-  }
-}));
-
 vi.mock("node:sqlite", () => ({
   DatabaseSync: sqliteMock.MockDatabaseSync
 }));
@@ -147,7 +138,6 @@ vi.mock("node:sqlite", () => ({
 import {
   deleteApiVendor,
   enableApiVendor,
-  isApiKeyEncryptionAvailable,
   listApiVendorSummaries,
   listApiVendors,
   saveApiVendor,
@@ -164,7 +154,6 @@ function vendorInput(overrides: Partial<ApiVendorInput> = {}): ApiVendorInput {
     name: "My Vendor",
     apiKey: "sk-secret-123",
     apiBaseUrl: "https://api.example.com",
-    writeCommonConfig: false,
     configs: [
       {
         providerId: "codex",
@@ -188,7 +177,6 @@ beforeEach(async () => {
   await fs.mkdir(homeDir, { recursive: true });
   vi.spyOn(os, "homedir").mockReturnValue(homeDir);
   setVendorDatabasePath(dbPath, path.join(workDir, "backups"));
-  electronMock.encryptionAvailable = true;
 });
 
 afterEach(async () => {
@@ -197,51 +185,19 @@ afterEach(async () => {
   await fs.rm(workDir, { recursive: true, force: true });
 });
 
-describe("saveApiVendor + listApiVendors（加密往返）", () => {
-  it("加密可用时：落盘为密文且标记 encrypted，读取后解密还原明文", async () => {
+describe("saveApiVendor + listApiVendors（明文 API Key）", () => {
+  it("落盘并读取明文 API Key", async () => {
     const saved = await saveApiVendor(vendorInput());
     expect(saved.apiKey).toBe("sk-secret-123");
 
     const store = readDbStore();
     expect(store.vendors).toHaveLength(1);
-    expect(store.vendors[0].api_key_encrypted).toBe(1);
-    // 落盘的是 base64(enc:明文)，绝不能是明文
-    expect(store.vendors[0].api_key).not.toContain("sk-secret-123");
-    expect(Buffer.from(store.vendors[0].api_key, "base64").toString("utf8")).toBe("enc:sk-secret-123");
+    expect(store.vendors[0].api_key).toBe("sk-secret-123");
 
     const listed = await listApiVendors();
     expect(listed[0].apiKey).toBe("sk-secret-123");
   });
 
-  it("加密不可用时：明文落盘并标记 encrypted=false", async () => {
-    electronMock.encryptionAvailable = false;
-    await saveApiVendor(vendorInput());
-    const store = readDbStore();
-    expect(store.vendors[0].api_key_encrypted).toBe(0);
-    expect(store.vendors[0].api_key).toBe("sk-secret-123");
-  });
-
-  it("密文损坏（非法 base64/前缀）时解密失败回退为空串，不抛出", async () => {
-    sqliteMock.databases.set(dbPath, {
-      vendors: [{
-        id: "x",
-        provider_id: "codex",
-        name: "坏",
-        name_norm: "坏",
-        api_key: "@@@",
-        api_key_encrypted: 1,
-        api_base_url: "https://api.example.com",
-        write_common_config: 0,
-        enabled: 0,
-        created_at: "2024-01-01T00:00:00Z",
-        updated_at: "2024-01-01T00:00:00Z",
-        last_enabled_at: null
-      }],
-      configs: []
-    });
-    const listed = await listApiVendors();
-    expect(listed[0].apiKey).toBe("");
-  });
 });
 
 describe("saveApiVendor 校验与规范化", () => {
@@ -267,13 +223,29 @@ describe("saveApiVendor 校验与规范化", () => {
       saveApiVendor(vendorInput({ configs: [{ providerId: "codex", enabled: true, targetPath: "~/.codex/../../etc/passwd", content: "x" }] }))
     ).rejects.toThrow("不在允许范围");
   });
+
+  it("新供应商未指定排序时取当前最大值加一，重复排序值会拒绝", async () => {
+    const first = await saveApiVendor(vendorInput({ name: "排序一", sort: 4 }));
+    const second = await saveApiVendor(vendorInput({ name: "排序二" }));
+    expect(first.sort).toBe(4);
+    expect(second.sort).toBe(5);
+    await expect(saveApiVendor(vendorInput({ name: "重复排序", sort: 4 }))).rejects.toThrow("排序值 4 已被占用");
+  });
 });
 
 describe("listApiVendors 过滤与排序", () => {
-  it("按 target.provider 过滤，并按 updatedAt 倒序", async () => {
-    await saveApiVendor(vendorInput({ name: "Codex 老", providerId: "codex" }));
+  it("保存并读取供应商费率", async () => {
+    await saveApiVendor(vendorInput({
+      pricing: { inputPerMillionUsd: 1.25, outputPerMillionUsd: 4.5 }
+    }));
+    const listed = await listApiVendors();
+    expect(listed[0].pricing).toEqual({ inputPerMillionUsd: 1.25, outputPerMillionUsd: 4.5 });
+  });
+
+  it("按 target.provider 过滤，并按 sort 升序", async () => {
+    await saveApiVendor(vendorInput({ name: "Codex 老", providerId: "codex", sort: 10 }));
     await new Promise((resolve) => setTimeout(resolve, 5));
-    await saveApiVendor(vendorInput({ name: "Codex 新", providerId: "codex" }));
+    await saveApiVendor(vendorInput({ name: "Codex 新", providerId: "codex", sort: 1 }));
     await saveApiVendor(vendorInput({ name: "Gemini", providerId: "gemini", configs: [{ providerId: "gemini", enabled: true, targetPath: "~/.gemini/.env", content: "K={{API_KEY}}" }] }));
 
     const codexOnly = await listApiVendors({ provider: "codex" } as any);
@@ -289,6 +261,18 @@ describe("listApiVendors 过滤与排序", () => {
     await saveApiVendor(vendorInput());
     const summaries = await listApiVendorSummaries();
     expect(summaries[0].apiKey).toBe("");
+  });
+
+  it("新增供应商自动记录创建时间，编辑时保留原创建时间", async () => {
+    const saved = await saveApiVendor(vendorInput());
+    expect(saved.createdAt).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+
+    const edited = await saveApiVendor({
+      ...vendorInput({ id: saved.id, apiKey: "" }),
+      name: "Renamed Vendor"
+    });
+    expect(edited.createdAt).toBe(saved.createdAt);
+    expect((await listApiVendors())[0].createdAt).toBe(saved.createdAt);
   });
 });
 
@@ -342,15 +326,6 @@ describe("enableApiVendor", () => {
 
   it("供应商不存在时抛错", async () => {
     await expect(enableApiVendor({ vendorId: "nope" })).rejects.toThrow("供应商不存在");
-  });
-});
-
-describe("isApiKeyEncryptionAvailable", () => {
-  it("反映 safeStorage 的可用状态", () => {
-    electronMock.encryptionAvailable = true;
-    expect(isApiKeyEncryptionAvailable()).toBe(true);
-    electronMock.encryptionAvailable = false;
-    expect(isApiKeyEncryptionAvailable()).toBe(false);
   });
 });
 

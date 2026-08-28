@@ -35,6 +35,7 @@ export function TerminalWorkspace({
   focusRequest,
   terminalInputStates,
   onTerminalReady,
+  onVendorSwitch,
   onTerminalExit,
   onTerminalInputState,
   systemTerminalOpen,
@@ -63,7 +64,8 @@ export function TerminalWorkspace({
   onCloseTab: (tabKey: string) => void;
   focusRequest: number;
   terminalInputStates: Record<string, TerminalInputState>;
-  onTerminalReady: (tabKey: string, terminalId?: string) => void;
+  onTerminalReady: (tabKey: string, terminalId?: string, vendorId?: string) => void;
+  onVendorSwitch: (tabKey: string, vendorId: string, reason: "manual" | "candidate-pool" | "failure") => void;
   onTerminalExit: (tabKey: string, exitCode: number) => void;
   onTerminalInputState: (tabKey: string, state: TerminalInputState) => void;
   systemTerminalOpen: boolean;
@@ -120,7 +122,8 @@ export function TerminalWorkspace({
                 active={tab.key === activeTabKey}
                 focusRequest={focusRequest}
                 requestedInputMode={terminalInputStates[tab.key]?.mode}
-                onReady={(terminalId) => onTerminalReady(tab.key, terminalId)}
+                onReady={(terminalId, vendorId) => onTerminalReady(tab.key, terminalId, vendorId)}
+                onVendorSwitch={(vendorId, reason) => onVendorSwitch(tab.key, vendorId, reason)}
                 onExit={(exitCode) => onTerminalExit(tab.key, exitCode)}
                 onInputModeChange={(state) => onTerminalInputState(tab.key, state)}
                 vendors={vendors}

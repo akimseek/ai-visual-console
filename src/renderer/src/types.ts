@@ -7,6 +7,7 @@ import type {
   ApiVendorEnableRequest,
   ApiVendorEnableResult,
   ApiVendorInput,
+  ApiVendorEnabledResult,
   CompressionPrompt,
   CompressionPromptInput,
   AiSession,
@@ -27,6 +28,10 @@ import type {
   SystemTerminalStartRequest,
   TerminalStartParams,
   VendorModel,
+  VendorBalanceBatchResult,
+  VendorBalanceRefreshResult,
+  GatewayVendorHealth,
+  GatewayUsageSummary,
   WorkspacePreset,
   WorkspacePresetInput
 } from "../../shared/types";
@@ -44,6 +49,7 @@ export type {
   ApiVendorEnableRequest,
   ApiVendorEnableResult,
   ApiVendorInput,
+  ApiVendorEnabledResult,
   CompressionPrompt,
   CompressionPromptInput,
   CliEnvironmentRequest,
@@ -71,6 +77,10 @@ export type {
   TerminalStartParams,
   TokenUsage,
   VendorModel,
+  VendorBalanceBatchResult,
+  VendorBalanceRefreshResult,
+  GatewayVendorHealth,
+  GatewayUsageSummary,
   WorkspacePreset,
   WorkspacePresetInput
 } from "../../shared/types";
@@ -81,18 +91,29 @@ export type CodexConsoleApi = {
   checkCliEnvironment: (request: CliEnvironmentRequest) => Promise<CliEnvironmentStatus>;
   installCli: (request: CliInstallRequest) => Promise<CliInstallResult>;
   getGatewayPort: () => Promise<GatewayPortStatus>;
-  setGatewayPort: (port: number) => Promise<GatewayPortUpdateResult>;
+  setGatewayPort: (
+    port: number,
+    failureThreshold: number,
+    circuitFailureThreshold: number,
+    circuitDurationSeconds: number
+  ) => Promise<GatewayPortUpdateResult>;
   listApiVendors: (targetId?: string) => Promise<ApiVendor[]>;
   saveApiVendor: (input: ApiVendorInput) => Promise<ApiVendor>;
-  isApiKeyEncryptionAvailable: () => Promise<boolean>;
   deleteApiVendor: (vendorId: string) => Promise<{ deleted: boolean }>;
   readApiVendorConfigs: (request: ApiVendorConfigReadRequest) => Promise<ApiVendorConfigReadResult>;
   enableApiVendor: (request: ApiVendorEnableRequest) => Promise<ApiVendorEnableResult>;
+  setApiVendorEnabled: (vendorId: string, enabled: boolean) => Promise<ApiVendorEnabledResult>;
   switchVendorRoute: (terminalId: string, vendorId: string) => Promise<{
     switched: number;
     reason?: "terminal-not-found" | "gateway-not-active" | "route-not-found" | "provider-mismatch";
   }>;
   listVendorModels: (vendorId: string) => Promise<VendorModel[]>;
+  refreshVendorBalance: (vendorId: string) => Promise<VendorBalanceRefreshResult>;
+  refreshVendorBalances: () => Promise<VendorBalanceBatchResult>;
+  getGatewayVendorHealth: () => Promise<GatewayVendorHealth[]>;
+  resetGatewayVendorHealth: (vendorId?: string) => Promise<void>;
+  getGatewayUsageSummary: (periodStart: string, periodEnd: string) => Promise<GatewayUsageSummary>;
+  listModels: (targetId: string) => Promise<VendorModel[]>;
   listCompressionPrompts: () => Promise<CompressionPrompt[]>;
   saveCompressionPrompt: (input: CompressionPromptInput) => Promise<CompressionPrompt>;
   deleteCompressionPrompt: (promptId: string) => Promise<{ deleted: boolean }>;
@@ -132,7 +153,7 @@ export type CodexConsoleApi = {
   restoreSkill: (targetId: string, skillName: string) => Promise<{ restoredTo: string }>;
   purgeSkill: (targetId: string, skillName: string) => Promise<{ deleted: string }>;
   openSkillFolder: (targetId: string, skillName: string) => Promise<void>;
-  startTerminal: (params: TerminalStartParams & { cols?: number; rows?: number }) => Promise<{ terminalId: string }>;
+  startTerminal: (params: TerminalStartParams & { cols?: number; rows?: number }) => Promise<import("../../shared/types").TerminalStartResult>;
   startSystemTerminal: (params: SystemTerminalStartRequest) => Promise<{ terminalId: string }>;
   chooseDirectory: () => Promise<{ filePath?: string }>;
   writeTerminal: (terminalId: string, data: string) => Promise<void>;
@@ -144,6 +165,7 @@ export type CodexConsoleApi = {
   exportDiagnostics: () => Promise<{ filePath: string }>;
   onTerminalData: (handler: (terminalId: string, data: string) => void) => () => void;
   onTerminalExit: (handler: (terminalId: string, exitCode: number) => void) => () => void;
+  onGatewayVendorSwitched: (handler: (event: import("../../shared/types").GatewayVendorSwitchEvent) => void) => () => void;
   openSessionFolder: (targetId: string, sessionId: string) => Promise<void>;
   openPath: (params: OpenPathRequest) => Promise<void>;
   pathExists: (params: OpenPathRequest) => Promise<boolean>;

@@ -10,6 +10,8 @@ export type {
   ApiVendorEnableRequest,
   ApiVendorEnableResult,
   ApiVendorInput,
+  VendorPricing,
+  ApiVendorEnabledResult,
   CompressionPrompt,
   CompressionPromptInput,
   CliEnvironmentRequest,
@@ -42,9 +44,18 @@ export type {
   TokenUsage,
   TerminalStartParams,
   TerminalStartRequest,
+  TerminalStartResult,
+  GatewayVendorSwitchEvent,
   SystemTerminalKind,
   SystemTerminalStartRequest,
   WorkspacePreset,
   WorkspacePresetInput,
-  VendorModel
+  VendorModel,
+  VendorBalanceBatchResult,
+  VendorBalanceRefreshResult,
+  VendorBalanceSnapshot
+  ,GatewayVendorHealth
+  ,GatewayVendorHealthStatus
+  ,GatewayUsage
+  ,GatewayUsageSummary
 } from "../shared/types";

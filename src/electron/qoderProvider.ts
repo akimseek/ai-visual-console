@@ -32,6 +32,7 @@ const INTERNAL_WSL_DISTROS = new Set(["docker-desktop", "docker-desktop-data"]);
 const QODER_CONFIG_DIR_NAME = ".qoder-cn";
 const QODER_LIST_PREVIEW_LIMIT = 8;
 const QODER_TRASH_DIR_NAME = ".visual-console-trash";
+const QODER_MODEL_LIST_TIMEOUT_MS = 20_000;
 
 type QoderTargetContext = {
   targetId: string;
@@ -73,6 +74,29 @@ export async function listTargets(): Promise<CodexTarget[]> {
     await setCachedTargets(targets);
     return targets;
   });
+}
+
+/** 读取 Qoder CLI 当前账号可用的真实模型，避免把其他平台的供应商模型混入 Qoder。 */
+export async function listModels(targetId: string): Promise<Array<{ id: string }>> {
+  const context = await resolveTargetContext(targetId);
+  const output = context.kind === "wsl"
+    ? await runWslShell(context.distro!, "qodercn --list-models", QODER_MODEL_LIST_TIMEOUT_MS)
+    : await execFileAsync(process.platform === "win32" ? "qodercn.cmd" : "qodercn", ["--list-models"], {
+      encoding: "utf8",
+      timeout: QODER_MODEL_LIST_TIMEOUT_MS,
+      windowsHide: true,
+      maxBuffer: 1024 * 1024
+    }).then((result) => result.stdout);
+  return parseQoderModelList(output);
+}
+
+// qodercn --list-models 以表头加逐行模型名输出，解析时去除 ANSI 控制序列和空行。
+export function parseQoderModelList(output: string): Array<{ id: string }> {
+  return output
+    .split(/\r?\n/)
+    .map((line) => line.replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, "").trim())
+    .filter((line) => line && line.toUpperCase() !== "MODEL")
+    .map((id) => ({ id }));
 }
 
 export async function listCachedSessions(targetId: string, view: SessionView): Promise<CodexSession[]> {

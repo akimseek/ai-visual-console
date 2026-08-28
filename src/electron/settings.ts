@@ -14,6 +14,9 @@ import {
 type AppSettings = {
   wslCodexHomes?: Record<string, string>;
   gatewayPort?: number;
+  gatewayFailureThreshold?: number;
+  gatewayCircuitFailureThreshold?: number;
+  gatewayCircuitDurationSeconds?: number;
   cachedTargets?: CodexTarget[];
   workspacePresets?: WorkspacePreset[];
   compressionPrompts?: CompressionPrompt[];
@@ -62,9 +65,58 @@ export async function setGatewayPort(port: number) {
   return normalized;
 }
 
+export async function getGatewayFailureThreshold() {
+  const settings = await readSettings();
+  return normalizeGatewayFailureThreshold(settings.gatewayFailureThreshold);
+}
+
+export async function setGatewayFailureThreshold(threshold: number) {
+  const normalized = normalizeGatewayFailureThreshold(threshold);
+  await updateSettings((settings) => ({ ...settings, gatewayFailureThreshold: normalized }));
+  return normalized;
+}
+
+export async function getGatewayCircuitFailureThreshold() {
+  const settings = await readSettings();
+  return normalizeGatewayCircuitFailureThreshold(settings.gatewayCircuitFailureThreshold);
+}
+
+export async function setGatewayCircuitFailureThreshold(threshold: number) {
+  const normalized = normalizeGatewayCircuitFailureThreshold(threshold);
+  await updateSettings((settings) => ({ ...settings, gatewayCircuitFailureThreshold: normalized }));
+  return normalized;
+}
+
+export async function getGatewayCircuitDurationSeconds() {
+  const settings = await readSettings();
+  return normalizeGatewayCircuitDurationSeconds(settings.gatewayCircuitDurationSeconds);
+}
+
+export async function setGatewayCircuitDurationSeconds(seconds: number) {
+  const normalized = normalizeGatewayCircuitDurationSeconds(seconds);
+  await updateSettings((settings) => ({ ...settings, gatewayCircuitDurationSeconds: normalized }));
+  return normalized;
+}
+
 function normalizeGatewayPort(port: unknown) {
   if (typeof port !== "number" || !Number.isInteger(port) || port < 0 || port > 65535) return 0;
   return port;
+}
+
+// 默认值 1 保持现有行为：单供应商首次失败后尝试下一个候选供应商。
+function normalizeGatewayFailureThreshold(threshold: unknown) {
+  if (typeof threshold !== "number" || !Number.isInteger(threshold) || threshold < 1 || threshold > 10) return 1;
+  return threshold;
+}
+
+function normalizeGatewayCircuitFailureThreshold(threshold: unknown) {
+  if (typeof threshold !== "number" || !Number.isInteger(threshold) || threshold < 1 || threshold > 20) return 3;
+  return threshold;
+}
+
+function normalizeGatewayCircuitDurationSeconds(seconds: unknown) {
+  if (typeof seconds !== "number" || !Number.isInteger(seconds) || seconds < 10 || seconds > 86_400) return 60;
+  return seconds;
 }
 
 export async function getWslCodexHomeOverride(distro: string) {

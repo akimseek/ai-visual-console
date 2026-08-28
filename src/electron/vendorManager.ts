@@ -1,4 +1,3 @@
-import { safeStorage } from "electron";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -15,7 +14,6 @@ import type {
 } from "./types";
 import { assertAllowedConfigPath } from "../shared/shellArgs";
 import { runWslShell, shellQuote } from "./wslProcess";
-import { logGatewayEvent } from "./gatewayLog";
 import {
   readAppDatabase,
   setSessionDatabasePath,
@@ -23,19 +21,15 @@ import {
   updateAppDatabase
 } from "./appDatabase";
 
-type StoredApiVendor = Omit<ApiVendor, "apiKey"> & {
-  apiKey: string;
-  apiKeyEncrypted?: boolean;
-};
-
 type VendorRow = {
   id: string;
   provider_id: ApiVendor["providerId"];
   name: string;
   api_key: string;
-  api_key_encrypted: number;
   api_base_url: string;
-  write_common_config: number;
+  sort: number;
+  input_price_usd: number | null;
+  output_price_usd: number | null;
   enabled: number | null;
   created_at: string;
   updated_at: string;
@@ -53,6 +47,18 @@ type VendorConfigRow = {
   sort_order: number;
 };
 
+type VendorBalanceRow = {
+  remaining: number | null;
+  total: number | null;
+  used: number | null;
+  unit: string | null;
+  plan_name: string | null;
+  is_valid: number;
+  status: "idle" | "loading" | "success" | "error";
+  error_message: string | null;
+  queried_at: string | null;
+};
+
 let vendorBackupRoot = "";
 let vendorDatabasePath = "";
 let vendorSchemaPath = "";
@@ -66,18 +72,12 @@ export function setVendorDatabasePath(filePath: string, backupRoot: string) {
   if (vendorSchemaPath !== filePath) vendorSchemaPromise = null;
 }
 
-// 当系统不可用 OS 级加密（如无 keyring 的 Linux）时，API Key 只能明文落盘。
-// 暴露此状态供 UI 提前告警，避免用户误以为密钥已加密。
-export function isApiKeyEncryptionAvailable() {
-  return safeStorage.isEncryptionAvailable();
-}
-
 export async function listApiVendors(target?: CodexTarget | null): Promise<ApiVendor[]> {
   await ensureVendorSchema();
   return readAppDatabase((db) => {
     const rows = target
-      ? db.prepare("SELECT * FROM api_vendors WHERE provider_id = ? ORDER BY updated_at DESC").all(target.provider)
-      : db.prepare("SELECT * FROM api_vendors ORDER BY updated_at DESC").all();
+      ? db.prepare("SELECT * FROM api_vendors WHERE provider_id = ? ORDER BY sort ASC, created_at ASC").all(target.provider)
+      : db.prepare("SELECT * FROM api_vendors ORDER BY sort ASC, created_at ASC").all();
     return (rows as VendorRow[]).map((row) => rowToVendor(db, row));
   });
 }
@@ -101,34 +101,41 @@ export async function saveApiVendor(input: ApiVendorInput): Promise<ApiVendor> {
     const duplicate = db.prepare("SELECT id FROM api_vendors WHERE name_norm = ? AND id <> ?")
       .get(normalizeVendorName(normalized.name), existing?.id || "") as { id: string } | undefined;
     if (duplicate) throw new Error(`供应商名称已存在：${normalized.name}`);
+    const requestedSort = existing ? (normalized.sort ?? existing.sort) : (normalized.sort ?? nextVendorSort(db));
+    const duplicateSort = db.prepare("SELECT id FROM api_vendors WHERE sort = ? AND id <> ?")
+      .get(requestedSort, existing?.id || "") as { id: string } | undefined;
+    if (duplicateSort) throw new Error(`排序值 ${requestedSort} 已被占用。`);
     const next: ApiVendor = {
       id: existing?.id || crypto.randomUUID(),
       providerId: normalized.providerId,
       name: normalized.name,
       apiKey: normalized.apiKey || existingVendor?.apiKey || "",
       apiBaseUrl: normalized.apiBaseUrl,
-      writeCommonConfig: normalized.writeCommonConfig,
+      sort: requestedSort,
+      pricing: normalized.pricing,
       configs: normalized.configs,
-      enabled: existing?.enabled === 1,
+      enabled: normalized.enabled !== false,
       createdAt: existing?.created_at || now,
       updatedAt: now,
       lastEnabledAt: existing?.last_enabled_at || undefined
     };
     saved = next;
-    const stored = encodeVendor(next);
+    // Gateway 直接从 SQLite 读取供应商，API Key 按用户要求以明文保存。
+    const stored = next;
     db.prepare(`
       INSERT INTO api_vendors (
-        id, provider_id, name, name_norm, api_key, api_key_encrypted, api_base_url,
-        write_common_config, enabled, created_at, updated_at, last_enabled_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        id, provider_id, name, name_norm, api_key, api_base_url,
+        input_price_usd, output_price_usd, sort, enabled, created_at, updated_at, last_enabled_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(id) DO UPDATE SET
         provider_id = excluded.provider_id,
         name = excluded.name,
         name_norm = excluded.name_norm,
         api_key = excluded.api_key,
-        api_key_encrypted = excluded.api_key_encrypted,
         api_base_url = excluded.api_base_url,
-        write_common_config = excluded.write_common_config,
+        input_price_usd = excluded.input_price_usd,
+        output_price_usd = excluded.output_price_usd,
+        sort = excluded.sort,
         enabled = excluded.enabled,
         updated_at = excluded.updated_at,
         last_enabled_at = excluded.last_enabled_at
@@ -138,9 +145,10 @@ export async function saveApiVendor(input: ApiVendorInput): Promise<ApiVendor> {
       stored.name,
       normalizeVendorName(stored.name),
       stored.apiKey,
-      stored.apiKeyEncrypted ? 1 : 0,
       stored.apiBaseUrl,
-      stored.writeCommonConfig ? 1 : 0,
+      stored.pricing?.inputPerMillionUsd ?? null,
+      stored.pricing?.outputPerMillionUsd ?? null,
+      stored.sort,
       stored.enabled ? 1 : 0,
       stored.createdAt,
       stored.updatedAt,
@@ -173,6 +181,12 @@ export async function deleteApiVendor(vendorId: string) {
   await ensureVendorSchema();
   await updateAppDatabase((db) => {
     db.prepare("DELETE FROM api_vendors WHERE id = ?").run(vendorId);
+    // 余额快照与供应商生命周期一致；旧数据库尚未创建该表时忽略即可。
+    try {
+      db.prepare("DELETE FROM api_vendor_balance_snapshots WHERE vendor_id = ?").run(vendorId);
+    } catch {
+      // 余额功能首次使用前，快照表可能尚未建立。
+    }
   });
   return { deleted: true };
 }
@@ -218,6 +232,7 @@ function normalizeVendorInput(input: ApiVendorInput, allowEmptyApiKey = false): 
   if (!name) throw new Error("供应商名称不能为空。");
   if (!apiKey && !allowEmptyApiKey) throw new Error("API Key 不能为空。");
   if (!apiBaseUrl) throw new Error("API 请求地址不能为空。");
+  const pricing = normalizePricing(input.pricing);
   const configs = input.configs.map((config) => ({
     // 配置行 ID 是数据库全局主键，不能复用 renderer 默认模板的固定 ID。
     id: crypto.randomUUID(),
@@ -234,9 +249,32 @@ function normalizeVendorInput(input: ApiVendorInput, allowEmptyApiKey = false): 
     name: name.slice(0, 80),
     apiKey,
     apiBaseUrl,
-    writeCommonConfig: input.writeCommonConfig === true,
+    sort: input.sort,
+    pricing,
+    enabled: input.enabled !== false,
     configs
   };
+}
+
+function nextVendorSort(db: SqliteDatabase) {
+  const row = db.prepare("SELECT MAX(sort) AS max_sort FROM api_vendors").get() as { max_sort?: number | null } | undefined;
+  return (typeof row?.max_sort === "number" ? row.max_sort : 0) + 1;
+}
+
+function normalizePricing(pricing: ApiVendorInput["pricing"]): ApiVendorInput["pricing"] {
+  if (!pricing) return undefined;
+  const normalize = (value: number | undefined, label: string) => {
+    if (value === undefined) return undefined;
+    if (!Number.isFinite(value) || value < 0 || Math.round(value * 100) !== value * 100) {
+      throw new Error(`${label}必须是非负数，且最多保留 2 位小数。`);
+    }
+    return Math.round(value * 100) / 100;
+  };
+  const result = {
+    inputPerMillionUsd: normalize(pricing.inputPerMillionUsd, "输入费率"),
+    outputPerMillionUsd: normalize(pricing.outputPerMillionUsd, "输出费率")
+  };
+  return result.inputPerMillionUsd === undefined && result.outputPerMillionUsd === undefined ? undefined : result;
 }
 
 export async function readApiVendorConfigFiles(
@@ -246,44 +284,14 @@ export async function readApiVendorConfigFiles(
   const files = await Promise.all(
     request.paths.map(async (filePath) => {
       assertAllowedConfigPath(filePath);
-      const content = target?.kind === "wsl"
-        ? await readWslConfig(target.distro!, filePath)
-        : await readLocalConfig(filePath);
+      // 配置预览属于辅助信息；文件不存在或 WSL 暂不可用时以空内容继续编辑，不阻断供应商表单。
+      const content = await (target?.kind === "wsl"
+        ? readWslConfig(target.distro!, filePath)
+        : readLocalConfig(filePath)).catch(() => "");
       return { path: filePath, content };
     })
   );
   return { files };
-}
-
-function encodeVendor(vendor: ApiVendor): StoredApiVendor {
-  if (safeStorage.isEncryptionAvailable()) {
-    return {
-      ...vendor,
-      apiKey: safeStorage.encryptString(vendor.apiKey).toString("base64"),
-      apiKeyEncrypted: true
-    };
-  }
-  return { ...vendor, apiKeyEncrypted: false };
-}
-
-function decodeVendor(vendor: StoredApiVendor): ApiVendor {
-  if (!vendor.apiKeyEncrypted) return vendor;
-  try {
-    return {
-      ...vendor,
-      apiKey: safeStorage.decryptString(Buffer.from(vendor.apiKey, "base64"))
-    };
-  } catch (error) {
-    // 解密失败通常因系统账户/密钥链变更（重装、换用户、跨机迁移）。静默返回空 Key 会让
-    // 网关返回 503 且用户无从分辨原因，这里打事件日志便于排障，UI 侧另行提示重新输入。
-    logGatewayEvent("error", "vendor-decrypt-failed", {
-      vendorId: vendor.id,
-      provider: vendor.providerId,
-      name: vendor.name,
-      error: error instanceof Error ? error.message : String(error)
-    });
-    return { ...vendor, apiKey: "" };
-  }
 }
 
 function normalizeVendorName(value: string) {
@@ -414,9 +422,10 @@ function initializeVendorDb(db: SqliteDatabase) {
       name TEXT NOT NULL,
       name_norm TEXT NOT NULL,
       api_key TEXT NOT NULL,
-      api_key_encrypted INTEGER NOT NULL DEFAULT 0,
       api_base_url TEXT NOT NULL,
-      write_common_config INTEGER NOT NULL DEFAULT 0,
+      input_price_usd REAL,
+      output_price_usd REAL,
+      sort INTEGER NOT NULL DEFAULT 0,
       enabled INTEGER NOT NULL DEFAULT 0,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL,
@@ -425,6 +434,9 @@ function initializeVendorDb(db: SqliteDatabase) {
 
     CREATE UNIQUE INDEX IF NOT EXISTS idx_api_vendors_name_norm
       ON api_vendors(name_norm);
+
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_api_vendors_sort
+      ON api_vendors(sort);
 
     CREATE TABLE IF NOT EXISTS api_vendor_configs (
       id TEXT PRIMARY KEY,
@@ -444,21 +456,56 @@ function initializeVendorDb(db: SqliteDatabase) {
 }
 
 function rowToVendor(db: SqliteDatabase, row: VendorRow): ApiVendor {
-  const stored: StoredApiVendor = {
+  const vendor: ApiVendor = {
     id: row.id,
     providerId: row.provider_id,
     name: row.name,
     apiKey: row.api_key,
-    apiKeyEncrypted: row.api_key_encrypted === 1,
     apiBaseUrl: row.api_base_url,
-    writeCommonConfig: row.write_common_config === 1,
+    sort: row.sort,
+    pricing: {
+      ...(typeof row.input_price_usd === "number" ? { inputPerMillionUsd: row.input_price_usd } : {}),
+      ...(typeof row.output_price_usd === "number" ? { outputPerMillionUsd: row.output_price_usd } : {})
+    },
     configs: listVendorConfigs(db, row.id),
     enabled: row.enabled === 1,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     lastEnabledAt: row.last_enabled_at || undefined
   };
-  return decodeVendor(stored);
+  // 余额表由 vendorBalance 按需创建；兼容尚未使用余额功能的旧数据库。
+  try {
+    const balance = db.prepare("SELECT remaining, total, used, unit, plan_name, is_valid, status, error_message, queried_at FROM api_vendor_balance_snapshots WHERE vendor_id = ?").get(row.id) as VendorBalanceRow | undefined;
+    if (balance) {
+      vendor.balance = {
+        remaining: balance.remaining ?? undefined,
+        total: balance.total ?? undefined,
+        used: balance.used ?? undefined,
+        unit: balance.unit || undefined,
+        planName: balance.plan_name || undefined,
+        isValid: balance.is_valid === 1
+      };
+      vendor.balanceStatus = balance.status;
+      vendor.balanceError = balance.error_message || undefined;
+      vendor.balanceQueriedAt = balance.queried_at || undefined;
+    }
+  } catch {
+    // 余额表尚未创建时忽略，首次打开供应商列表仍应正常工作。
+  }
+  return vendor;
+}
+
+/** Gateway 主模式下仅切换候选池状态，不写入任何 CLI 配置文件。 */
+export async function setApiVendorEnabled(vendorId: string, enabled: boolean) {
+  await ensureVendorSchema();
+  let found = false;
+  await updateAppDatabase((db) => {
+    const result = db.prepare("UPDATE api_vendors SET enabled = ?, updated_at = ? WHERE id = ?")
+      .run(enabled ? 1 : 0, new Date().toISOString(), vendorId);
+    found = result.changes > 0;
+  });
+  if (!found) throw new Error("供应商不存在。");
+  return { vendorId, enabled };
 }
 
 function listVendorConfigs(db: SqliteDatabase, vendorId: string): ApiVendorConfigTemplate[] {

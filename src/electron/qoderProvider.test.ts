@@ -1,5 +1,14 @@
 import { describe, expect, it } from "vitest";
-import { buildQoderSessionStoragePaths, createQoderSessionParser } from "./qoderProvider";
+import { buildQoderSessionStoragePaths, createQoderSessionParser, parseQoderModelList } from "./qoderProvider";
+
+describe("parseQoderModelList", () => {
+  it("解析 Qoder CLI 模型表并忽略表头、空行和 ANSI 前缀", () => {
+    expect(parseQoderModelList("MODEL\n\u001b[32mAuto\u001b[0m\nQwen3.8-Max\n\n")).toEqual([
+      { id: "Auto" },
+      { id: "Qwen3.8-Max" }
+    ]);
+  });
+});
 
 describe("createQoderSessionParser", () => {
   it("读取 Qoder JSONL 的会话摘要、可见消息和用量", () => {

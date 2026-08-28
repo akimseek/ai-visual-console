@@ -1,107 +1,130 @@
-# AI 可视化控制台
+<div align="center">
+  <img src="resources/icon.png" width="88" alt="AI 可视化控制台图标" />
+  <h1>AI 可视化控制台</h1>
+  <p>把分散在终端里的 AI 工程能力，收束到一个可观测、可切换、可持续的桌面工作台。</p>
+  <p>
+    <strong>Codex · Claude Code · Gemini · Qoder CN</strong>
+  </p>
+  <p>
+    <a href="#核心能力">核心能力</a> ·
+    <a href="#快速开始">快速开始</a> ·
+    <a href="#使用指南">使用指南</a> ·
+    <a href="#数据与安全">数据与安全</a>
+  </p>
+</div>
 
-AI 可视化控制台是一款跨平台 Electron 桌面应用，用于集中管理和操作 Codex、Gemini、Claude Code、Qoder CN 等 CLI 会话。
+<p align="center">
+  <img src="docs/1.png" width="100%" alt="AI 可视化控制台会话工作台" />
+</p>
 
-它把会话列表、历史恢复、分支、搜索、终端和供应商配置整合在一个工作台中，同时支持本机与 WSL 环境。
+## 产品定位
 
-## 截图
+AI 可视化控制台是一款面向日常研发工作的跨平台 Electron 桌面应用。它将多个 AI CLI 的会话、终端、历史记录、供应商路由和本地工作环境统一到一个界面中，让你可以在熟悉的桌面工作流里持续推进复杂任务。
 
-### 会话工作台
+它不替代官方 CLI，而是为官方 CLI 提供更高效的工作台：保留原生会话能力，同时补齐会话资产管理、跨环境操作、供应商切换和可观测基础设施。
 
-浏览历史会话、查看摘要，并在右侧终端中继续当前会话。
+## 核心能力
 
-![会话工作台](docs/1.png)
+### 一个工作台，管理多个 AI CLI
 
-### 本机与 WSL 目标
+- 统一接入 Codex、Claude Code、Gemini 和 Qoder CN。
+- 支持本机、PowerShell、Git Bash 以及多个 WSL 发行版。
+- 在平台与目标环境之间快速切换，终端窗口彼此独立。
+- 内置 AI 会话终端与系统终端，减少频繁切换窗口的成本。
 
-在本机和多个 WSL 发行版之间切换，分别管理对应环境中的 CLI 会话。
+### 会话是可检索、可恢复的工程资产
 
-![本机与 WSL 目标](docs/2.png)
+- 历史会话以轻量摘要快速呈现，进入工作区无需等待完整 JSONL 解析。
+- 详情按需读取，支持分页、全文搜索、Token/上下文信息和导出。
+- 支持继续会话、复制、分支、重命名、归档、删除和恢复。
+- 大型会话采用流式读取，避免一次性加载全部内容造成界面阻塞。
 
-### Skill 管理
+### 本地 Gateway，供应商切换不打断工作
 
-查看、导入、启用、禁用和删除 Codex Skill。
+- 在本地 SQLite 中集中管理 API 地址、API Key、费率和候选池状态。
+- 当前请求保持供应商粘性，只有请求异常、供应商关闭或熔断时才切换。
+- 支持按排序顺序进行故障转移，并在候选池变更后让下一次请求使用最新快照。
+- 支持失败阈值、熔断持续时间和本地监听端口配置。
+- 记录请求元数据、响应状态、Token 用量和费用信息，为后续统计与审计提供基础。
 
-![Skill 管理](docs/3.png)
+### 供应商管理清晰可控
 
-### 系统终端
+- 表格化展示供应商名称、厂商、余额、排序、创建时间和候选池状态。
+- 支持按内容自适应列宽、手动调整、分页和余额刷新。
+- 支持新增、编辑、删除和即时启停候选池参与资格。
+- 启用或关闭供应商不会关闭当前终端窗口。
 
-在工作区中打开独立系统终端，支持本机 Shell、PowerShell、CMD、Git Bash 和 WSL。
+### 面向效率的终端体验
 
-![系统终端](docs/4.png)
+- 自管输入框支持模型选择、文件/文件夹附件和多行输入。
+- 终端内容搜索快捷键：`Ctrl + F`。
+- 右键菜单、复制粘贴、窗口尺寸适配和多标签终端保持一致体验。
+- Codex Skill 支持导入、启用、禁用、归档、删除和恢复。
 
-### 会话中的代码变更
+## 界面一览
 
-在 CLI 会话中直接查看代码修改、执行状态和终端输出。
-
-![会话中的代码变更](docs/5.png)
-
-### 供应商管理
-
-保存多个 API 供应商，写入对应 CLI 配置，并在同一协议的已打开终端中切换请求路由。
-
-![供应商管理](docs/6.png)
-
-## 功能特性
-
-- 支持 Codex、Gemini、Claude Code 和 Qoder CN 会话
-- 支持本机与 WSL 目标自动探测和切换
-- 历史会话列表使用轻量摘要加载，详情按需读取
-- 支持继续会话；Codex、Gemini 和 Claude Code 支持创建分支、复制会话、删除和恢复
-- 详情页支持分页加载、全文搜索、Token/上下文信息和会话导出
-- 支持多个 API 供应商的新增、编辑、启用和删除
-- 通过本地 Gateway 在同一终端会话中切换供应商
-- 支持 Codex Skill 的导入、启用、禁用、删除和恢复
-- 内置 AI 会话终端和系统终端
-- 支持终端内容搜索：`Ctrl + F`
-- Claude Code、Gemini 和 Qoder CN 使用流式 JSONL 读取，降低大文件加载开销
-- SQLite 保存摘要、元数据和可重建索引，不缓存完整会话正文
-
-## 支持环境
-
-- Windows、Linux、macOS
-- Node.js 20 或更高版本
-- pnpm 10.x
-- Windows 下使用 WSL 功能时，需要安装可用的 WSL 发行版
+<table>
+  <tr>
+    <td width="50%"><img src="docs/2.png" width="100%" alt="本机与 WSL 目标切换" /></td>
+    <td width="50%"><img src="docs/6.png" width="100%" alt="供应商管理" /></td>
+  </tr>
+  <tr>
+    <td align="center">本机与 WSL 目标切换</td>
+    <td align="center">供应商管理与本地路由</td>
+  </tr>
+  <tr>
+    <td width="50%"><img src="docs/3.png" width="100%" alt="Skill 管理" /></td>
+    <td width="50%"><img src="docs/4.png" width="100%" alt="系统终端" /></td>
+  </tr>
+  <tr>
+    <td align="center">Skill 管理</td>
+    <td align="center">系统终端</td>
+  </tr>
+  <tr>
+    <td width="50%"><img src="docs/5.png" width="100%" alt="会话中的代码变更" /></td>
+    <td width="50%"></td>
+  </tr>
+  <tr>
+    <td align="center">会话中的代码变更</td>
+    <td></td>
+  </tr>
+</table>
 
 ## 快速开始
 
-### 安装依赖
+### 环境要求
+
+- Windows、macOS 或 Linux
+- Node.js 20 或更高版本
+- pnpm 10.x
+- 使用 WSL 时，需要安装至少一个可用的 WSL 发行版
+- 使用某个平台前，请先安装对应的官方 CLI；应用也提供 CLI 安装入口
+
+### 安装与启动
 
 ```bash
 pnpm install --frozen-lockfile
-```
-
-请使用 `pnpm` 管理依赖，不要将 `npm install` 与本项目混用。Windows、WSL、macOS 和 Linux 应在各自环境中分别安装依赖，以获得正确的平台原生依赖。
-
-### 启动开发环境
-
-```bash
 pnpm dev
 ```
 
-### 运行检查
+首次启动后，在左侧选择平台和目标环境即可创建会话。应用会自动发现本机与 WSL 目标；目标不可用时，可在“文件 → 设置会话”中补充配置。
+
+### 检查与构建
 
 ```bash
+# 类型检查、Lint、测试
 pnpm typecheck
 pnpm lint
 pnpm test
-```
 
-### 构建与打包
-
-```bash
-# 仅构建应用
+# 构建应用
 pnpm build
 
-# 生成当前平台的 unpacked 应用
-pnpm pack
-
-# 生成安装包
+# 生成当前平台安装包
 pnpm dist
 ```
 
-也可以按目标平台打包：
+按平台构建安装包：
 
 ```bash
 pnpm dist:win
@@ -109,63 +132,44 @@ pnpm dist:mac
 pnpm dist:linux
 ```
 
-## 使用说明
+## 使用指南
 
-### 会话管理
+### 开始或恢复会话
 
-1. 选择平台和目标环境。
-2. 在会话列表中打开历史会话，或点击“新会话”。
-3. 使用“详情”查看完整消息、分支关系和会话信息。
-4. 在详情页创建分支或继续当前会话。
+1. 在左侧选择平台和目标环境。
+2. 点击“新会话”，或从历史列表打开已有会话。
+3. 在终端中继续工作；需要查看完整上下文时打开“详情”。
+4. 在详情中搜索消息、查看 Token 信息，或从指定位置创建分支。
 
-历史会话进入工作区时只加载列表摘要；完整 JSONL 会在打开详情或恢复会话时按需读取。
+历史列表只使用摘要数据启动，完整会话内容在详情或恢复操作触发时按需读取。Qoder CN 使用官方 `qodercn` CLI 和 `~/.qoder-cn` 会话目录，其模型与认证仍由 Qoder CLI 自身管理。
 
-Qoder CN 使用其官方 `qodercn` CLI 和 `~/.qoder-cn` 会话目录。Qoder 的模型、认证和 BYOK 配置由 CLI 内的 `/model` 管理，不经过本地 Gateway；分支、复制和回收站操作也保留在 Qoder CLI 内执行。
+### 管理供应商与路由
 
-### 供应商切换
+1. 打开“工具箱 → 供应商管理”。
+2. 新增供应商，填写名称、API 地址、API Key、排序和可选费率。
+3. 打开“参与候选池”开关，决定该供应商是否参与 Gateway 故障转移。
+4. 在“设置”中配置 Gateway 端口、失败阈值和熔断持续时间。
 
-在“供应商管理”中保存多个同协议供应商，启用其中一个后：
+Gateway 只在请求边界选择供应商。已经发出的请求不会被中途改写；供应商状态或候选池发生变化后，后续请求会读取最新配置。
 
-- 新终端使用当前启用的供应商。
-- 已接入本地 Gateway 的终端会在后续请求中切换路由。
-- 已经发出的请求继续使用请求开始时的供应商。
-- 由旧版本创建的终端需要关闭并重新打开一次，才能接入本地 Gateway。
+### 使用 WSL
 
-### WSL
+应用会自动发现 WSL 发行版，并为目标环境使用对应的 CLI 会话目录。若自动探测不到 Codex 目录，可在会话设置中指定 WSL 内的路径，例如 `~/.codex`。
 
-应用会自动发现 WSL 发行版。若 Codex 目录未自动识别，可在“文件 → 设置会话”中手动设置 WSL 内的 Codex 目录，例如 `~/.codex`。
+## 数据与安全
 
-## 数据与隐私
+- 应用数据保存在应用运行目录的 `data/` 中，供应商和索引信息由 SQLite 管理。
+- API Key 保存在本地 SQLite 中，仅由主进程用于 Gateway 上游认证；原始会话正文仍由各官方 CLI 保存在自己的 JSONL 文件中。
+- 历史列表缓存只保存摘要、元数据和可重建索引，不保存完整详情正文。
+- Gateway 默认只监听 `127.0.0.1`，终端通过独立令牌访问本地路由，避免被其他本地进程直接调用。
 
-- 应用数据保存在项目或应用数据目录下的 `data/` 中。
-- SQLite 数据库保存供应商信息、会话摘要、元数据和索引，不保存完整会话正文缓存。
-- API Key 在系统支持时使用 Electron `safeStorage` 加密后保存。
-- 原始会话仍由各 CLI 保存在自己的 JSONL 文件中。
-- CLI 配置仍写入对应运行环境的 `~/.codex`、`~/.gemini`、`~/.claude` 和 `~/.qoder-cn`。
-- 本地 Gateway 只监听 `127.0.0.1`，用于在终端进程与供应商接口之间转发请求。
+## 技术底座
 
-## 项目结构
-
-```text
-src/electron     Electron 主进程、Provider、终端、配置和会话处理
-src/renderer     React 渲染进程与界面组件
-src/shared       共享类型、解析器和通用工具
-docs             项目截图与 Provider 开发文档
-scripts          构建和辅助脚本
-resources        应用图标与打包资源
-```
-
-## 开发 Provider
-
-Provider 相关实现位于 `src/electron/`，可以从以下文件开始了解：
-
-- [`src/electron/aiProviders.ts`](src/electron/aiProviders.ts)：Provider 注册与统一入口
-- [`src/electron/claudeProvider.ts`](src/electron/claudeProvider.ts)：Claude Code 会话实现
-- [`src/electron/geminiProvider.ts`](src/electron/geminiProvider.ts)：Gemini 会话实现
-- [`src/electron/qoderProvider.ts`](src/electron/qoderProvider.ts)：Qoder CN 会话实现
-- [`src/electron/codexTargets.ts`](src/electron/codexTargets.ts)：Codex 本机与 WSL 目标实现
-
-共享类型、解析器和路径工具位于 `src/shared/`。新增 Provider 时，请同时补充对应的类型、目标探测、会话读取和测试。
+- Electron + React + TypeScript
+- SQLite（WAL 模式）
+- xterm.js 终端渲染
+- 流式 JSONL 读取与分页详情加载
+- 本地 Gateway 请求转发、健康状态和故障转移
 
 ## 许可证
 

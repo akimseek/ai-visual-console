@@ -65,8 +65,8 @@ export function Dialog({
       >
         <header>
           <h2 id={titleId}>{title}</h2>
-          <button type="button" title="关闭" onClick={onClose} disabled={busy}>
-            x
+          <button type="button" title="关闭" aria-label="关闭" onClick={onClose} disabled={busy}>
+            ×
           </button>
         </header>
         {children}

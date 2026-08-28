@@ -7,8 +7,38 @@ import type {
 // 供应商草稿与配置文件模板的纯逻辑（无 React 状态），从 App.tsx 抽出以降低单文件体积。
 
 export type ApiVendorDraft = ApiVendorInput;
-export type VendorFieldName = "name" | "apiBaseUrl" | "apiKey";
+export type VendorFieldName = "name" | "apiBaseUrl" | "apiKey" | "sort" | "inputPrice" | "outputPrice";
 export type VendorFieldErrors = Partial<Record<VendorFieldName, string>>;
+
+// 供应商表格七列的最小/最大宽度，避免长地址或窄窗口破坏操作区域。
+export const VENDOR_COLUMN_MIN_WIDTHS = [180, 120, 110, 70, 145, 120, 164] as const;
+export const VENDOR_COLUMN_MAX_WIDTHS = [380, 180, 200, 110, 210, 170, 220] as const;
+const VENDOR_COLUMN_GROWTH_ORDER = [0, 1, 2, 4, 5, 3, 6] as const;
+
+/**
+ * 根据内容测量宽度和容器宽度计算最终列宽。
+ * 内容宽度先受最小/最大值约束，容器有剩余空间时优先扩展名称列。
+ * 如果所有列达到内容上限仍有剩余空间，继续交给名称列吸收，保证
+ * 返回的列宽总和与表格实际宽度完全一致，避免浏览器重新分配列宽。
+ */
+export function calculateVendorColumnWidths(contentWidths: number[], containerWidth: number) {
+  const widths = VENDOR_COLUMN_MIN_WIDTHS.map((minimum, index) => {
+    const measured = Number.isFinite(contentWidths[index]) ? contentWidths[index] : minimum;
+    return Math.min(VENDOR_COLUMN_MAX_WIDTHS[index], Math.max(minimum, measured));
+  });
+  const minimumTableWidth = VENDOR_COLUMN_MIN_WIDTHS.reduce((total, width) => total + width, 0);
+  const targetWidth = Math.max(minimumTableWidth, Number.isFinite(containerWidth) && containerWidth > 0 ? containerWidth : minimumTableWidth);
+  let remaining = Math.max(0, targetWidth - widths.reduce((total, width) => total + width, 0));
+  for (const index of VENDOR_COLUMN_GROWTH_ORDER) {
+    if (remaining <= 0) break;
+    const capacity = VENDOR_COLUMN_MAX_WIDTHS[index] - widths[index];
+    const growth = Math.min(capacity, remaining);
+    widths[index] += growth;
+    remaining -= growth;
+  }
+  if (remaining > 0) widths[0] += remaining;
+  return widths;
+}
 
 const CODEX_DEFAULT_MODEL_PROVIDER = "akim";
 
@@ -18,7 +48,10 @@ export function createEmptyVendorDraft(): ApiVendorDraft {
     name: "",
     apiKey: "",
     apiBaseUrl: "",
-    writeCommonConfig: false,
+    // 新建时由 useVendors 按当前最大排序值预填；这里保留未填写状态以触发必填校验。
+    sort: undefined,
+    pricing: {},
+    enabled: true,
     configs: []
   });
 }
@@ -27,6 +60,7 @@ export function buildVendorDraft(input: ApiVendorDraft): ApiVendorDraft {
   const name = input.name;
   const apiKey = input.apiKey;
   const apiBaseUrl = input.apiBaseUrl;
+  const sort = input.sort;
   const providerId = input.providerId || "codex";
   const existing = new Map(input.configs.map((config) => [`${config.providerId}:${config.targetPath}`, config]));
   const configs = defaultVendorConfigs()
@@ -43,7 +77,9 @@ export function buildVendorDraft(input: ApiVendorDraft): ApiVendorDraft {
     name,
     apiKey,
     apiBaseUrl,
-    writeCommonConfig: input.writeCommonConfig === true,
+    sort,
+    pricing: input.pricing,
+    enabled: input.enabled !== false,
     configs
   };
 }
@@ -55,7 +91,9 @@ export function vendorToDraft(vendor: ApiVendor): ApiVendorDraft {
     name: vendor.name,
     apiKey: vendor.apiKey,
     apiBaseUrl: vendor.apiBaseUrl,
-    writeCommonConfig: vendor.writeCommonConfig === true,
+    sort: vendor.sort,
+    pricing: vendor.pricing,
+    enabled: vendor.enabled !== false,
     configs: vendor.configs
   });
 }
@@ -74,11 +112,6 @@ export function prepareVendorDraftForSave(draft: ApiVendorDraft): ApiVendorDraft
   };
 }
 
-export function shouldApplyVendorConfigAfterSave(draft: ApiVendorDraft, existingVendors: ApiVendor[]) {
-  return draft.writeCommonConfig === true
-    || Boolean(draft.id && existingVendors.some((vendor) => vendor.id === draft.id && vendor.enabled));
-}
-
 export function validateVendorDraft(draft: ApiVendorDraft, existingVendors: ApiVendor[] = []): VendorFieldErrors {
   const errors: VendorFieldErrors = {};
   const name = draft.name.trim();
@@ -87,7 +120,16 @@ export function validateVendorDraft(draft: ApiVendorDraft, existingVendors: ApiV
     errors.name = "供应商名称已存在。";
   }
   if (!draft.apiBaseUrl.trim()) errors.apiBaseUrl = "请输入 API 请求地址。";
+  if (draft.sort === undefined || !Number.isInteger(draft.sort) || draft.sort < 0) errors.sort = "请输入排序值（大于等于 0 的整数）。";
   if (!draft.apiKey.trim() && !draft.id) errors.apiKey = "请输入 API Key。";
+  for (const [field, value, label] of [
+    ["inputPrice", draft.pricing?.inputPerMillionUsd, "输入费率"],
+    ["outputPrice", draft.pricing?.outputPerMillionUsd, "输出费率"]
+  ] as const) {
+    if (value !== undefined && (!Number.isFinite(value) || value < 0 || Math.round(value * 100) !== value * 100)) {
+      errors[field] = `${label}必须是非负数，且最多保留 2 位小数。`;
+    }
+  }
   return errors;
 }
 

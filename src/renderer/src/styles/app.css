@@ -670,7 +670,7 @@ select {
 }
 
 .message-branch {
-  display: inline-flex;
+  display: flex;
   align-items: center;
   width: fit-content;
   height: 26px;
@@ -2636,7 +2636,6 @@ select {
 .vendor-manager-dialog,
 .compression-manager-dialog {
   display: grid;
-  grid-template-rows: auto minmax(0, 1fr) auto auto;
   gap: 14px;
   width: min(1080px, calc(100vw - 48px));
   height: min(800px, calc(100vh - 48px));
@@ -2645,6 +2644,14 @@ select {
   background: #ffffff;
   box-shadow: 0 24px 58px rgba(24, 32, 44, 0.22);
   padding: 16px;
+}
+
+.vendor-manager-dialog {
+  grid-template-rows: auto minmax(0, 1fr) auto auto;
+}
+
+.compression-manager-dialog {
+  grid-template-rows: auto minmax(0, 1fr) auto auto;
 }
 
 .new-session-dialog header,
@@ -2660,6 +2667,8 @@ select {
 .cli-installer-dialog footer,
 .vendor-manager-dialog header,
 .vendor-manager-dialog footer,
+.provider-status-dialog header,
+.provider-status-dialog footer,
 .compression-manager-dialog header,
 .compression-manager-dialog footer {
   display: flex;
@@ -2675,6 +2684,7 @@ select {
 .skill-manager-dialog h2,
 .cli-installer-dialog h2,
 .vendor-manager-dialog h2,
+.provider-status-dialog h2,
 .compression-manager-dialog h2 {
   margin: 0;
   font-size: 16px;
@@ -2683,6 +2693,7 @@ select {
 
 .cli-installer-dialog header p,
 .vendor-manager-dialog header p,
+.provider-status-dialog header p,
 .compression-manager-dialog header p {
   margin: 4px 0 0;
   color: #68717f;
@@ -2696,22 +2707,39 @@ select {
 .skill-manager-dialog header button,
 .cli-installer-dialog header button,
 .vendor-manager-dialog header button,
+.provider-status-dialog header button,
 .compression-manager-dialog header button {
   display: grid;
   place-items: center;
   width: 28px;
   height: 28px;
-  border: 1px solid #d4dbe6;
-  border-radius: 6px;
-  background: #fff;
+  border: 1px solid transparent;
+  border-radius: 50%;
+  background: transparent;
   color: #2f3845;
   cursor: pointer;
+  font-size: 21px;
+  font-weight: 400;
+  line-height: 1;
+}
+
+.new-session-dialog header button:hover,
+.session-settings-dialog header button:hover,
+.session-rename-dialog header button:hover,
+.session-duplicate-dialog header button:hover,
+.skill-manager-dialog header button:hover,
+.cli-installer-dialog header button:hover,
+.vendor-manager-dialog header button:hover,
+.provider-status-dialog header button:hover,
+.compression-manager-dialog header button:hover {
+  border-color: #d4dbe6;
+  background: #f3f6fa;
 }
 
 .vendor-list-page {
   display: grid;
   position: relative;
-  grid-template-rows: auto minmax(0, 1fr);
+  grid-template-rows: auto minmax(0, 1fr) auto;
   gap: 12px;
   min-height: 0;
 }
@@ -2755,12 +2783,29 @@ select {
   padding: 0 12px;
 }
 
-.vendor-list-table {
-  display: grid;
-  align-content: start;
+.vendor-list-toolbar-actions {
+  display: flex;
+  align-items: center;
   gap: 8px;
+}
+
+/* 工具栏右侧按钮必须保持横向排列，覆盖父级通用 div 的 grid 布局。 */
+.vendor-list-toolbar > .vendor-list-toolbar-actions {
+  display: flex;
+}
+
+.vendor-list-toolbar-actions button.secondary {
+  border-color: #c9d1dc;
+  background: #ffffff;
+  color: #2f3845;
+}
+
+.vendor-list-table {
   min-height: 0;
   overflow: auto;
+  border: 1px solid #e1e6ee;
+  border-radius: 8px;
+  background: #ffffff;
 }
 
 .vendor-empty {
@@ -2774,56 +2819,238 @@ select {
   grid-column: 1 / -1;
 }
 
-.vendor-list-table p {
-  margin: 0;
-  color: #7a8491;
+.vendor-list-table table {
+  /* 宽度由 colgroup 和 React 计算结果提供，容器只负责横向滚动。 */
+  width: max-content;
+  min-width: 0;
+  border-collapse: collapse;
+  table-layout: fixed;
+  color: #1e2329;
   font-size: 13px;
 }
 
-.vendor-list-row {
-  position: relative;
-  display: grid;
-  grid-template-columns: minmax(220px, 1fr) 96px auto;
-  align-items: center;
-  gap: 12px;
-  min-height: 52px;
+.vendor-list-table th,
+.vendor-list-table td {
+  box-sizing: border-box;
   min-width: 0;
-  border: 1px solid #e1e6ee;
-  border-radius: 8px;
-  background: #ffffff;
-  color: #1e2329;
-  padding: 14px;
+  overflow: hidden;
+  border-bottom: 1px solid #edf0f4;
+  padding: 10px 12px;
+  text-align: left;
+  vertical-align: middle;
 }
 
-.vendor-list-row:hover,
-.vendor-list-row:focus-within {
+.vendor-list-table th {
+  position: relative;
+  background: #f7f9fc;
+  color: #68717f;
+  font-size: 12px;
+  font-weight: 700;
+  text-align: center;
+}
+
+.vendor-list-table tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+.vendor-list-table tbody tr:hover,
+.vendor-list-table tbody tr:focus-within {
+  background: #f8fbff;
+}
+
+.vendor-table-cell-content {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #68717f;
+  font-size: 12px;
+  text-align: center;
+}
+
+.vendor-table-cell-content.is-overflowing {
+  justify-content: flex-start;
+  text-align: left;
+}
+
+.vendor-table-cell-content.is-centered {
+  text-align: center;
+}
+
+.vendor-balance-placeholder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  max-width: 100%;
+  gap: 6px;
+  color: #9aa4b2;
+  font-variant-numeric: tabular-nums;
+}
+
+.vendor-balance-value {
+  min-width: 0;
+}
+
+.vendor-balance-refresh {
+  display: inline-grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  flex: 0 0 22px;
+  padding: 0;
+  border: 1px solid #c9d1dc;
+  border-radius: 5px;
+  background: #ffffff;
+  color: #4f5d70;
+  cursor: pointer;
+  font-size: 15px;
+  line-height: 1;
+}
+
+.vendor-balance-refresh:hover:not(:disabled) {
   border-color: #3268d5;
-  box-shadow: 0 12px 30px rgba(24, 32, 44, 0.12);
+  color: #3268d5;
+  background: #f4f7ff;
+}
+
+.vendor-balance-refresh:disabled {
+  cursor: wait;
+  opacity: 0.55;
+}
+
+.vendor-table-actions-heading {
+  text-align: center !important;
+}
+
+.vendor-candidate-toggle {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  width: 38px;
+  height: 22px;
+  padding: 2px;
+  border: 1px solid #c9d1dc;
+  border-radius: 999px;
+  background: #dfe5ed;
+  cursor: pointer;
+  transition: background 160ms ease, border-color 160ms ease;
+}
+
+.vendor-candidate-toggle span {
+  display: block;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #ffffff;
+  box-shadow: 0 1px 2px rgba(28, 39, 56, 0.18);
+  transition: transform 160ms ease;
+}
+
+.vendor-candidate-toggle.active {
+  border-color: #3268d5;
+  background: #3268d5;
+}
+
+.vendor-candidate-toggle.active span {
+  transform: translateX(16px);
+}
+
+.vendor-candidate-toggle:disabled {
+  cursor: wait;
+  opacity: 0.55;
+}
+
+.vendor-column-resizer {
+  position: absolute;
+  top: 0;
+  right: -4px;
+  bottom: 0;
+  z-index: 1;
+  width: 8px;
+  cursor: col-resize;
+  touch-action: none;
+}
+
+.vendor-column-resizer:hover,
+.vendor-column-resizer:focus-visible {
+  background: linear-gradient(to right, transparent 3px, #9bb7e8 3px, #9bb7e8 5px, transparent 5px);
+  outline: none;
 }
 
 .vendor-list-main {
   display: grid;
   gap: 4px;
+  width: 100%;
   min-width: 0;
+  max-width: 100%;
+  text-align: center;
 }
 
-.vendor-list-row strong,
-.vendor-list-row span {
+.vendor-table-cell-content.is-overflowing .vendor-list-main {
+  text-align: left;
+}
+
+.vendor-list-main strong,
+.vendor-list-main span {
+  min-width: 0;
+  max-width: 100%;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.vendor-list-row span {
+.vendor-table-cell-content > * {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.vendor-health-status {
+  flex: 0 0 auto;
+  display: inline-block;
+  margin-left: 6px;
+  color: #2f7b52;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.vendor-health-status.degraded,
+.vendor-health-status.half-open {
+  color: #a86a14;
+}
+
+.vendor-health-status.open {
+  color: #b23838;
+}
+
+.vendor-list-main span {
   color: #68717f;
   font-size: 12px;
 }
 
+.vendor-provider-cell {
+  gap: 6px;
+}
+
+.vendor-provider-name {
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .vendor-card-actions {
   display: flex;
-  justify-content: flex-end;
+  justify-content: center;
+  width: 100%;
   gap: 6px;
-  min-width: 164px;
+  max-width: 100%;
 }
 
 .vendor-card-actions button {
@@ -2849,6 +3076,26 @@ select {
 .vendor-card-actions .danger {
   border-color: #e5b8b8;
   color: #b23838;
+}
+
+.vendor-pagination {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 34px;
+  color: #68717f;
+  font-size: 12px;
+}
+
+.vendor-pagination > div {
+  display: flex;
+  gap: 6px;
+}
+
+.vendor-pagination button {
+  height: 30px;
+  padding: 0 10px;
 }
 
 .vendor-list-toast {
@@ -3344,6 +3591,13 @@ select {
 }
 
 .vendor-form-grid label.required > span::before {
+  content: "*";
+  color: #d64545;
+  font-weight: 900;
+  margin-right: 4px;
+}
+
+.vendor-form-grid label > .vendor-required-label::before {
   content: "*";
   color: #d64545;
   font-weight: 900;
@@ -3886,13 +4140,30 @@ select {
 }
 
 .provider-status-dialog {
+  display: grid;
+  gap: 14px;
   width: min(720px, calc(100vw - 32px));
+  max-height: min(760px, calc(100vh - 32px));
+  overflow: hidden;
+  border: 1px solid #d4dbe6;
+  border-radius: 8px;
+  background: #ffffff;
+  box-shadow: 0 24px 58px rgba(24, 32, 44, 0.22);
+  padding: 16px;
 }
 
 .provider-status-content {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 12px;
+  min-height: 0;
+  overflow: auto;
+}
+
+.provider-status-dialog footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
 }
 
 .provider-status-section {

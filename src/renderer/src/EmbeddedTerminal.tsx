@@ -21,7 +21,8 @@ type EmbeddedTerminalProps = {
   active: boolean;
   focusRequest?: number;
   requestedInputMode?: "composer" | "terminal";
-  onReady?: (terminalId?: string) => void;
+  onReady?: (terminalId?: string, vendorId?: string) => void;
+  onVendorSwitch?: (vendorId: string, reason: "manual" | "candidate-pool" | "failure") => void;
   onExit?: (exitCode: number) => void;
   onInputModeChange?: (state: { mode: "composer" | "terminal"; composerVisible: boolean }) => void;
   vendors?: ApiVendor[];
@@ -51,6 +52,7 @@ export function EmbeddedTerminal({
   focusRequest,
   requestedInputMode,
   onReady,
+  onVendorSwitch,
   onExit,
   onInputModeChange,
   vendors = []
@@ -66,6 +68,7 @@ export function EmbeddedTerminal({
   const composerResizeRef = useRef<{ y: number; height: number } | null>(null);
   const onReadyRef = useRef(onReady);
   const onExitRef = useRef(onExit);
+  const onVendorSwitchRef = useRef(onVendorSwitch);
   const onInputModeChangeRef = useRef(onInputModeChange);
   const [, setStatus] = useState("正在启动 Codex...");
   const [inputMode, setInputMode] = useState<"composer" | "terminal">(initialInputMode);
@@ -302,6 +305,10 @@ export function EmbeddedTerminal({
   }, [onExit]);
 
   useEffect(() => {
+    onVendorSwitchRef.current = onVendorSwitch;
+  }, [onVendorSwitch]);
+
+  useEffect(() => {
     onInputModeChangeRef.current = onInputModeChange;
   }, [onInputModeChange]);
 
@@ -397,6 +404,10 @@ export function EmbeddedTerminal({
       xterm.terminalRef.current?.writeln(`Codex 已退出，退出码 ${exitCode}`);
       terminalIdRef.current = "";
     });
+    const removeVendorSwitchListener = window.codexConsole.onGatewayVendorSwitched((event) => {
+      if (event.terminalId !== terminalIdRef.current || !event.vendorId) return;
+      onVendorSwitchRef.current?.(event.vendorId, event.reason);
+    });
 
     void window.codexConsole
       .startTerminal({
@@ -409,14 +420,14 @@ export function EmbeddedTerminal({
         cols: xterm.terminalRef.current!.cols,
         rows: xterm.terminalRef.current!.rows
       })
-      .then(({ terminalId }) => {
+      .then(({ terminalId, vendorId }) => {
         if (disposed || xterm.disposeRef.current.disposed) {
           void window.codexConsole.stopTerminal(terminalId);
           return;
         }
         terminalIdRef.current = terminalId;
         setStatus("Codex 运行中");
-        onReadyRef.current?.(terminalId);
+        onReadyRef.current?.(terminalId, vendorId);
         if (prompt?.trim() && !sessionId) {
           void window.codexConsole.writeTerminal(terminalId, `${prompt.trim()}\r`);
         }
@@ -436,6 +447,7 @@ export function EmbeddedTerminal({
       if (terminalId) void window.codexConsole.stopTerminal(terminalId);
       removeDataListener();
       removeExitListener();
+      removeVendorSwitchListener();
       detachSearchAddon();
       host.removeEventListener("mousedown", onMouseDown);
       mountDispose();
@@ -497,6 +509,7 @@ export function EmbeddedTerminal({
           }}
           onModelSelect={selectComposerModel}
           vendors={vendors}
+          targetId={targetId}
         />
       )}
       {xterm.contextMenu && (

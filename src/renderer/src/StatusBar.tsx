@@ -10,6 +10,7 @@ export function StatusBar({
   session,
   updatedAt,
   cwd,
+  vendorName,
   model,
   tokenUsage,
   contextUsage,
@@ -26,6 +27,7 @@ export function StatusBar({
   session: AiSession | null;
   updatedAt: string;
   cwd: string;
+  vendorName: string;
   model: StatusText;
   tokenUsage: StatusText;
   contextUsage: StatusText;
@@ -53,6 +55,10 @@ export function StatusBar({
         <div className="status-item status-item-wide">
           <span>工作目录</span>
           <strong title={cwd}>{cwd}</strong>
+        </div>
+        <div className="status-item status-item-wide">
+          <span>当前供应商</span>
+          <strong title={vendorName}>{vendorName || "-"}</strong>
         </div>
       </div>
       <div className="statusbar-right">

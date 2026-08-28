@@ -88,9 +88,13 @@ export function App() {
   const [usageDetailsOpen, setUsageDetailsOpen] = useState(false);
   const [gatewayPortOpen, setGatewayPortOpen] = useState(false);
   const [gatewayPortDraft, setGatewayPortDraft] = useState("0");
+  const [gatewayFailureThresholdDraft, setGatewayFailureThresholdDraft] = useState("1");
+  const [gatewayCircuitFailureThresholdDraft, setGatewayCircuitFailureThresholdDraft] = useState("3");
+  const [gatewayCircuitDurationDraft, setGatewayCircuitDurationDraft] = useState("60");
   const [gatewayPortStatus, setGatewayPortStatus] = useState<import("./types").GatewayPortStatus | null>(null);
   const [gatewayPortError, setGatewayPortError] = useState("");
   const [gatewayPortBusy, setGatewayPortBusy] = useState(false);
+  const [vendorByTabKey, setVendorByTabKey] = useState<Record<string, string>>({});
   const { openAppMenu, setOpenAppMenu } = useAppMenuState();
   const usageDetailsRef = useRef<HTMLDivElement | null>(null);
 
@@ -102,6 +106,9 @@ export function App() {
       const status = await window.codexConsole.getGatewayPort();
       setGatewayPortStatus(status);
       setGatewayPortDraft(String(status.configuredPort));
+      setGatewayFailureThresholdDraft(String(status.configuredFailureThreshold));
+      setGatewayCircuitFailureThresholdDraft(String(status.configuredCircuitFailureThreshold));
+      setGatewayCircuitDurationDraft(String(status.configuredCircuitDurationSeconds));
       setGatewayPortOpen(true);
     } catch (error) {
       setNotice(captureError(error, "getGatewayPort", "读取网关端口失败。"));
@@ -114,15 +121,35 @@ export function App() {
       setGatewayPortError("端口必须是 0 到 65535 之间的整数。端口 0 表示自动分配。");
       return;
     }
+    const failureThreshold = Number(gatewayFailureThresholdDraft.trim());
+    if (!Number.isInteger(failureThreshold) || failureThreshold < 1 || failureThreshold > 10) {
+      setGatewayPortError("异常切换阈值必须是 1 到 10 之间的整数。");
+      return;
+    }
+    const circuitFailureThreshold = Number(gatewayCircuitFailureThresholdDraft.trim());
+    if (!Number.isInteger(circuitFailureThreshold) || circuitFailureThreshold < 1 || circuitFailureThreshold > 20) {
+      setGatewayPortError("熔断次数必须是 1 到 20 之间的整数。");
+      return;
+    }
+    const circuitDurationSeconds = Number(gatewayCircuitDurationDraft.trim());
+    if (!Number.isInteger(circuitDurationSeconds) || circuitDurationSeconds < 10 || circuitDurationSeconds > 86400) {
+      setGatewayPortError("熔断持续时间必须是 10 到 86400 秒之间的整数。");
+      return;
+    }
     setGatewayPortBusy(true);
     setGatewayPortError("");
     try {
-      const result = await window.codexConsole.setGatewayPort(port);
+      const result = await window.codexConsole.setGatewayPort(
+        port,
+        failureThreshold,
+        circuitFailureThreshold,
+        circuitDurationSeconds
+      );
       setGatewayPortStatus(result);
       setGatewayPortOpen(false);
       setNotice(result.applied
-        ? `网关端口已设置为 ${result.configuredPort === 0 ? "自动分配" : result.configuredPort}。`
-        : `网关端口已保存为 ${result.configuredPort}，当前 Gateway 仍使用端口 ${result.activePort}；新建终端时生效。`);
+        ? `设置已保存：端口 ${result.configuredPort === 0 ? "自动分配" : result.configuredPort}，异常切换 ${result.configuredFailureThreshold} 次，熔断 ${result.configuredCircuitFailureThreshold} 次/${result.configuredCircuitDurationSeconds} 秒。`
+        : `设置已保存：端口 ${result.configuredPort}（当前 Gateway 仍使用 ${result.activePort}，新建终端时生效），异常切换 ${result.configuredFailureThreshold} 次，熔断 ${result.configuredCircuitFailureThreshold} 次/${result.configuredCircuitDurationSeconds} 秒。`);
     } catch (error) {
       setGatewayPortError(captureError(error, "setGatewayPort", "保存网关端口失败。"));
     } finally {
@@ -307,18 +334,31 @@ export function App() {
     setVendorFieldErrors,
     vendorMessage,
     vendorToast,
+    loadApiVendors,
     openVendorManager,
     editVendorDraft,
     changeVendorDraftProvider,
     saveVendorDraft,
     deleteVendorById,
-    enableVendorById
+    setVendorEnabledById,
+    refreshVendorBalanceById,
+    refreshAllVendorBalances,
+    refreshingVendorIds,
+    refreshingAllBalances
   } = useVendors({
     selectedTarget,
     targetId,
     providerId,
-    activeTerminalId: activeTabForSelectedTarget ? terminalIdsByTabKey[activeTabForSelectedTarget.key] : undefined
   });
+  // 供应商名称用于底部状态栏和网关切换提示；目标切换时轻量读取一次，避免必须先打开管理弹框。
+  useEffect(() => {
+    if (targetId) void loadApiVendors(false);
+    // loadApiVendors 随 Hook 每次渲染重建，这里只需随目标切换触发一次。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [targetId]);
+  const activeVendorName = vendors.find((vendor) => vendor.id === (activeTab ? vendorByTabKey[activeTab.key] : ""))?.name
+    || vendors.find((vendor) => vendor.providerId === (selectedTarget?.provider || providerId) && vendor.enabled)?.name
+    || "";
   const {
     detailDialogSession,
     setDetailDialogSession,
@@ -748,6 +788,12 @@ export function App() {
   }
 
   function closeSessionTab(key: string) {
+    setVendorByTabKey((current) => {
+      if (!(key in current)) return current;
+      const next = { ...current };
+      delete next[key];
+      return next;
+    });
     closeTerminalTabs([key]);
   }
 
@@ -796,10 +842,20 @@ export function App() {
     setTerminalInputState(activeTab.key, { composerVisible: true, mode: nextMode });
   }
 
-  function handleTerminalReady(tabKey: string, terminalId?: string) {
+  function handleTerminalReady(tabKey: string, terminalId?: string, vendorId?: string) {
     registerTerminalReady(tabKey, terminalId);
+    if (vendorId) setVendorByTabKey((current) => ({ ...current, [tabKey]: vendorId }));
     const tab = openTabs.find((item) => item.key === tabKey);
     if (tab?.customTitle) void finalizeNewSession(tab);
+  }
+
+  function handleTerminalVendorSwitch(tabKey: string, vendorId: string, reason: "manual" | "candidate-pool" | "failure") {
+    setVendorByTabKey((current) => ({ ...current, [tabKey]: vendorId }));
+    if (reason === "candidate-pool") return;
+    const vendor = vendors.find((item) => item.id === vendorId);
+    setNotice(reason === "failure"
+      ? `当前请求异常，已自动切换供应商${vendor ? `：${vendor.name}` : ""}。`
+      : `已切换供应商${vendor ? `：${vendor.name}` : ""}。`);
   }
 
   function handleTerminalExit(tabKey: string, exitCode: number) {
@@ -954,6 +1010,7 @@ export function App() {
           focusRequest={workspaceFocusRequest}
           terminalInputStates={terminalInputStatesByTabKey}
           onTerminalReady={handleTerminalReady}
+          onVendorSwitch={handleTerminalVendorSwitch}
           onTerminalExit={handleTerminalExit}
           onTerminalInputState={handleTerminalInputState}
           systemTerminalOpen={systemTerminalOpen}
@@ -1026,6 +1083,7 @@ export function App() {
         session={statusSession}
         updatedAt={statusUpdatedAt}
         cwd={statusCwd}
+        vendorName={activeVendorName}
         model={statusModel}
         tokenUsage={statusTokenUsage}
         contextUsage={statusContextUsage}
@@ -1103,7 +1161,11 @@ export function App() {
           onProviderChange={(nextProviderId) => void changeVendorDraftProvider(nextProviderId)}
           onSave={() => void saveVendorDraft()}
           onDelete={(vendorId) => void deleteVendorById(vendorId)}
-          onEnable={(vendorId) => void enableVendorById(vendorId)}
+          onToggleEnabled={(vendorId, enabled) => void setVendorEnabledById(vendorId, enabled)}
+          onRefreshBalance={(vendorId) => void refreshVendorBalanceById(vendorId)}
+          onRefreshAllBalances={() => void refreshAllVendorBalances()}
+          refreshingVendorIds={refreshingVendorIds}
+          refreshingAllBalances={refreshingAllBalances}
           onBack={() => setVendorManagerMode("list")}
           onClose={() => setVendorManagerOpen(false)}
         />
@@ -1138,10 +1200,16 @@ export function App() {
       {gatewayPortOpen && (
         <GatewayPortDialog
           draft={gatewayPortDraft}
+          failureThresholdDraft={gatewayFailureThresholdDraft}
+          circuitFailureThresholdDraft={gatewayCircuitFailureThresholdDraft}
+          circuitDurationDraft={gatewayCircuitDurationDraft}
           status={gatewayPortStatus}
           error={gatewayPortError}
           busy={gatewayPortBusy}
           onChange={setGatewayPortDraft}
+          onFailureThresholdChange={setGatewayFailureThresholdDraft}
+          onCircuitFailureThresholdChange={setGatewayCircuitFailureThresholdDraft}
+          onCircuitDurationChange={setGatewayCircuitDurationDraft}
           onClose={() => setGatewayPortOpen(false)}
           onSave={() => void saveGatewayPort()}
         />

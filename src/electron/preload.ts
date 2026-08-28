@@ -30,6 +30,10 @@ import type {
   SystemTerminalStartRequest,
   TerminalStartRequest,
   VendorModel,
+  VendorBalanceBatchResult,
+  VendorBalanceRefreshResult,
+  GatewayVendorHealth,
+  GatewayUsageSummary,
   WorkspacePreset,
   WorkspacePresetInput
 } from "./types";
@@ -42,22 +46,33 @@ const api = {
   installCli: (request: CliInstallRequest) =>
     ipcRenderer.invoke("cli:install", request) as Promise<CliInstallResult>,
   getGatewayPort: () => ipcRenderer.invoke("gateway:get-port") as Promise<GatewayPortStatus>,
-  setGatewayPort: (port: number) => ipcRenderer.invoke("gateway:set-port", port) as Promise<GatewayPortUpdateResult>,
+  setGatewayPort: (
+    port: number,
+    failureThreshold: number,
+    circuitFailureThreshold: number,
+    circuitDurationSeconds: number
+  ) => ipcRenderer.invoke("gateway:set-port", port, failureThreshold, circuitFailureThreshold, circuitDurationSeconds) as Promise<GatewayPortUpdateResult>,
   listApiVendors: (targetId?: string) => ipcRenderer.invoke("vendor:list", targetId) as Promise<ApiVendor[]>,
   saveApiVendor: (input: ApiVendorInput) => ipcRenderer.invoke("vendor:save", input) as Promise<ApiVendor>,
-  isApiKeyEncryptionAvailable: () =>
-    ipcRenderer.invoke("vendor:encryption-available") as Promise<boolean>,
   deleteApiVendor: (vendorId: string) => ipcRenderer.invoke("vendor:delete", vendorId) as Promise<{ deleted: boolean }>,
   readApiVendorConfigs: (request: ApiVendorConfigReadRequest) =>
     ipcRenderer.invoke("vendor:read-configs", request) as Promise<ApiVendorConfigReadResult>,
   enableApiVendor: (request: ApiVendorEnableRequest) =>
     ipcRenderer.invoke("vendor:enable", request) as Promise<ApiVendorEnableResult>,
+  setApiVendorEnabled: (vendorId: string, enabled: boolean) =>
+    ipcRenderer.invoke("vendor:set-enabled", vendorId, enabled) as Promise<import("./types").ApiVendorEnabledResult>,
   switchVendorRoute: (terminalId: string, vendorId: string) =>
     ipcRenderer.invoke("vendor:route-switch", terminalId, vendorId) as Promise<{
       switched: number;
       reason?: "terminal-not-found" | "gateway-not-active" | "route-not-found" | "provider-mismatch";
     }>,
   listVendorModels: (vendorId: string) => ipcRenderer.invoke("vendor:list-models", vendorId) as Promise<VendorModel[]>,
+  refreshVendorBalance: (vendorId: string) => ipcRenderer.invoke("vendor:refresh-balance", vendorId) as Promise<VendorBalanceRefreshResult>,
+  refreshVendorBalances: () => ipcRenderer.invoke("vendor:refresh-balances") as Promise<VendorBalanceBatchResult>,
+  getGatewayVendorHealth: () => ipcRenderer.invoke("gateway:get-vendor-health") as Promise<GatewayVendorHealth[]>,
+  resetGatewayVendorHealth: (vendorId?: string) => ipcRenderer.invoke("gateway:reset-vendor-health", vendorId) as Promise<void>,
+  getGatewayUsageSummary: (periodStart: string, periodEnd: string) => ipcRenderer.invoke("gateway:get-usage-summary", periodStart, periodEnd) as Promise<GatewayUsageSummary>,
+  listModels: (targetId: string) => ipcRenderer.invoke("models:list", targetId) as Promise<VendorModel[]>,
   listCompressionPrompts: () => ipcRenderer.invoke("compression-prompt:list") as Promise<CompressionPrompt[]>,
   saveCompressionPrompt: (input: CompressionPromptInput) =>
     ipcRenderer.invoke("compression-prompt:save", input) as Promise<CompressionPrompt>,
@@ -131,7 +146,7 @@ const api = {
   openSkillFolder: (targetId: string, skillName: string) =>
     ipcRenderer.invoke("skill:open-folder", targetId, skillName) as Promise<void>,
   startTerminal: (params: TerminalStartRequest) =>
-    ipcRenderer.invoke("terminal:start", params) as Promise<{ terminalId: string }>,
+    ipcRenderer.invoke("terminal:start", params) as Promise<import("./types").TerminalStartResult>,
   startSystemTerminal: (params: SystemTerminalStartRequest) =>
     ipcRenderer.invoke("terminal:start-system", params) as Promise<{ terminalId: string }>,
   chooseDirectory: () => ipcRenderer.invoke("dialog:choose-directory") as Promise<{ filePath?: string }>,
@@ -155,6 +170,11 @@ const api = {
       handler(terminalId, exitCode);
     ipcRenderer.on("terminal:exit", listener);
     return () => ipcRenderer.off("terminal:exit", listener);
+  },
+  onGatewayVendorSwitched: (handler: (event: import("./types").GatewayVendorSwitchEvent) => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, payload: import("./types").GatewayVendorSwitchEvent) => handler(payload);
+    ipcRenderer.on("gateway:vendor-switched", listener);
+    return () => ipcRenderer.off("gateway:vendor-switched", listener);
   },
   openSessionFolder: (targetId: string, sessionId: string) =>
     ipcRenderer.invoke("shell:open-session-folder", targetId, sessionId) as Promise<void>,

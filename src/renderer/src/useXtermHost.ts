@@ -40,7 +40,8 @@ export function useXtermHost(options: UseXtermHostOptions = {}) {
   const fitAddonRef = useRef<FitAddon | null>(null);
   const searchAddonRef = useRef<SearchAddon | null>(null);
   const disposeRef = useRef({ disposed: false });
-  const outputBufferRef = useRef("");
+  // 使用分块数组收集 PTY 输出，避免大 JSONL 恢复时字符串重复拷贝。
+  const outputChunksRef = useRef<string[]>([]);
   const outputFrameRef = useRef(0);
   const resizeFrameRef = useRef(0);
   const resizeObserverRef = useRef<ResizeObserver | null>(null);
@@ -123,14 +124,14 @@ export function useXtermHost(options: UseXtermHostOptions = {}) {
     // 输出缓冲：requestAnimationFrame 节流，SystemTerminal 与 EmbeddedTerminal 共用相同函数。
     function flushOutput() {
       outputFrameRef.current = 0;
-      if (!outputBufferRef.current) return;
-      const data = outputBufferRef.current;
-      outputBufferRef.current = "";
+      if (outputChunksRef.current.length === 0) return;
+      const data = outputChunksRef.current.join("");
+      outputChunksRef.current = [];
       terminal.write(data);
     }
 
     function writeTerminalOutput(data: string) {
-      outputBufferRef.current += data;
+      outputChunksRef.current.push(data);
       if (!outputFrameRef.current) outputFrameRef.current = requestAnimationFrame(flushOutput);
     }
 
@@ -208,7 +209,7 @@ export function useXtermHost(options: UseXtermHostOptions = {}) {
       dispose: () => {
         if (outputFrameRef.current) cancelAnimationFrame(outputFrameRef.current);
         if (resizeFrameRef.current) cancelAnimationFrame(resizeFrameRef.current);
-        outputBufferRef.current = "";
+        outputChunksRef.current = [];
         outputFrameRef.current = 0;
         resizeFrameRef.current = 0;
         resizeObserver.disconnect();

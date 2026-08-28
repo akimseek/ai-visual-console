@@ -2,19 +2,19 @@ import { describe, expect, it } from "vitest";
 import {
   buildVendorConfigTemplateFromExisting,
   buildVendorDraft,
+  calculateVendorColumnWidths,
   renderVendorConfigPreview,
-  shouldApplyVendorConfigAfterSave,
   toVendorConfigTemplate,
   validateVendorDraft
 } from "./vendorConfig";
-import type { ApiVendor, ApiVendorConfigTemplate } from "./types";
+import type { ApiVendorConfigTemplate } from "./types";
 
 const DRAFT = buildVendorDraft({
   providerId: "codex",
   name: "MyVendor",
   apiKey: "sk-secret",
   apiBaseUrl: "https://api.example.com",
-  writeCommonConfig: false,
+  sort: 1,
   configs: []
 });
 
@@ -30,12 +30,43 @@ describe("buildVendorDraft", () => {
   });
 });
 
+describe("calculateVendorColumnWidths", () => {
+  it("按内容宽度计算并限制最小/最大值", () => {
+    const widths = calculateVendorColumnWidths([20, 500, 80, 40, 100, 80, 80], 0);
+    expect(widths[0]).toBe(180);
+    expect(widths[1]).toBe(180);
+    expect(widths[6]).toBe(164);
+  });
+
+  it("容器有剩余空间时优先扩展名称列", () => {
+    const widths = calculateVendorColumnWidths([], 1200);
+    expect(widths.reduce((total, width) => total + width, 0)).toBe(1200);
+    expect(widths[0]).toBeGreaterThan(widths[1]);
+  });
+
+  it("宽容器下仍让列宽总和精确匹配容器，剩余空间交给名称列", () => {
+    const widths = calculateVendorColumnWidths([], 1570);
+    expect(widths.reduce((total, width) => total + width, 0)).toBe(1570);
+    expect(widths[0]).toBe(480);
+  });
+
+  it("容器过窄时仍保留所有列的最小宽度", () => {
+    const widths = calculateVendorColumnWidths([], 400);
+    expect(widths.reduce((total, width) => total + width, 0)).toBeGreaterThan(400);
+    expect(widths.every((width) => width > 0)).toBe(true);
+  });
+});
+
 describe("validateVendorDraft", () => {
   it("缺字段时报错", () => {
     const errors = validateVendorDraft({ ...DRAFT, name: "", apiKey: "", apiBaseUrl: "" });
     expect(errors.name).toBeTruthy();
     expect(errors.apiKey).toBeTruthy();
     expect(errors.apiBaseUrl).toBeTruthy();
+  });
+
+  it("排序为空时报错", () => {
+    expect(validateVendorDraft({ ...DRAFT, sort: undefined }).sort).toContain("排序值");
   });
 
   it("重名（忽略大小写）报错", () => {
@@ -48,28 +79,10 @@ describe("validateVendorDraft", () => {
   it("合法草稿无错误", () => {
     expect(validateVendorDraft(DRAFT)).toEqual({});
   });
-});
 
-describe("shouldApplyVendorConfigAfterSave", () => {
-  it("已启用供应商即使未勾选写入通用配置，编辑保存也会重新应用配置", () => {
-    const enabledVendor: ApiVendor = {
-      id: "vendor-1",
-      providerId: "codex",
-      name: "MyVendor",
-      apiKey: "old-key",
-      apiBaseUrl: "https://old.example.com",
-      configs: [],
-      enabled: true,
-      createdAt: "2026-01-01T00:00:00.000Z",
-      updatedAt: "2026-01-01T00:00:00.000Z"
-    };
-
-    expect(shouldApplyVendorConfigAfterSave({ ...DRAFT, id: enabledVendor.id }, [enabledVendor])).toBe(true);
-  });
-
-  it("未启用供应商仍由写入通用配置选项决定是否立即应用", () => {
-    expect(shouldApplyVendorConfigAfterSave(DRAFT, [])).toBe(false);
-    expect(shouldApplyVendorConfigAfterSave({ ...DRAFT, writeCommonConfig: true }, [])).toBe(true);
+  it("费率最多保留两位小数且不能为负数", () => {
+    expect(validateVendorDraft({ ...DRAFT, pricing: { inputPerMillionUsd: 1.234 } }).inputPrice).toContain("2 位");
+    expect(validateVendorDraft({ ...DRAFT, pricing: { outputPerMillionUsd: -1 } }).outputPrice).toContain("非负数");
   });
 });
 

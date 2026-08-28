@@ -84,6 +84,27 @@ export function requireGatewayPort(value: unknown) {
   return port;
 }
 
+export function requireGatewayFailureThreshold(value: unknown) {
+  if (typeof value !== "number" || !Number.isInteger(value) || value < 1 || value > 10) {
+    throw new Error("异常切换阈值必须是 1 到 10 之间的整数。");
+  }
+  return value;
+}
+
+export function requireGatewayCircuitFailureThreshold(value: unknown) {
+  if (typeof value !== "number" || !Number.isInteger(value) || value < 1 || value > 20) {
+    throw new Error("熔断次数必须是 1 到 20 之间的整数。");
+  }
+  return value;
+}
+
+export function requireGatewayCircuitDurationSeconds(value: unknown) {
+  if (typeof value !== "number" || !Number.isInteger(value) || value < 10 || value > 86_400) {
+    throw new Error("熔断持续时间必须是 10 到 86400 秒之间的整数。");
+  }
+  return value;
+}
+
 export function requireAppCommand(value: unknown): AppCommand {
   const commands: AppCommand[] = [
     "quit",
@@ -124,7 +145,9 @@ export function requireApiVendorInput(value: unknown) {
     name: requireString(input.name, "name"),
     apiKey: requireString(input.apiKey, "apiKey"),
     apiBaseUrl: requireString(input.apiBaseUrl, "apiBaseUrl"),
-    writeCommonConfig: input.writeCommonConfig === true,
+    sort: requireSort(input.sort),
+    pricing: requireVendorPricing(input.pricing),
+    enabled: input.enabled !== false,
     configs: configs.map((item) => {
       if (!item || typeof item !== "object") throw new Error("参数无效：vendor config");
       const config = item as Record<string, unknown>;
@@ -138,6 +161,32 @@ export function requireApiVendorInput(value: unknown) {
       };
     })
   };
+}
+
+function requireSort(value: unknown) {
+  if (value === undefined || value === null || value === "") return undefined;
+  if (typeof value !== "number" || !Number.isInteger(value) || value < 0) {
+    throw new Error("sort 必须是大于等于 0 的整数。");
+  }
+  return value;
+}
+
+function requireVendorPricing(value: unknown) {
+  if (value === undefined || value === null) return undefined;
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("参数无效：pricing");
+  const pricing = value as Record<string, unknown>;
+  return {
+    inputPerMillionUsd: requireOptionalPrice(pricing.inputPerMillionUsd, "inputPerMillionUsd"),
+    outputPerMillionUsd: requireOptionalPrice(pricing.outputPerMillionUsd, "outputPerMillionUsd")
+  };
+}
+
+function requireOptionalPrice(value: unknown, name: string) {
+  if (value === undefined || value === null || value === "") return undefined;
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0 || Math.round(value * 100) !== value * 100) {
+    throw new Error(`${name} 必须是非负数，且最多保留 2 位小数。`);
+  }
+  return value;
 }
 
 export function requireApiVendorConfigReadRequest(value: unknown) {
