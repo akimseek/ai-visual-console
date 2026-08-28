@@ -8,16 +8,16 @@ import {
   setGatewayCircuitFailureThreshold,
   setGatewayFailureThreshold,
   setGatewayPort
-} from "../settings";
-import { getVendorGatewayPort, invalidateWslGatewayCache } from "../vendorGateway";
+} from "../core/settings";
+import { getVendorGatewayPort, invalidateWslGatewayCache } from "../gateway/vendor-gateway";
 import {
   requireGatewayCircuitDurationSeconds,
   requireGatewayCircuitFailureThreshold,
   requireGatewayFailureThreshold,
   requireGatewayPort
-} from "../ipcValidation";
-import { getGatewayUsageSummary } from "../gatewayRequestStore";
-import { listGatewayVendorHealth, resetGatewayVendorHealth } from "../gatewayResilience";
+} from "./validation";
+import { getGatewayUsageSummary } from "../gateway/gateway-request-store";
+import { listGatewayVendorHealth, resetGatewayVendorHealth } from "../gateway/gateway-resilience";
 
 export function registerGatewayIpcHandlers() {
   ipcMain.handle("gateway:get-port", async () => ({

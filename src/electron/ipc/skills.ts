@@ -1,5 +1,5 @@
 import { BrowserWindow, dialog, ipcMain, shell } from "electron";
-import { listTargets } from "../aiProviders";
+import { listTargets } from "../providers/ai-providers";
 import {
   deleteSkill,
   getSkillFolderPath,
@@ -10,9 +10,9 @@ import {
   purgeSkill,
   restoreSkill,
   setSkillEnabled
-} from "../skills";
+} from "../skills/skills";
 import type { CodexTarget } from "../types";
-import { requireString, requireBoolean } from "../ipcValidation";
+import { requireString, requireBoolean } from "./validation";
 
 async function requireTargetById(targetId: string) {
   if (targetId.startsWith("gemini:")) {

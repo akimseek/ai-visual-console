@@ -19,9 +19,9 @@ import {
   restoreSession,
   searchSessions,
   setWslCodexHome
-} from "../aiProviders";
-import { exportSessionToFile } from "../sessionExport";
-import { setSessionCustomTitle } from "../sessionMetadata";
+} from "../providers/ai-providers";
+import { exportSessionToFile } from "../providers/session-export";
+import { setSessionCustomTitle } from "../providers/session-metadata";
 import {
   coalesceSessionRequest,
   requireString,
@@ -34,7 +34,7 @@ import {
   requireCustomTitle,
   requireExportFormat,
   requireSessionMutationRefs
-} from "../ipcValidation";
+} from "./validation";
 
 function exportDialogOptions(title: string, format: string) {
   const extension = format === "markdown" ? "md" : format;

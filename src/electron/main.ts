@@ -4,38 +4,38 @@ import path from "node:path";
 import { performance } from "node:perf_hooks";
 import {
   listProviderSummaries
-} from "./aiProviders";
-import { setSessionCacheRoot, setSessionDatabasePath } from "./codexStore";
-import { setSessionMetadataPath } from "./sessionMetadata";
+} from "./providers/ai-providers";
+import { setSessionCacheRoot, setSessionDatabasePath } from "./providers/codex/codex-store";
+import { setSessionMetadataPath } from "./providers/session-metadata";
 import {
   setSettingsPath
-} from "./settings";
-import { checkCliEnvironment, installCli } from "./cliInstaller";
+} from "./core/settings";
+import { checkCliEnvironment, installCli } from "./cli/cli-installer";
 import {
   setVendorDatabasePath
-} from "./vendorManager";
-import { getVendorGatewayPort, stopVendorGateway } from "./vendorGateway";
-import { flushGatewayLogs, getRecentGatewayEvents, getRecentGatewayRequests, setGatewayLogPath } from "./gatewayLog";
+} from "./vendors/vendor-manager";
+import { getVendorGatewayPort, stopVendorGateway } from "./gateway/vendor-gateway";
+import { flushGatewayLogs, getRecentGatewayEvents, getRecentGatewayRequests, setGatewayLogPath } from "./gateway/gateway-log";
 import {
   getTerminalSessionCount,
   stopAllTerminalSessions
-} from "./terminalSessions";
-import { setPerformanceLogPath, writePerformanceLog } from "./performance";
-import { getAppDatabaseDiagnostics } from "./appDatabase";
-import { resolveRuntimeStorageRoot } from "./applicationPaths";
+} from "./terminal/terminal-sessions";
+import { setPerformanceLogPath, writePerformanceLog } from "./core/performance";
+import { getAppDatabaseDiagnostics } from "./core/app-database";
+import { resolveRuntimeStorageRoot } from "./core/application-paths";
 import {
   setApplicationRuntimeRoot,
   getLogDir,
   getApplicationDataDir
-} from "./mainHelpers";
-import { registerAppCommandIpc, initAppCommandIpc } from "./ipc/appCommands";
+} from "./core/main-helpers";
+import { registerAppCommandIpc, initAppCommandIpc } from "./ipc/app-commands";
 import { registerVendorIpcHandlers } from "./ipc/vendors";
 import { registerGatewayIpcHandlers } from "./ipc/gateway";
 import { registerSessionIpcHandlers } from "./ipc/sessions";
 import { registerWorkspaceIpcHandlers } from "./ipc/workspace";
 import { registerSkillIpcHandlers } from "./ipc/skills";
 import { registerTerminalIpcHandlers } from "./ipc/terminal";
-import { requireCliEnvironmentRequest, requireCliInstallRequest } from "./ipcValidation";
+import { requireCliEnvironmentRequest, requireCliInstallRequest } from "./ipc/validation";
 
 const isDev = Boolean(process.env.VITE_DEV_SERVER_URL);
 const processStartedAt = performance.now();

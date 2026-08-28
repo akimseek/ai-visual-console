@@ -6,8 +6,8 @@ import {
   listWorkspacePresets,
   saveCompressionPrompt,
   saveWorkspacePreset
-} from "../settings";
-import { requireString, requireWorkspacePresetInput, requireCompressionPromptInput } from "../ipcValidation";
+} from "../core/settings";
+import { requireString, requireWorkspacePresetInput, requireCompressionPromptInput } from "./validation";
 
 export function registerWorkspaceIpcHandlers() {
   ipcMain.handle("workspace:list-presets", () => listWorkspacePresets());

@@ -2,15 +2,15 @@ import { BrowserWindow, clipboard, dialog, ipcMain, shell } from "electron";
 import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import { promisify } from "node:util";
-import { getSessionFolderPath } from "../aiProviders";
-import { writePerformanceLog } from "../performance";
+import { getSessionFolderPath } from "../providers/ai-providers";
+import { writePerformanceLog } from "../core/performance";
 import {
   resizeTerminalSession,
   startSystemTerminalSession,
   startTerminalSession,
   stopTerminalSession,
   writeTerminalSession
-} from "../terminalSessions";
+} from "../terminal/terminal-sessions";
 import {
   requireString,
   requireNumber,
@@ -19,7 +19,7 @@ import {
   requireTerminalStartParams,
   requireSystemTerminalStartParams,
   requireOpenPathRequest
-} from "../ipcValidation";
+} from "./validation";
 
 const execFileAsync = promisify(execFile);
 

@@ -7,24 +7,24 @@ import {
   enableApiVendor,
   listVendorModels
   ,setApiVendorEnabled
-} from "../vendorManager";
-import { listModels as listQoderModels } from "../qoderProvider";
+} from "../vendors/vendor-manager";
+import { listModels as listQoderModels } from "../providers/qoder/qoder-provider";
 import {
   listVendorBalanceSnapshots,
   refreshVendorBalance,
   refreshVendorBalances
-} from "../vendorBalance";
-import { listGatewayVendorHealth } from "../gatewayResilience";
-import { switchTerminalVendor } from "../terminalSessions";
-import { invalidateGatewayVendorSnapshot } from "../vendorRegistry";
-import { findTargetForVendor } from "../mainHelpers";
+} from "../gateway/vendor-balance";
+import { listGatewayVendorHealth } from "../gateway/gateway-resilience";
+import { switchTerminalVendor } from "../terminal/terminal-sessions";
+import { invalidateGatewayVendorSnapshot } from "../gateway/vendor-registry";
+import { findTargetForVendor } from "../core/main-helpers";
 import {
   requireApiVendorInput,
   requireString,
   requireApiVendorConfigReadRequest,
   requireApiVendorEnableRequest
   ,requireBoolean
-} from "../ipcValidation";
+} from "./validation";
 
 export function registerVendorIpcHandlers() {
   ipcMain.handle("vendor:list", async (_event, targetId: unknown) => {
