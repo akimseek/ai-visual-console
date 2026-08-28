@@ -171,6 +171,9 @@ Gateway 只在请求边界选择供应商。已经发出的请求不会被中途
 - 流式 JSONL 读取与分页详情加载
 - 本地 Gateway 请求转发、健康状态和故障转移
 
+## 友情链接
+[Linux DO](https://linux.do)
+
 ## 许可证
 
 本项目使用 [MIT License](LICENSE) 授权。
