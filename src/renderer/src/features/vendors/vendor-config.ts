@@ -51,6 +51,8 @@ export function createEmptyVendorDraft(): ApiVendorDraft {
     // 新建时由 useVendors 按当前最大排序值预填；这里保留未填写状态以触发必填校验。
     sort: undefined,
     pricing: {},
+    modelQuery: undefined,
+    balanceQuery: undefined,
     enabled: true,
     configs: []
   });
@@ -79,6 +81,8 @@ export function buildVendorDraft(input: ApiVendorDraft): ApiVendorDraft {
     apiBaseUrl,
     sort,
     pricing: input.pricing,
+    modelQuery: input.modelQuery,
+    balanceQuery: input.balanceQuery,
     enabled: input.enabled !== false,
     configs
   };
@@ -93,6 +97,8 @@ export function vendorToDraft(vendor: ApiVendor): ApiVendorDraft {
     apiBaseUrl: vendor.apiBaseUrl,
     sort: vendor.sort,
     pricing: vendor.pricing,
+    modelQuery: vendor.modelQuery,
+    balanceQuery: vendor.balanceQuery,
     enabled: vendor.enabled !== false,
     configs: vendor.configs
   });

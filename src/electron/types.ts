@@ -51,6 +51,10 @@ export type {
   WorkspacePreset,
   WorkspacePresetInput,
   VendorModel,
+  VendorQueryAuthMode,
+  VendorModelQueryConfig,
+  VendorBalanceQueryTemplate,
+  VendorBalanceQueryConfig,
   VendorBalanceBatchResult,
   VendorBalanceRefreshResult,
   VendorBalanceSnapshot

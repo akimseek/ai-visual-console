@@ -33,7 +33,7 @@ export type VendorRoute = {
 
 export type VendorRouteSwitchResult = {
   switched: 0 | 1;
-  reason?: "route-not-found" | "provider-mismatch";
+  reason?: "route-not-found" | "provider-mismatch" | "vendor-not-found" | "vendor-disabled";
 };
 
 type MutableVendorRoute = VendorRoute & {
@@ -147,10 +147,18 @@ export async function createVendorRoute(providerId: AiProviderId, vendorId?: str
   return route;
 }
 
-export function switchVendorRoute(routeId: string, providerId: AiProviderId, vendorId: string): VendorRouteSwitchResult {
+export async function switchVendorRoute(routeId: string, providerId: AiProviderId, vendorId: string): Promise<VendorRouteSwitchResult> {
   const route = routes.get(routeId);
   if (!route) return { switched: 0, reason: "route-not-found" };
   if (route.providerId !== providerId) return { switched: 0, reason: "provider-mismatch" };
+  // 手动切换也必须经过候选池校验，禁止切入已关闭或配置不完整的供应商。
+  const vendors = await getGatewayVendorSnapshot();
+  const vendor = vendors.find((item) => item.id === vendorId);
+  if (!vendor) return { switched: 0, reason: "vendor-not-found" };
+  if (vendor.providerId !== providerId) return { switched: 0, reason: "provider-mismatch" };
+  if (!vendor.enabled || !vendor.apiKey.trim() || !vendor.apiBaseUrl.trim()) {
+    return { switched: 0, reason: "vendor-disabled" };
+  }
   notifyVendorSwitch(route, vendorId, "manual");
   return { switched: 1 };
 }
@@ -238,7 +246,7 @@ async function handleGatewayRequest(request: IncomingMessage, response: ServerRe
     }
 
     // 每次请求读取最新候选池；当前供应商仍可用时保持会话粘性，只有候选池或健康状态使其不可用时才换供应商。
-    const vendors = await getGatewayVendorSnapshot();
+    let vendors = await getGatewayVendorSnapshot();
     await hydrateGatewayVendorHealth();
     const routeVendor = vendors.find((item) => item.id === route.vendorId && item.providerId === route.providerId);
     const vendor = chooseVendor(vendors, route.providerId, route.vendorId);
@@ -304,6 +312,8 @@ async function handleGatewayRequest(request: IncomingMessage, response: ServerRe
           failuresOnVendor += 1;
           if (failuresOnVendor >= failureThreshold) {
             attemptedVendorIds.add(attemptVendor.id);
+            // 供应商启停会使快照失效；重试前重新取引用，确保关闭项不会进入本次故障转移。
+            vendors = await getGatewayVendorSnapshot();
             const nextVendor = chooseNextVendor(vendors, route.providerId, attemptVendor.id, attemptedVendorIds);
             if (!nextVendor) throw error;
             attemptVendor = nextVendor;
@@ -329,6 +339,8 @@ async function handleGatewayRequest(request: IncomingMessage, response: ServerRe
           continue;
         }
         attemptedVendorIds.add(attemptVendor.id);
+        // 供应商启停会使快照失效；重试前重新取引用，确保关闭项不会进入本次故障转移。
+        vendors = await getGatewayVendorSnapshot();
         const nextVendor = chooseNextVendor(vendors, route.providerId, attemptVendor.id, attemptedVendorIds);
         if (!nextVendor) break;
         await upstream.body?.cancel().catch(() => undefined);

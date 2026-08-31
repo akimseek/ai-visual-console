@@ -286,7 +286,7 @@ export function stopTerminalSession(terminalId: string) {
   if (session.vendorRouteId) void destroyVendorRoute(session.vendorRouteId);
 }
 
-export function switchTerminalVendor(terminalId: string, providerId: AiProviderId, vendorId: string) {
+export async function switchTerminalVendor(terminalId: string, providerId: AiProviderId, vendorId: string) {
   const session = sessions.get(terminalId);
   if (!session) return { switched: 0, reason: "terminal-not-found" as const };
   if (!session.vendorRouteId) return { switched: 0, reason: "gateway-not-active" as const };

@@ -58,7 +58,7 @@ describe("vendor gateway", () => {
     expect(await first.text()).toContain("[DONE]");
     expect(requests[0]).toEqual({ authorization: "Bearer key-one", body: '{"prompt":"one"}' });
 
-    switchVendorRoute(route.routeId, "codex", "two");
+    await switchVendorRoute(route.routeId, "codex", "two");
     const second = await fetch(`${route.baseUrl}/v1/responses`, {
       method: "POST",
       headers: { authorization: `Bearer ${route.localToken}`, "content-type": "application/json" },
@@ -128,6 +128,56 @@ describe("vendor gateway", () => {
     expect(response.status).toBe(200);
     await response.text();
     expect(authorizations).toEqual(["Bearer key-one", "Bearer key-two", "Bearer key-three"]);
+  });
+
+  it("候选池只剩一个启用供应商时，不切换到已关闭供应商", async () => {
+    const authorizations: string[] = [];
+    const upstream = createServer((request, response) => {
+      authorizations.push(request.headers.authorization || "");
+      // 第一次请求开始后模拟用户关闭 second；故障转移必须重新读取候选池。
+      if (authorizations.length === 1) {
+        listApiVendorsMock.mockResolvedValue([
+          vendor("first", "key-one", apiBaseUrl, true),
+          vendor("second", "key-two", apiBaseUrl, false)
+        ]);
+        invalidateGatewayVendorSnapshot();
+      }
+      response.writeHead(500, { "content-type": "application/json" });
+      response.end("{\"error\":\"down\"}");
+    });
+    servers.push(upstream);
+    await new Promise<void>((resolve) => upstream.listen(0, "127.0.0.1", () => resolve()));
+    const address = upstream.address();
+    if (!address || typeof address === "string") throw new Error("upstream did not start");
+    const apiBaseUrl = `http://127.0.0.1:${address.port}/v1`;
+    listApiVendorsMock.mockResolvedValue([
+      vendor("first", "key-one", apiBaseUrl, true),
+      vendor("second", "key-two", apiBaseUrl, true)
+    ]);
+
+    const route = await createVendorRoute("codex");
+    if (!route) throw new Error("route was not created");
+    const response = await fetch(`${route.baseUrl}/v1/responses`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${route.localToken}`, "content-type": "application/json" },
+      body: "{\"prompt\":\"retry\"}"
+    });
+    expect(response.status).toBe(500);
+    await response.text();
+    expect(authorizations.length).toBeGreaterThan(0);
+    expect(authorizations.every((authorization) => authorization === "Bearer key-one")).toBe(true);
+  });
+
+  it("手动切换拒绝已关闭供应商", async () => {
+    const first = vendor("first", "key-one", "https://example.com/v1", true);
+    const second = vendor("second", "key-two", "https://example.com/v1", false);
+    listApiVendorsMock.mockResolvedValue([first, second]);
+    const route = await createVendorRoute("codex");
+    if (!route) throw new Error("route was not created");
+
+    const result = await switchVendorRoute(route.routeId, "codex", second.id);
+    expect(result).toEqual({ switched: 0, reason: "vendor-disabled" });
+    expect(route.vendorId).toBe(first.id);
   });
 
   it("拒绝错误 route token", async () => {

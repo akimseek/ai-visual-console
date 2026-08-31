@@ -10,7 +10,10 @@ import type {
   ApiVendorEnableResult,
   ApiVendorInput,
   CodexTarget,
-  VendorModel
+  VendorModel,
+  VendorModelQueryConfig,
+  VendorBalanceQueryConfig,
+  VendorQueryAuthMode
 } from "../types";
 import { assertAllowedConfigPath } from "../../shared/shell-args";
 import { runWslShell, shellQuote } from "../terminal/wsl-process";
@@ -59,6 +62,12 @@ type VendorBalanceRow = {
   queried_at: string | null;
 };
 
+type VendorQueryConfigRow = {
+  vendor_id: string;
+  model_query_json: string | null;
+  balance_query_json: string | null;
+};
+
 let vendorBackupRoot = "";
 let vendorDatabasePath = "";
 let vendorSchemaPath = "";
@@ -84,7 +93,14 @@ export async function listApiVendors(target?: CodexTarget | null): Promise<ApiVe
 
 export async function listApiVendorSummaries(target?: CodexTarget | null): Promise<ApiVendor[]> {
   const vendors = await listApiVendors(target);
-  return vendors.map((vendor) => ({ ...vendor, apiKey: "" }));
+  return vendors.map((vendor) => ({
+    ...vendor,
+    apiKey: "",
+    modelQuery: vendor.modelQuery ? { ...vendor.modelQuery, headers: undefined } : undefined,
+    balanceQuery: vendor.balanceQuery
+      ? { ...vendor.balanceQuery, accessToken: undefined, headers: undefined }
+      : undefined
+  }));
 }
 
 export async function saveApiVendor(input: ApiVendorInput): Promise<ApiVendor> {
@@ -113,6 +129,8 @@ export async function saveApiVendor(input: ApiVendorInput): Promise<ApiVendor> {
       apiBaseUrl: normalized.apiBaseUrl,
       sort: requestedSort,
       pricing: normalized.pricing,
+      modelQuery: normalized.modelQuery,
+      balanceQuery: normalized.balanceQuery,
       configs: normalized.configs,
       enabled: normalized.enabled !== false,
       createdAt: existing?.created_at || now,
@@ -172,6 +190,17 @@ export async function saveApiVendor(input: ApiVendorInput): Promise<ApiVendor> {
         index
       );
     });
+    db.prepare(`
+      INSERT INTO api_vendor_query_configs (vendor_id, model_query_json, balance_query_json)
+      VALUES (?, ?, ?)
+      ON CONFLICT(vendor_id) DO UPDATE SET
+        model_query_json = excluded.model_query_json,
+        balance_query_json = excluded.balance_query_json
+    `).run(
+      stored.id,
+      stored.modelQuery ? JSON.stringify(stored.modelQuery) : null,
+      stored.balanceQuery ? JSON.stringify(stored.balanceQuery) : null
+    );
   });
 
   return saved!;
@@ -180,6 +209,7 @@ export async function saveApiVendor(input: ApiVendorInput): Promise<ApiVendor> {
 export async function deleteApiVendor(vendorId: string) {
   await ensureVendorSchema();
   await updateAppDatabase((db) => {
+    db.prepare("DELETE FROM api_vendor_query_configs WHERE vendor_id = ?").run(vendorId);
     db.prepare("DELETE FROM api_vendors WHERE id = ?").run(vendorId);
     // 余额快照与供应商生命周期一致；旧数据库尚未创建该表时忽略即可。
     try {
@@ -251,9 +281,94 @@ function normalizeVendorInput(input: ApiVendorInput, allowEmptyApiKey = false): 
     apiBaseUrl,
     sort: input.sort,
     pricing,
+    modelQuery: normalizeModelQueryConfig(input.modelQuery),
+    balanceQuery: normalizeBalanceQueryConfig(input.balanceQuery),
     enabled: input.enabled !== false,
     configs
   };
+}
+
+const QUERY_CONFIG_MAX_JSON_BYTES = 32 * 1024;
+const QUERY_HEADER_NAME_PATTERN = /^[A-Za-z0-9!#$%&'*+.^_`|~-]{1,100}$/;
+
+function normalizeModelQueryConfig(config: ApiVendorInput["modelQuery"]): VendorModelQueryConfig | undefined {
+  if (!config) return undefined;
+  const normalized: VendorModelQueryConfig = {
+    endpoint: normalizeQueryText(config.endpoint, 2000),
+    authMode: normalizeAuthMode(config.authMode),
+    authHeaderName: normalizeHeaderName(config.authHeaderName),
+    authQueryName: normalizeQueryText(config.authQueryName, 100),
+    headers: normalizeHeaders(config.headers)
+  };
+  if (Buffer.byteLength(JSON.stringify(normalized), "utf8") > QUERY_CONFIG_MAX_JSON_BYTES) throw new Error("供应商查询配置过大。");
+  return hasQueryValues(normalized) ? normalized : undefined;
+}
+
+function normalizeBalanceQueryConfig(config: ApiVendorInput["balanceQuery"]): VendorBalanceQueryConfig | undefined {
+  if (!config) return undefined;
+  const normalized: VendorBalanceQueryConfig = {
+    template: config.template || "auto",
+    baseUrl: normalizeQueryText(config.baseUrl, 2000),
+    endpoint: normalizeQueryText(config.endpoint, 2000),
+    method: config.method === "POST" ? "POST" : config.method === "GET" ? "GET" : undefined,
+    authMode: normalizeAuthMode(config.authMode),
+    authHeaderName: normalizeHeaderName(config.authHeaderName),
+    authQueryName: normalizeQueryText(config.authQueryName, 100),
+    headers: normalizeHeaders(config.headers),
+    accessToken: normalizeQueryText(config.accessToken, 4000),
+    userId: normalizeQueryText(config.userId, 200),
+    remainingPath: normalizeQueryText(config.remainingPath, 300),
+    totalPath: normalizeQueryText(config.totalPath, 300),
+    usedPath: normalizeQueryText(config.usedPath, 300),
+    unitPath: normalizeQueryText(config.unitPath, 300),
+    planPath: normalizeQueryText(config.planPath, 300),
+    validPath: normalizeQueryText(config.validPath, 300),
+    statusPath: normalizeQueryText(config.statusPath, 300),
+    invalidMessagePath: normalizeQueryText(config.invalidMessagePath, 300),
+    multiplier: typeof config.multiplier === "number" && Number.isFinite(config.multiplier) ? config.multiplier : undefined
+  };
+  if (!Object.values({ auto: "auto", generic: "generic", "new-api": "new-api", custom: "custom" }).includes(normalized.template || "auto")) {
+    throw new Error("余额查询模板无效。");
+  }
+  if (normalized.multiplier !== undefined && (normalized.multiplier <= 0 || normalized.multiplier > 1_000_000)) {
+    throw new Error("余额换算倍率必须大于 0 且不超过 1000000。");
+  }
+  const serialized = JSON.stringify(normalized);
+  if (Buffer.byteLength(serialized, "utf8") > QUERY_CONFIG_MAX_JSON_BYTES) throw new Error("供应商查询配置过大。");
+  return normalized.template === "auto" && Object.keys(normalized).length === 1 ? undefined : normalized;
+}
+
+function normalizeQueryText(value: string | undefined, maxLength: number) {
+  if (typeof value !== "string" || !value.trim()) return undefined;
+  return value.trim().slice(0, maxLength);
+}
+
+function normalizeHeaderName(value: string | undefined) {
+  const normalized = normalizeQueryText(value, 100);
+  if (!normalized) return undefined;
+  if (!QUERY_HEADER_NAME_PATTERN.test(normalized)) throw new Error("自定义认证 Header 名称无效。");
+  return normalized;
+}
+
+function normalizeAuthMode(value: VendorQueryAuthMode | undefined): VendorQueryAuthMode | undefined {
+  if (value === undefined) return undefined;
+  if (!["bearer", "x-api-key", "x-goog-api-key", "api-key", "query", "none"].includes(value)) {
+    throw new Error("查询认证方式无效。");
+  }
+  return value;
+}
+
+function normalizeHeaders(headers: Record<string, string> | undefined) {
+  if (!headers) return undefined;
+  const entries = Object.entries(headers).slice(0, 32).map(([name, value]) => {
+    if (!QUERY_HEADER_NAME_PATTERN.test(name) || typeof value !== "string" || value.length > 4000 || /[\r\n]/.test(value)) throw new Error("自定义请求头无效。");
+    return [name, value] as const;
+  });
+  return entries.length ? Object.fromEntries(entries) : undefined;
+}
+
+function hasQueryValues(value: Record<string, unknown>) {
+  return Object.values(value).some((item) => item !== undefined && item !== null && item !== "");
 }
 
 function nextVendorSort(db: SqliteDatabase) {
@@ -452,6 +567,13 @@ function initializeVendorDb(db: SqliteDatabase) {
 
     CREATE INDEX IF NOT EXISTS idx_api_vendor_configs_vendor_id
       ON api_vendor_configs(vendor_id, sort_order);
+
+    CREATE TABLE IF NOT EXISTS api_vendor_query_configs (
+      vendor_id TEXT PRIMARY KEY,
+      model_query_json TEXT,
+      balance_query_json TEXT,
+      FOREIGN KEY (vendor_id) REFERENCES api_vendors(id) ON DELETE CASCADE
+    );
   `);
 }
 
@@ -467,6 +589,7 @@ function rowToVendor(db: SqliteDatabase, row: VendorRow): ApiVendor {
       ...(typeof row.input_price_usd === "number" ? { inputPerMillionUsd: row.input_price_usd } : {}),
       ...(typeof row.output_price_usd === "number" ? { outputPerMillionUsd: row.output_price_usd } : {})
     },
+    ...readVendorQueryConfigs(db, row.id),
     configs: listVendorConfigs(db, row.id),
     enabled: row.enabled === 1,
     createdAt: row.created_at,
@@ -493,6 +616,31 @@ function rowToVendor(db: SqliteDatabase, row: VendorRow): ApiVendor {
     // 余额表尚未创建时忽略，首次打开供应商列表仍应正常工作。
   }
   return vendor;
+}
+
+function readVendorQueryConfigs(db: SqliteDatabase, vendorId: string): Pick<ApiVendor, "modelQuery" | "balanceQuery"> {
+  try {
+    const row = db.prepare("SELECT model_query_json, balance_query_json FROM api_vendor_query_configs WHERE vendor_id = ?").get(vendorId) as VendorQueryConfigRow | undefined;
+    if (!row) return {};
+    return {
+      modelQuery: parseQueryConfig(row.model_query_json) as VendorModelQueryConfig | undefined,
+      balanceQuery: parseQueryConfig(row.balance_query_json) as VendorBalanceQueryConfig | undefined
+    };
+  } catch {
+    // 查询配置表不存在时返回空配置，便于数据库初始化过程中的只读调用继续工作。
+    return {};
+  }
+}
+
+function parseQueryConfig(value: string | null) {
+  if (!value) return undefined;
+  try {
+    const parsed: unknown = JSON.parse(value);
+    if (!isRecord(parsed)) return undefined;
+    return parsed;
+  } catch {
+    return undefined;
+  }
 }
 
 /** Gateway 主模式下仅切换候选池状态，不写入任何 CLI 配置文件。 */
@@ -524,7 +672,13 @@ function safeName(value: string) {
   return value.replace(/[\\/:*?"<>|\u0000-\u001F]/g, "_").slice(0, 100) || "vendor";
 }
 
-const MODEL_LIST_TIMEOUT_MS = 10_000;
+const MODEL_LIST_TIMEOUT_MS = 15_000;
+const MODEL_LIST_MAX_BYTES = 2 * 1024 * 1024;
+const MODEL_LIST_MAX_COUNT = 500;
+const MODEL_COMPAT_SUFFIXES = [
+  "/api/claudecode", "/api/anthropic", "/apps/anthropic", "/api/coding",
+  "/claudecode", "/anthropic", "/step_plan", "/coding", "/claude"
+];
 
 export async function listVendorModels(vendorId: string): Promise<VendorModel[]> {
   const vendors = await listApiVendors();
@@ -532,40 +686,54 @@ export async function listVendorModels(vendorId: string): Promise<VendorModel[]>
   if (!vendor) throw new Error("供应商不存在。");
   if (!vendor.apiBaseUrl) throw new Error("供应商未配置 API 地址。");
 
-  const baseUrl = new URL(vendor.apiBaseUrl);
-  // 中转站的地址可能填写为根地址、/v1 或 /openai/v1；按顺序尝试候选地址，保留已有路径前缀。
-  const basePath = baseUrl.pathname.replace(/\/+$/, "");
-  const modelUrls = [...new Set([
-    /\/models$/i.test(basePath) ? basePath : `${basePath || ""}/models`,
-    /\/v\d+(?:\.\d+)?$/i.test(basePath) || /\/models$/i.test(basePath) ? "" : `${basePath || ""}/v1/models`
-  ].filter(Boolean).map((pathname) => new URL(pathname, baseUrl.origin).toString()))];
-  const headers: Record<string, string> = { accept: "application/json" };
-  if (vendor.apiKey) headers.authorization = `Bearer ${vendor.apiKey}`;
-  if (vendor.providerId === "claude") headers["x-api-key"] = vendor.apiKey;
-  if (vendor.providerId === "gemini") headers["x-goog-api-key"] = vendor.apiKey;
-
+  let baseUrl: URL;
+  try {
+    baseUrl = new URL(vendor.apiBaseUrl);
+  } catch {
+    throw new Error("供应商 API 地址格式无效。");
+  }
+  if (baseUrl.protocol !== "http:" && baseUrl.protocol !== "https:") {
+    throw new Error("供应商 API 地址必须使用 HTTP 或 HTTPS。");
+  }
+  const modelUrls = vendor.modelQuery?.endpoint
+    ? [resolveConfiguredEndpoint(vendor.modelQuery.endpoint, baseUrl)]
+    : buildModelEndpointCandidates(baseUrl, vendor.providerId);
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), MODEL_LIST_TIMEOUT_MS);
   try {
     let lastError = "获取模型列表失败。";
     for (const modelsUrl of modelUrls) {
-      const response = await fetch(modelsUrl, { headers, signal: controller.signal });
-      if (!response.ok) {
-        lastError = `获取模型列表失败 (${response.status})`;
-        if (response.status === 404 || response.status === 405) continue;
-        throw new Error(lastError);
+      const authModes = vendor.modelQuery?.authMode
+        ? [vendor.modelQuery.authMode]
+        : modelAuthModes(vendor.providerId);
+      for (const authMode of authModes) {
+        const response = await fetch(applyModelAuthQuery(modelsUrl, authMode, vendor.apiKey, vendor.modelQuery), {
+          headers: buildModelHeaders(authMode, vendor.apiKey, vendor.modelQuery), signal: controller.signal
+        });
+        if (!response.ok) {
+          lastError = `获取模型列表失败 (${response.status})`;
+          // 只有认证失败才继续尝试另一种认证方式；路径/服务端错误直接进入下一个地址，
+          // 避免对同一故障端点重复发送多次请求。
+          if (response.status !== 401 && response.status !== 403) break;
+          continue;
+        }
+        const text = await response.text();
+        if (Buffer.byteLength(text, "utf8") > MODEL_LIST_MAX_BYTES) throw new Error("模型列表响应过大。");
+        let body: unknown;
+        try {
+          body = JSON.parse(text);
+        } catch {
+          lastError = "模型列表响应不是有效 JSON。";
+          continue;
+        }
+        const models = extractModelRows(body)
+          .map((item) => toVendorModel(item, vendor.providerId))
+          .filter((model): model is VendorModel => Boolean(model));
+        const uniqueModels = [...new Map(models.map((model) => [model.id.toLowerCase(), model])).values()]
+          .sort((left, right) => left.id.localeCompare(right.id));
+        if (uniqueModels.length > 0) return uniqueModels.slice(0, MODEL_LIST_MAX_COUNT);
+        lastError = "模型列表响应中没有可识别的模型。";
       }
-      const body = await response.json() as unknown;
-      const raw = extractModelRows(body);
-      return raw.map((item) => ({
-      id: String(item.id || item.name || item.model || ""),
-      object: typeof item.object === "string" ? item.object : undefined,
-      ownedBy: typeof item.owned_by === "string" ? item.owned_by : undefined,
-      created: typeof item.created === "number" ? item.created : undefined,
-      description: typeof item.description === "string" ? item.description : undefined,
-      pricingMultiplier: typeof item.pricingMultiplier === "number" ? item.pricingMultiplier : undefined,
-      tags: Array.isArray(item.tags) ? (item.tags as string[]).filter((t): t is string => typeof t === "string") : undefined
-      })).filter((m) => m.id);
     }
     throw new Error(lastError);
   } finally {
@@ -573,14 +741,101 @@ export async function listVendorModels(vendorId: string): Promise<VendorModel[]>
   }
 }
 
+function resolveConfiguredEndpoint(endpoint: string, baseUrl: URL) {
+  try {
+    const resolved = new URL(endpoint, baseUrl);
+    if (resolved.protocol !== "http:" && resolved.protocol !== "https:") throw new Error("protocol");
+    return resolved.toString();
+  } catch {
+    throw new Error("模型查询地址格式无效。");
+  }
+}
+
+function buildModelEndpointCandidates(baseUrl: URL, providerId: ApiVendor["providerId"]) {
+  const basePath = baseUrl.pathname.replace(/\/+$/, "");
+  const candidates: string[] = [];
+  const add = (path: string) => {
+    const url = new URL(baseUrl.toString());
+    url.pathname = path.replace(/\/{2,}/g, "/").replace(/^(?!\/)/, "/");
+    const value = url.toString();
+    if (!candidates.includes(value)) candidates.push(value);
+  };
+  if (/\/models$/i.test(basePath)) add(basePath);
+  else if (providerId === "gemini") {
+    if (/\/v1beta$/i.test(basePath)) add(`${basePath}/models`);
+    else if (/\/v1$/i.test(basePath)) add(`${basePath.slice(0, -3)}/v1beta/models`);
+    else add(`${basePath}/v1beta/models`);
+    add(`${basePath}/v1/models`);
+    add(`${basePath}/models`);
+  } else if (/\/v\d+(?:\.\d+)?$/i.test(basePath)) {
+    add(`${basePath}/models`);
+    if (!/\/v1$/i.test(basePath)) add(`${basePath}/v1/models`);
+  } else {
+    add(`${basePath}/v1/models`);
+    add(`${basePath}/models`);
+  }
+  for (const suffix of MODEL_COMPAT_SUFFIXES) {
+    if (!basePath.endsWith(suffix)) continue;
+    const root = basePath.slice(0, -suffix.length).replace(/\/+$/, "");
+    if (root) { add(`${root}/v1/models`); add(`${root}/models`); }
+    break;
+  }
+  if (/\/(?:responses|chat\/completions)$/i.test(basePath)) {
+    const root = basePath.replace(/\/(?:responses|chat\/completions)$/i, "");
+    add(`${root}/v1/models`); add(`${root}/models`);
+  }
+  return candidates;
+}
+
+function modelAuthModes(providerId: ApiVendor["providerId"]): Array<"bearer" | "x-api-key" | "x-goog-api-key" | "api-key" | "query"> {
+  if (providerId === "gemini") return ["x-goog-api-key", "query", "bearer", "api-key"];
+  if (providerId === "claude") return ["x-api-key", "bearer", "api-key"];
+  return ["bearer", "api-key", "x-api-key"];
+}
+
+function buildModelHeaders(
+  mode: ReturnType<typeof modelAuthModes>[number] | VendorQueryAuthMode,
+  apiKey: string,
+  config?: VendorModelQueryConfig
+) {
+  const headers: Record<string, string> = { accept: "application/json" };
+  if (config?.headers) Object.assign(headers, config.headers);
+  if (mode === "bearer") headers[config?.authHeaderName || "authorization"] = `Bearer ${apiKey}`;
+  else if (mode === "x-api-key") headers[config?.authHeaderName || "x-api-key"] = apiKey;
+  else if (mode === "x-goog-api-key") headers[config?.authHeaderName || "x-goog-api-key"] = apiKey;
+  else if (mode === "api-key") headers[config?.authHeaderName || "api-key"] = apiKey;
+  return headers;
+}
+
+function applyModelAuthQuery(url: string, mode: ReturnType<typeof modelAuthModes>[number] | VendorQueryAuthMode, apiKey: string, config?: VendorModelQueryConfig) {
+  if (mode !== "query" || !apiKey) return url;
+  const parsed = new URL(url);
+  const queryName = config?.authQueryName || "key";
+  if (!parsed.searchParams.has(queryName)) parsed.searchParams.set(queryName, apiKey);
+  return parsed.toString();
+}
+
 function extractModelRows(body: unknown): Array<Record<string, unknown>> {
   if (Array.isArray(body)) return body.filter(isRecord);
   if (!isRecord(body)) return [];
-  for (const key of ["data", "models", "items", "results"]) {
-    const value = body[key];
-    if (Array.isArray(value)) return value.filter(isRecord);
-  }
-  return [];
+  return ["data", "models", "items", "results", "model_list"]
+    .flatMap((key) => Array.isArray(body[key]) ? body[key].filter(isRecord) : []);
+}
+
+function toVendorModel(item: Record<string, unknown>, providerId: ApiVendor["providerId"]): VendorModel | undefined {
+  const rawId = [item.id, item.model, item.name, item.slug].find((value): value is string => typeof value === "string" && value.trim().length > 0);
+  if (!rawId) return undefined;
+  const id = providerId === "gemini" ? rawId.trim().replace(/^models\//i, "") : rawId.trim();
+  if (!id || id.length > 200 || /[\s\u0000-\u001f]/.test(id)) return undefined;
+  return {
+    id,
+    object: typeof item.object === "string" ? item.object : undefined,
+    ownedBy: typeof item.owned_by === "string" ? item.owned_by : typeof item.ownedBy === "string" ? item.ownedBy : undefined,
+    created: typeof item.created === "number" ? item.created : undefined,
+    description: typeof item.description === "string" ? item.description : undefined,
+    pricingMultiplier: typeof item.pricingMultiplier === "number" ? item.pricingMultiplier : undefined,
+    tags: Array.isArray(item.tags) ? item.tags.filter((tag): tag is string => typeof tag === "string") : undefined
+  };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

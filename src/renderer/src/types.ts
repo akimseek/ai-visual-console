@@ -77,6 +77,10 @@ export type {
   TerminalStartParams,
   TokenUsage,
   VendorModel,
+  VendorQueryAuthMode,
+  VendorModelQueryConfig,
+  VendorBalanceQueryTemplate,
+  VendorBalanceQueryConfig,
   VendorBalanceBatchResult,
   VendorBalanceRefreshResult,
   GatewayVendorHealth,
@@ -105,7 +109,7 @@ export type CodexConsoleApi = {
   setApiVendorEnabled: (vendorId: string, enabled: boolean) => Promise<ApiVendorEnabledResult>;
   switchVendorRoute: (terminalId: string, vendorId: string) => Promise<{
     switched: number;
-    reason?: "terminal-not-found" | "gateway-not-active" | "route-not-found" | "provider-mismatch";
+    reason?: "terminal-not-found" | "gateway-not-active" | "route-not-found" | "provider-mismatch" | "vendor-not-found" | "vendor-disabled";
   }>;
   listVendorModels: (vendorId: string) => Promise<VendorModel[]>;
   refreshVendorBalance: (vendorId: string) => Promise<VendorBalanceRefreshResult>;

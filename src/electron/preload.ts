@@ -64,7 +64,7 @@ const api = {
   switchVendorRoute: (terminalId: string, vendorId: string) =>
     ipcRenderer.invoke("vendor:route-switch", terminalId, vendorId) as Promise<{
       switched: number;
-      reason?: "terminal-not-found" | "gateway-not-active" | "route-not-found" | "provider-mismatch";
+      reason?: "terminal-not-found" | "gateway-not-active" | "route-not-found" | "provider-mismatch" | "vendor-not-found" | "vendor-disabled";
     }>,
   listVendorModels: (vendorId: string) => ipcRenderer.invoke("vendor:list-models", vendorId) as Promise<VendorModel[]>,
   refreshVendorBalance: (vendorId: string) => ipcRenderer.invoke("vendor:refresh-balance", vendorId) as Promise<VendorBalanceRefreshResult>,

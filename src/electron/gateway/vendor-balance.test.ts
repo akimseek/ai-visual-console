@@ -18,9 +18,9 @@ describe("vendor balance parsers", () => {
 
   it("解析 New API quota 并换算额度", () => {
     expect(parseNewApiBalance({ data: { quota: 1_000_000, used_quota: 250_000 } })).toMatchObject({
-      total: 2,
+      total: 2.5,
       used: 0.5,
-      remaining: 1.5,
+      remaining: 2,
       unit: "额度",
       isValid: true
     });

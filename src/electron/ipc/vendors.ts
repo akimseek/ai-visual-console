@@ -77,7 +77,7 @@ export function registerVendorIpcHandlers() {
     if (!checked.terminalId) return result;
     const vendor = (await listApiVendors()).find((item) => item.id === result.vendorId);
     if (!vendor) return result;
-    const switchResult = switchTerminalVendor(checked.terminalId, vendor.providerId, vendor.id);
+    const switchResult = await switchTerminalVendor(checked.terminalId, vendor.providerId, vendor.id);
     return { ...result, switched: switchResult.switched === 1, switchReason: switchResult.reason };
   });
   ipcMain.handle("vendor:set-enabled", async (_event, vendorId: unknown, enabled: unknown) => {

@@ -10,12 +10,13 @@ const sqliteMock = vi.hoisted(() => {
   type MockDatabaseState = {
     vendors: MockVendorRow[];
     configs: MockVendorRow[];
+    queryConfigs: MockVendorRow[];
   };
   const databases = new Map<string, MockDatabaseState>();
   function stateFor(location: string) {
     let state = databases.get(location);
     if (!state) {
-      state = { vendors: [], configs: [] };
+      state = { vendors: [], configs: [], queryConfigs: [] };
       databases.set(location, state);
     }
     return state;
@@ -55,6 +56,9 @@ const sqliteMock = vi.hoisted(() => {
       }
       if (sql.startsWith("SELECT MAX(sort) AS max_sort FROM api_vendors")) {
         return { max_sort: this.state.vendors.reduce((max, vendor) => Math.max(max, Number(vendor.sort) || 0), 0) || null };
+      }
+      if (sql.startsWith("SELECT model_query_json, balance_query_json FROM api_vendor_query_configs WHERE vendor_id = ?")) {
+        return this.state.queryConfigs.find((config) => config.vendor_id === params[0]);
       }
       throw new Error(`Unsupported get SQL: ${sql}`);
     }
@@ -96,9 +100,18 @@ const sqliteMock = vi.hoisted(() => {
         });
         return { changes: 1, lastInsertRowid: 0 };
       }
+      if (sql.startsWith("INSERT INTO api_vendor_query_configs")) {
+        const row = { vendor_id: params[0], model_query_json: params[1], balance_query_json: params[2] };
+        this.state.queryConfigs = [row, ...this.state.queryConfigs.filter((config) => config.vendor_id !== row.vendor_id)];
+        return { changes: 1, lastInsertRowid: 0 };
+      }
       if (sql.startsWith("DELETE FROM api_vendors WHERE id = ?")) {
         this.state.vendors = this.state.vendors.filter((vendor) => vendor.id !== params[0]);
         this.state.configs = this.state.configs.filter((config) => config.vendor_id !== params[0]);
+        return { changes: 1, lastInsertRowid: 0 };
+      }
+      if (sql.startsWith("DELETE FROM api_vendor_query_configs WHERE vendor_id = ?")) {
+        this.state.queryConfigs = this.state.queryConfigs.filter((config) => config.vendor_id !== params[0]);
         return { changes: 1, lastInsertRowid: 0 };
       }
       if (sql.startsWith("UPDATE api_vendors SET enabled = 0")) {
@@ -240,6 +253,16 @@ describe("listApiVendors 过滤与排序", () => {
     }));
     const listed = await listApiVendors();
     expect(listed[0].pricing).toEqual({ inputPerMillionUsd: 1.25, outputPerMillionUsd: 4.5 });
+  });
+
+  it("保存并读取模型和余额查询配置", async () => {
+    await saveApiVendor(vendorInput({
+      modelQuery: { endpoint: "/v1/models", authMode: "x-api-key" },
+      balanceQuery: { template: "new-api", userId: "42" }
+    }));
+    const listed = await listApiVendors();
+    expect(listed[0].modelQuery).toEqual({ endpoint: "/v1/models", authMode: "x-api-key" });
+    expect(listed[0].balanceQuery).toEqual({ template: "new-api", userId: "42" });
   });
 
   it("按 target.provider 过滤，并按 sort 升序", async () => {

@@ -3467,10 +3467,13 @@ select {
 
 .vendor-editor {
   display: grid;
-  grid-template-rows: auto auto auto auto minmax(0, 1fr);
+  grid-template-rows: repeat(6, auto);
+  align-content: start;
   gap: 12px;
   min-height: 0;
-  overflow: hidden;
+  overflow-x: hidden;
+  overflow-y: auto;
+  padding-right: 4px;
 }
 
 .vendor-target-summary {
@@ -3508,6 +3511,46 @@ select {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
   gap: 10px;
+}
+
+.vendor-query-config-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.vendor-query-config-grid label {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.vendor-query-config-grid span {
+  color: #68717f;
+  font-size: 12px;
+}
+
+.vendor-query-config-grid textarea {
+  width: 100%;
+  min-height: 116px;
+  border: 1px solid #d4dbe6;
+  border-radius: 7px;
+  background: #ffffff;
+  color: #1e2329;
+  font: 12px/1.5 ui-monospace, SFMono-Regular, Consolas, monospace;
+  outline: none;
+  padding: 9px 10px;
+  resize: vertical;
+}
+
+.vendor-query-config-grid textarea[aria-invalid="true"] {
+  border-color: #d64545;
+  box-shadow: 0 0 0 2px rgba(214, 69, 69, 0.08);
+}
+
+.vendor-query-config-grid small {
+  color: #c43737;
+  font-size: 12px;
 }
 
 .vendor-provider-picker {
@@ -3629,7 +3672,7 @@ select {
   align-content: start;
   gap: 12px;
   min-height: 0;
-  overflow: auto;
+  overflow: visible;
   padding-right: 2px;
 }
 

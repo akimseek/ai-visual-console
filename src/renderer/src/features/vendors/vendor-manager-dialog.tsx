@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import type { ChangeEvent, PointerEvent, ReactNode } from "react";
-import type { AiProviderId, AiTarget, ApiVendor, ApiVendorConfigTemplate } from "../../types";
+import type { AiProviderId, AiTarget, ApiVendor, ApiVendorConfigTemplate, VendorBalanceQueryConfig, VendorModelQueryConfig } from "../../types";
 import { formatDate } from "../../lib/format";
 import {
   buildVendorDraft,
@@ -70,6 +70,9 @@ export function VendorManagerDialog({
   const [deleteCandidate, setDeleteCandidate] = useState<ApiVendor | null>(null);
   const [currentPage, setCurrentPage] = useState(1);
   const [columnWidths, setColumnWidths] = useState<number[]>(() => calculateVendorColumnWidths([], 0));
+  const [modelQueryText, setModelQueryText] = useState("");
+  const [balanceQueryText, setBalanceQueryText] = useState("");
+  const [queryConfigErrors, setQueryConfigErrors] = useState<{ model?: string; balance?: string }>({});
   const tableContainerRef = useRef<HTMLDivElement | null>(null);
   const tableRef = useRef<HTMLTableElement | null>(null);
   const resizeRef = useRef<{ index: number; startX: number; startWidths: number[] } | null>(null);
@@ -88,6 +91,15 @@ export function VendorManagerDialog({
   useEffect(() => {
     if (mode === "list") manualResizeRef.current = false;
   }, [mode]);
+
+  // 仅在切换供应商表单或厂商时同步文本；输入中的合法 JSON 不应被每次按键重新格式化。
+  useEffect(() => {
+    if (mode !== "form") return;
+    setModelQueryText(draft.modelQuery ? JSON.stringify(draft.modelQuery, null, 2) : "");
+    setBalanceQueryText(draft.balanceQuery ? JSON.stringify(draft.balanceQuery, null, 2) : "");
+    setQueryConfigErrors({});
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mode, draft.id, draft.providerId]);
 
   useEffect(() => {
     if (mode !== "list") return;
@@ -132,6 +144,31 @@ export function VendorManagerDialog({
     event.currentTarget.setPointerCapture(event.pointerId);
     manualResizeRef.current = true;
     resizeRef.current = { index, startX: event.clientX, startWidths: columnWidths };
+  }
+
+  function updateQueryConfig(kind: "model" | "balance", value: string) {
+    const setText = kind === "model" ? setModelQueryText : setBalanceQueryText;
+    setText(value);
+    if (!value.trim()) {
+      setQueryConfigErrors((current) => ({ ...current, [kind]: undefined }));
+      if (kind === "model") onDraftChange({ ...draft, modelQuery: undefined });
+      else onDraftChange({ ...draft, balanceQuery: undefined });
+      return;
+    }
+    try {
+      const parsed: unknown = JSON.parse(value);
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("必须是 JSON 对象");
+      setQueryConfigErrors((current) => ({ ...current, [kind]: undefined }));
+      if (kind === "model") onDraftChange({ ...draft, modelQuery: parsed as VendorModelQueryConfig });
+      else onDraftChange({ ...draft, balanceQuery: parsed as VendorBalanceQueryConfig });
+    } catch (error: unknown) {
+      setQueryConfigErrors((current) => ({ ...current, [kind]: error instanceof Error ? error.message : "JSON 格式无效" }));
+    }
+  }
+
+  function saveForm() {
+    if (queryConfigErrors.model || queryConfigErrors.balance) return;
+    onSave();
   }
 
   function moveColumnResize(event: PointerEvent<HTMLSpanElement>) {
@@ -424,6 +461,30 @@ export function VendorManagerDialog({
                 {fieldErrors.outputPrice && <small>{fieldErrors.outputPrice}</small>}
               </label>
             </div>
+            <div className="vendor-query-config-grid">
+              <label>
+                <span>模型查询配置（高级 JSON，可选）</span>
+                <textarea
+                  value={modelQueryText}
+                  rows={6}
+                  placeholder={'例如：{"endpoint":"/v1/models","authMode":"bearer"}'}
+                  aria-invalid={Boolean(queryConfigErrors.model)}
+                  onChange={(event) => updateQueryConfig("model", event.target.value)}
+                />
+                {queryConfigErrors.model && <small>{queryConfigErrors.model}</small>}
+              </label>
+              <label>
+                <span>余额查询配置（高级 JSON，可选）</span>
+                <textarea
+                  value={balanceQueryText}
+                  rows={6}
+                  placeholder={'例如：{"template":"new-api"}'}
+                  aria-invalid={Boolean(queryConfigErrors.balance)}
+                  onChange={(event) => updateQueryConfig("balance", event.target.value)}
+                />
+                {queryConfigErrors.balance && <small>{queryConfigErrors.balance}</small>}
+              </label>
+            </div>
             <div className="vendor-config-heading">
               <strong>配置模板（兼容模式）：</strong>
               <label>
@@ -465,7 +526,7 @@ export function VendorManagerDialog({
             <button type="button" className="secondary" onClick={onBack} disabled={Boolean(busy)}>
               返回
             </button>
-            <button type="button" onClick={onSave} disabled={Boolean(busy)}>
+            <button type="button" onClick={saveForm} disabled={Boolean(busy) || Boolean(queryConfigErrors.model || queryConfigErrors.balance)}>
               保存
             </button>
           </footer>

@@ -115,6 +115,49 @@ export type ApiVendorConfigTemplate = {
   content: string;
 };
 
+/** 供应商查询接口使用的认证方式。query 表示把密钥放入 key/api_key 查询参数。 */
+export type VendorQueryAuthMode =
+  | "bearer"
+  | "x-api-key"
+  | "x-goog-api-key"
+  | "api-key"
+  | "query"
+  | "none";
+
+/** 模型列表查询的可选覆盖配置；未填写时使用平台自动探测。 */
+export type VendorModelQueryConfig = {
+  endpoint?: string;
+  authMode?: VendorQueryAuthMode;
+  authHeaderName?: string;
+  authQueryName?: string;
+  headers?: Record<string, string>;
+};
+
+export type VendorBalanceQueryTemplate = "auto" | "generic" | "new-api" | "custom";
+
+/** 余额查询配置。路径字段使用点号分隔的 JSON Path，例如 data.quota。 */
+export type VendorBalanceQueryConfig = {
+  template?: VendorBalanceQueryTemplate;
+  baseUrl?: string;
+  endpoint?: string;
+  method?: "GET" | "POST";
+  authMode?: VendorQueryAuthMode;
+  authHeaderName?: string;
+  authQueryName?: string;
+  headers?: Record<string, string>;
+  accessToken?: string;
+  userId?: string;
+  remainingPath?: string;
+  totalPath?: string;
+  usedPath?: string;
+  unitPath?: string;
+  planPath?: string;
+  validPath?: string;
+  statusPath?: string;
+  invalidMessagePath?: string;
+  multiplier?: number;
+};
+
 export type ApiVendor = {
   id: string;
   providerId: AiProviderId;
@@ -123,6 +166,8 @@ export type ApiVendor = {
   apiBaseUrl: string;
   sort: number;
   pricing?: VendorPricing;
+  modelQuery?: VendorModelQueryConfig;
+  balanceQuery?: VendorBalanceQueryConfig;
   configs: ApiVendorConfigTemplate[];
   enabled?: boolean;
   createdAt: string;
@@ -210,6 +255,8 @@ export type ApiVendorInput = {
   apiBaseUrl: string;
   sort?: number;
   pricing?: VendorPricing;
+  modelQuery?: VendorModelQueryConfig;
+  balanceQuery?: VendorBalanceQueryConfig;
   enabled?: boolean;
   configs: ApiVendorConfigTemplate[];
 };

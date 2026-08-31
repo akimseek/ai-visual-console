@@ -78,7 +78,13 @@ export function ComposerInput({
   const attachMenuRef = useRef<HTMLDivElement | null>(null);
   const dropdownRef = useRef<HTMLDivElement | null>(null);
 
-  const enabledVendor = vendors.find((v) => v.enabled) || vendors[0];
+  // 供应商属于具体 CLI 协议，不能从全局列表直接取第一个启用项，
+  // 否则 Claude/Gemini 会误用 Codex 供应商的模型接口。
+  const targetProvider = targetId.startsWith("gemini:") ? "gemini"
+    : targetId.startsWith("claude:") ? "claude"
+      : targetId.startsWith("qoder:") ? "qoder" : "codex";
+  const providerVendors = vendors.filter((vendor) => vendor.providerId === targetProvider);
+  const enabledVendor = providerVendors.find((vendor) => vendor.enabled) || providerVendors[0];
   const isQoderTarget = targetId.startsWith("qoder:");
 
   useEffect(() => {
