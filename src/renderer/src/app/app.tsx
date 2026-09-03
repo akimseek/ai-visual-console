@@ -356,9 +356,11 @@ export function App() {
     // loadApiVendors 随 Hook 每次渲染重建，这里只需随目标切换触发一次。
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [targetId]);
-  const activeVendorName = vendors.find((vendor) => vendor.id === (activeTab ? vendorByTabKey[activeTab.key] : ""))?.name
-    || vendors.find((vendor) => vendor.providerId === (selectedTarget?.provider || providerId) && vendor.enabled)?.name
-    || "";
+  const activeVendorId = activeTab ? vendorByTabKey[activeTab.key] : undefined;
+  // 已有终端路由时只展示该路由的供应商；找不到名称也显示占位符，不能回退到候选池首项造成误导。
+  const activeVendorName = activeVendorId
+    ? vendors.find((vendor) => vendor.id === activeVendorId)?.name || ""
+    : vendors.find((vendor) => vendor.providerId === (selectedTarget?.provider || providerId) && vendor.enabled)?.name || "";
   const {
     detailDialogSession,
     setDetailDialogSession,
@@ -844,13 +846,17 @@ export function App() {
 
   function handleTerminalReady(tabKey: string, terminalId?: string, vendorId?: string) {
     registerTerminalReady(tabKey, terminalId);
-    if (vendorId) setVendorByTabKey((current) => ({ ...current, [tabKey]: vendorId }));
+    if (vendorId) {
+      setVendorByTabKey((current) => ({ ...current, [tabKey]: vendorId }));
+      if (!vendors.some((vendor) => vendor.id === vendorId)) void loadApiVendors(false);
+    }
     const tab = openTabs.find((item) => item.key === tabKey);
     if (tab?.customTitle) void finalizeNewSession(tab);
   }
 
   function handleTerminalVendorSwitch(tabKey: string, vendorId: string, reason: "manual" | "candidate-pool" | "failure") {
     setVendorByTabKey((current) => ({ ...current, [tabKey]: vendorId }));
+    if (!vendors.some((vendor) => vendor.id === vendorId)) void loadApiVendors(false);
     if (reason === "candidate-pool") return;
     const vendor = vendors.find((item) => item.id === vendorId);
     setNotice(reason === "failure"

@@ -106,7 +106,9 @@ export async function startTerminalSession(
       route?.vendorId
     );
     if (route) bindVendorRouteTerminal(route.routeId, result.terminalId);
-    return result;
+    // CLI 可能在 startTerminalSession 返回前就完成首个请求并触发故障切换；
+    // 返回路由当前值，避免渲染层只拿到启动瞬间的旧供应商。
+    return { ...result, vendorId: route?.vendorId || result.vendorId };
   } catch (error) {
     if (route) await destroyVendorRoute(route.routeId);
     if (resumeKey) pendingResumeKeys.delete(resumeKey);

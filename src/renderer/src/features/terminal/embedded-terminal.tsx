@@ -60,6 +60,9 @@ export function EmbeddedTerminal({
   const initialInputMode = sessionId ? "terminal" : "composer";
   const composerRef = useRef<HTMLTextAreaElement | null>(null);
   const terminalIdRef = useRef("");
+  // 网关可能在 PTY 启动回调返回前就完成首个请求并切换供应商，先暂存事件，
+  // 待 terminalIdRef 建立后再提交给父组件更新状态栏。
+  const pendingVendorSwitchRef = useRef<{ vendorId: string; reason: "manual" | "candidate-pool" | "failure" } | null>(null);
   const inputModeRef = useRef<"composer" | "terminal">(initialInputMode);
   const composerVisibleRef = useRef(!sessionId);
   const composerSubmittedRef = useRef(false);
@@ -405,7 +408,13 @@ export function EmbeddedTerminal({
       terminalIdRef.current = "";
     });
     const removeVendorSwitchListener = window.codexConsole.onGatewayVendorSwitched((event) => {
-      if (event.terminalId !== terminalIdRef.current || !event.vendorId) return;
+      if (!event.vendorId) return;
+      // 只有旧版/极早期事件没有 terminalId 时才暂存；带 terminalId 的事件属于其他终端时必须继续过滤。
+      if (!terminalIdRef.current && !event.terminalId) {
+        pendingVendorSwitchRef.current = { vendorId: event.vendorId, reason: event.reason };
+        return;
+      }
+      if (event.terminalId !== terminalIdRef.current) return;
       onVendorSwitchRef.current?.(event.vendorId, event.reason);
     });
 
@@ -427,7 +436,12 @@ export function EmbeddedTerminal({
         }
         terminalIdRef.current = terminalId;
         setStatus("Codex 运行中");
-        onReadyRef.current?.(terminalId, vendorId);
+        const pendingVendorSwitch = pendingVendorSwitchRef.current;
+        pendingVendorSwitchRef.current = null;
+        onReadyRef.current?.(terminalId, pendingVendorSwitch?.vendorId || vendorId);
+        if (pendingVendorSwitch && pendingVendorSwitch.vendorId !== vendorId) {
+          onVendorSwitchRef.current?.(pendingVendorSwitch.vendorId, pendingVendorSwitch.reason);
+        }
         if (prompt?.trim() && !sessionId) {
           void window.codexConsole.writeTerminal(terminalId, `${prompt.trim()}\r`);
         }

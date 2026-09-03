@@ -40,6 +40,8 @@ type MutableVendorRoute = VendorRoute & {
   createdAt: number;
   window?: BrowserWindow;
   terminalId?: string;
+  // 终端句柄绑定前若已发生故障切换，暂存原因，绑定后补发给渲染层。
+  pendingSwitchReason?: "manual" | "candidate-pool" | "failure";
 };
 
 let gatewayServer: ReturnType<typeof createServer> | null = null;
@@ -165,7 +167,16 @@ export async function switchVendorRoute(routeId: string, providerId: AiProviderI
 
 export function bindVendorRouteTerminal(routeId: string, terminalId: string) {
   const route = routes.get(routeId);
-  if (route) route.terminalId = terminalId;
+  if (!route) return;
+  route.terminalId = terminalId;
+  if (route.pendingSwitchReason && route.window && !route.window.isDestroyed() && !route.window.webContents.isDestroyed()) {
+    route.window.webContents.send("gateway:vendor-switched", {
+      terminalId,
+      vendorId: route.vendorId,
+      reason: route.pendingSwitchReason
+    });
+    route.pendingSwitchReason = undefined;
+  }
 }
 
 export function destroyVendorRoute(routeId: string) {
@@ -537,6 +548,10 @@ function resolveVendor(vendors: ApiVendor[], providerId: AiProviderId, vendorId?
 function notifyVendorSwitch(route: MutableVendorRoute, vendorId: string, reason: "manual" | "candidate-pool" | "failure") {
   if (route.vendorId === vendorId) return;
   route.vendorId = vendorId;
+  if (!route.terminalId) {
+    route.pendingSwitchReason = reason;
+    return;
+  }
   if (route.window && !route.window.isDestroyed() && !route.window.webContents.isDestroyed()) {
     route.window.webContents.send("gateway:vendor-switched", {
       terminalId: route.terminalId || "",
