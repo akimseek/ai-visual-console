@@ -41,22 +41,22 @@ describe("branchSession", () => {
     const user = JSON.stringify({
       timestamp: "2026-06-15T14:33:17.000Z",
       type: "response_item",
-      payload: { type: "message", role: "user", content: [{ type: "input_text", text: "问题" }] }
+      payload: { thread_id: SESSION_ID, type: "message", role: "user", content: [{ type: "input_text", text: "问题" }] }
     });
     const assistant = JSON.stringify({
       timestamp: "2026-06-15T14:33:18.000Z",
       type: "response_item",
-      payload: { type: "message", role: "assistant", content: [{ type: "output_text", text: "回答" }] }
+      payload: { thread_id: SESSION_ID, type: "message", role: "assistant", content: [{ type: "output_text", text: "回答" }] }
     });
     const turnContext = JSON.stringify({
       timestamp: "2026-06-15T14:33:18.100Z",
       type: "turn_context",
-      payload: { model: "gpt-5", model_provider: "openai", effort: "high" }
+      payload: { thread_id: SESSION_ID, model: "gpt-5", model_provider: "openai", effort: "high" }
     });
     const followUp = JSON.stringify({
       timestamp: "2026-06-15T14:33:19.000Z",
       type: "response_item",
-      payload: { type: "message", role: "user", content: [{ type: "input_text", text: "追问" }] }
+      payload: { thread_id: SESSION_ID, type: "message", role: "user", content: [{ type: "input_text", text: "追问" }] }
     });
     const trailing = `${JSON.stringify({ type: "event_msg", payload: { type: "token_count", info: {}, pad: "x".repeat(700 * 1024) } })}\n`;
     const padding = `${JSON.stringify({ type: "event_msg", payload: { type: "token_count", info: {}, pad: "x".repeat(700 * 1024) } })}\n`;
@@ -78,6 +78,14 @@ describe("branchSession", () => {
     expect(parsed?.preview.map((message) => message.text)).toEqual(["问题", "回答", "追问"]);
     expect(branchText).toContain('"type":"turn_context"');
     expect(branchText).toContain(`"session_id":"${branch.id}"`);
+    // 分支 JSONL 的全部控制记录必须归属新线程，Codex resume 才会加载历史消息。
+    const branchThreadIds = branchText
+      .split(/\r?\n/)
+      .filter(Boolean)
+      .map((line) => JSON.parse(line) as { payload?: { thread_id?: string } })
+      .map((item) => item.payload?.thread_id)
+      .filter((threadId): threadId is string => Boolean(threadId));
+    expect(branchThreadIds).toEqual([branch.id, branch.id, branch.id, branch.id]);
     expect((await fs.stat(branch.filePath)).size).toBeLessThan(32 * 1024 * 1024);
   });
 });

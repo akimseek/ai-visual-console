@@ -2,17 +2,9 @@ import path from "node:path";
 import type { CodexSessionFile } from "./types";
 
 // 主进程 WSL / POSIX 路径处理的纯函数集合，集中于此以便单元测试覆盖。
-// 这些函数承载安全边界（路径遍历防护、targetId 解析、distro 名净化、WSL 输出解码），
+// 这些函数承载安全边界（路径遍历防护、distro 名净化、WSL 输出解码），
 // 从终端会话与 Codex 目标模块抽出，逻辑保持不变。
-
-// 从 targetId 中解析出 WSL 发行版名称，兼容各平台前缀；非 WSL 目标返回空串。
-export function getWslDistroFromTargetId(targetId: string) {
-  if (targetId.startsWith("gemini:wsl:")) return targetId.slice("gemini:wsl:".length);
-  if (targetId.startsWith("claude:wsl:")) return targetId.slice("claude:wsl:".length);
-  if (targetId.startsWith("qoder:wsl:")) return targetId.slice("qoder:wsl:".length);
-  if (targetId.startsWith("wsl:")) return targetId.slice("wsl:".length);
-  return "";
-}
+// targetId 的生成与解析在 ./target-ids.ts（无 Node 依赖，渲染进程可引用）。
 
 // 将 WSL 的 /mnt/<盘符>/... 挂载路径转换为 Windows 原生路径；非挂载路径原样返回。
 export function wslMountPathToWindowsPath(filePath: string) {
@@ -64,4 +56,9 @@ export function decodeWslOutput(output: Buffer) {
   const utf16 = output.toString("utf16le");
   const utf8 = output.toString("utf8");
   return utf16.replace(/\0/g, "").trim().length >= utf8.replace(/\0/g, "").trim().length ? utf16 : utf8;
+}
+
+// 单引号 shell 引用：bash/POSIX 通用转义。
+export function shellQuote(value: string) {
+  return `'${value.replace(/'/g, "'\\''")}'`;
 }

@@ -1,8 +1,9 @@
 import { execFile } from "node:child_process";
-import fs from "node:fs";
-import path from "node:path";
 import { promisify } from "node:util";
 import { getCliInstaller } from "../../shared/cli-installers";
+import { getWslDistroFromTargetId } from "../../shared/target-ids";
+import { shellQuote } from "../../shared/wsl-paths";
+import { getWslExe } from "../core/wsl";
 import type { AiProviderId, CliEnvironmentRequest, CliEnvironmentStatus, CliInstallRequest, CliInstallResult } from "../types";
 
 const execFileAsync = promisify(execFile);
@@ -129,7 +130,7 @@ async function installPackage(targetId: string, args: string[]) {
 async function runPosix(targetId: string, script: string, timeout = COMMAND_TIMEOUT): Promise<CommandOutput> {
   if (isWslTarget(targetId) && process.platform === "win32") {
     const distro = parseWslDistro(targetId);
-    return execCommand(getWindowsWslExe(), ["-d", distro, "--", "bash", "-lc", script], timeout);
+    return execCommand((await getWslExe()) || "wsl.exe", ["-d", distro, "--", "bash", "-lc", script], timeout);
   }
   return execCommand("bash", ["-lc", script], timeout);
 }
@@ -311,25 +312,14 @@ async function runInteractivePosix(targetId: string, script: string, timeout = C
   const encodedScript = encodeBashScript(script);
   if (isWslTarget(targetId) && process.platform === "win32") {
     const distro = parseWslDistro(targetId);
-    return execCommand(getWindowsWslExe(), ["-d", distro, "--", "bash", "-lc", encodedScript], timeout);
+    return execCommand((await getWslExe()) || "wsl.exe", ["-d", distro, "--", "bash", "-lc", encodedScript], timeout);
   }
   return execCommand("bash", ["-lc", encodedScript], timeout);
 }
 
 function encodeBashScript(script: string) {
   const encoded = Buffer.from(script, "utf8").toString("base64");
-  return `printf %s ${quote(encoded)} | base64 -d | bash`;
-}
-
-function getWindowsWslExe() {
-  const candidates = [
-    process.env.SystemRoot ? path.join(process.env.SystemRoot, "System32", "wsl.exe") : "",
-    process.env.windir ? path.join(process.env.windir, "System32", "wsl.exe") : "",
-    "C:\\Windows\\System32\\wsl.exe",
-    "C:\\Windows\\Sysnative\\wsl.exe",
-    "wsl.exe"
-  ].filter(Boolean);
-  return candidates.find((candidate) => candidate === "wsl.exe" || fs.existsSync(candidate)) || "wsl.exe";
+  return `printf %s ${shellQuote(encoded)} | base64 -d | bash`;
 }
 
 function buildEnvironmentMessages(input: {
@@ -371,15 +361,13 @@ function parseNodeMajor(version?: string) {
 }
 
 function isWslTarget(targetId: string) {
-  return targetId.startsWith("wsl:") || targetId.startsWith("gemini:wsl:") || targetId.startsWith("claude:wsl:") || targetId.startsWith("qoder:wsl:");
+  return Boolean(getWslDistroFromTargetId(targetId));
 }
 
 function parseWslDistro(targetId: string) {
-  if (targetId.startsWith("gemini:wsl:")) return targetId.slice("gemini:wsl:".length);
-  if (targetId.startsWith("claude:wsl:")) return targetId.slice("claude:wsl:".length);
-  if (targetId.startsWith("qoder:wsl:")) return targetId.slice("qoder:wsl:".length);
-  if (targetId.startsWith("wsl:")) return targetId.slice("wsl:".length);
-  throw new Error("目标不是 WSL 环境。");
+  const distro = getWslDistroFromTargetId(targetId);
+  if (!distro) throw new Error("目标不是 WSL 环境。");
+  return distro;
 }
 
 function currentPlatform(): CliEnvironmentStatus["platform"] {
@@ -389,11 +377,7 @@ function currentPlatform(): CliEnvironmentStatus["platform"] {
 }
 
 function shellJoin(args: string[]) {
-  return args.map(quote).join(" ");
-}
-
-function quote(value: string) {
-  return `'${value.replace(/'/g, "'\\''")}'`;
+  return args.map(shellQuote).join(" ");
 }
 
 // 合并一次命令的 stdout/stderr 为单段文本（用于环境快照解析）。

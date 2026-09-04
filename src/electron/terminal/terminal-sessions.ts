@@ -11,7 +11,8 @@ import {
   parseCliArgs,
   posixShellQuote as shellQuote
 } from "../../shared/shell-args";
-import { getWslDistroFromTargetId, wslMountPathToWindowsPath } from "../../shared/wsl-paths";
+import { getWslDistroFromProviderTarget, getWslDistroFromTargetId } from "../../shared/target-ids";
+import { wslMountPathToWindowsPath } from "../../shared/wsl-paths";
 import {
   buildRouteUrl,
   createVendorRoute,
@@ -366,8 +367,8 @@ function resolveTerminalProvider(targetId: string) {
 async function buildCodexCommand(params: TerminalStartParams & { vendorRoute?: VendorRoute }) {
   const extraArgs = parseCliArgs(params.cliArgs || "");
   const route = await withResolvedBaseUrl(params.targetId, params.vendorRoute);
-  if (params.targetId.startsWith("wsl:")) {
-    const distro = params.targetId.slice("wsl:".length);
+  const distro = getWslDistroFromProviderTarget("codex", params.targetId);
+  if (distro) {
     const codexInvocation = buildCodexInvocation(extraArgs, route);
     const command = params.sessionId
       ? `${params.cwd ? `cd ${shellQuote(params.cwd)} && ` : ""}exec ${buildCodexInvocation(["resume", params.sessionId], route)}`
@@ -430,8 +431,8 @@ async function buildGeminiCommand(params: TerminalStartParams & { vendorRoute?: 
   const extraArgs = parseCliArgs(params.cliArgs || "");
   const resumeArgs = params.sessionId ? ["--resume", params.sessionId] : [];
   const route = await withResolvedBaseUrl(params.targetId, params.vendorRoute);
-  if (params.targetId.startsWith("gemini:wsl:")) {
-    const distro = params.targetId.slice("gemini:wsl:".length);
+  const distro = getWslDistroFromProviderTarget("gemini", params.targetId);
+  if (distro) {
     const invocation = buildShellCommand("gemini", [...resumeArgs, ...extraArgs]);
     const command = params.cwd
       ? `mkdir -p ${shellQuote(params.cwd)} && cd ${shellQuote(params.cwd)} && exec ${invocation}`
@@ -476,8 +477,8 @@ async function buildClaudeCommand(params: TerminalStartParams & { vendorRoute?: 
   const extraArgs = parseCliArgs(params.cliArgs || "");
   const resumeArgs = params.sessionId ? ["--resume", params.sessionId] : [];
   const route = await withResolvedBaseUrl(params.targetId, params.vendorRoute);
-  if (params.targetId.startsWith("claude:wsl:")) {
-    const distro = params.targetId.slice("claude:wsl:".length);
+  const distro = getWslDistroFromProviderTarget("claude", params.targetId);
+  if (distro) {
     const invocation = buildShellCommand("claude", [...resumeArgs, ...extraArgs]);
     const command = params.cwd
       ? `mkdir -p ${shellQuote(params.cwd)} && cd ${shellQuote(params.cwd)} && exec ${invocation}`
@@ -524,8 +525,8 @@ async function buildQoderCommand(params: TerminalStartParams & { vendorRoute?: V
   const cwd = params.cwd || path.join(os.homedir(), ".akim");
   const args = [...resumeArgs, ...(params.cwd && params.useCodexCwdFlag ? ["--cwd", params.cwd] : []), ...extraArgs];
 
-  if (params.targetId.startsWith("qoder:wsl:")) {
-    const distro = params.targetId.slice("qoder:wsl:".length);
+  const distro = getWslDistroFromProviderTarget("qoder", params.targetId);
+  if (distro) {
     const command = params.cwd && !params.useCodexCwdFlag
       ? `mkdir -p ${shellQuote(params.cwd)} && cd ${shellQuote(params.cwd)} && exec ${buildShellCommand("qodercn", args)}`
       : `exec ${buildShellCommand("qodercn", args)}`;
@@ -559,21 +560,12 @@ const CODEX_ROUTE_PROVIDER = "akim_gateway";
 // 本地（Windows/macOS/Linux 宿主）终端直接复用 route.baseUrl（已为 127.0.0.1）。
 async function resolveRouteBaseUrl(targetId: string, route?: VendorRoute) {
   if (!route) return undefined;
-  if (targetId.startsWith("wsl:") || targetId.startsWith("gemini:wsl:") || targetId.startsWith("claude:wsl:")) {
-    const distro = extractWslDistro(targetId);
-    if (distro) {
-      const base = await resolveWslGatewayBaseUrl(distro);
-      return buildRouteUrl(base, route.providerId, route.routeId);
-    }
+  const distro = getWslDistroFromTargetId(targetId);
+  if (distro) {
+    const base = await resolveWslGatewayBaseUrl(distro);
+    return buildRouteUrl(base, route.providerId, route.routeId);
   }
   return route.baseUrl;
-}
-
-function extractWslDistro(targetId: string) {
-  if (targetId.startsWith("gemini:wsl:")) return targetId.slice("gemini:wsl:".length);
-  if (targetId.startsWith("claude:wsl:")) return targetId.slice("claude:wsl:".length);
-  if (targetId.startsWith("wsl:")) return targetId.slice("wsl:".length);
-  return "";
 }
 
 // 返回 baseUrl 已按目标环境解析的 route 副本。WSL 目标会探测宿主地址；本地目标保持原值。

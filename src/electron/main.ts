@@ -2,15 +2,11 @@ import { app, BrowserWindow, ipcMain, Menu, session, shell } from "electron";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
-import {
-  listProviderSummaries
-} from "./providers/ai-providers";
 import { setSessionCacheRoot, setSessionDatabasePath } from "./providers/codex/codex-store";
 import { setSessionMetadataPath } from "./providers/session-metadata";
 import {
   setSettingsPath
 } from "./core/settings";
-import { checkCliEnvironment, installCli } from "./cli/cli-installer";
 import {
   setVendorDatabasePath
 } from "./vendors/vendor-manager";
@@ -34,8 +30,8 @@ import { registerGatewayIpcHandlers } from "./ipc/gateway";
 import { registerSessionIpcHandlers } from "./ipc/sessions";
 import { registerWorkspaceIpcHandlers } from "./ipc/workspace";
 import { registerSkillIpcHandlers } from "./ipc/skills";
-import { registerTerminalIpcHandlers } from "./ipc/terminal";
-import { requireCliEnvironmentRequest, requireCliInstallRequest } from "./ipc/validation";
+import { registerTerminalIpcHandlers } from './ipc/terminal';
+import { registerCliIpcHandlers } from './ipc/cli';
 
 const isDev = Boolean(process.env.VITE_DEV_SERVER_URL);
 const processStartedAt = performance.now();
@@ -165,11 +161,7 @@ app.whenReady().then(() => {
   initAppCommandIpc({ getLogDir, getVersion: () => app.getVersion() });
 
   // 注册各业务域的 IPC 处理器。
-  ipcMain.handle("ai:list-providers", () => listProviderSummaries());
-  ipcMain.handle("cli:check-environment", (_event, request: unknown) =>
-    checkCliEnvironment(requireCliEnvironmentRequest(request))
-  );
-  ipcMain.handle("cli:install", (_event, request: unknown) => installCli(requireCliInstallRequest(request)));
+  registerCliIpcHandlers();
 
   registerAppCommandIpc();
   registerVendorIpcHandlers();

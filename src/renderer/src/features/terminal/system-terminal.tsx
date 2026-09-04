@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import "@xterm/xterm/css/xterm.css";
 import { TerminalSearchBar } from "./terminal-search-bar";
 import type { SystemTerminalKind } from "../../types";
+import { getWslDistroFromTargetId } from "../../../../shared/target-ids";
 import { useTerminalSearch } from "./use-terminal-search";
 import { useXtermHost } from "./use-xterm-host";
 
@@ -421,7 +422,7 @@ function terminalKindOptionLabel(options: Array<{ kind: SystemTerminalKind; labe
 }
 
 function isWslTarget(targetId?: string) {
-  return Boolean(targetId?.startsWith("wsl:") || targetId?.startsWith("gemini:wsl:") || targetId?.startsWith("claude:wsl:"));
+  return Boolean(targetId && getWslDistroFromTargetId(targetId));
 }
 
 function readStoredHeight() {

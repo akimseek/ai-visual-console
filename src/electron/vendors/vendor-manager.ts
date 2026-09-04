@@ -16,7 +16,8 @@ import type {
   VendorQueryAuthMode
 } from "../types";
 import { assertAllowedConfigPath } from "../../shared/shell-args";
-import { runWslShell, shellQuote } from "../terminal/wsl-process";
+import { runWslShell } from "../core/wsl";
+import { shellQuote } from "../../shared/wsl-paths";
 import {
   readAppDatabase,
   setSessionDatabasePath,

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { attachSpawnTimeout, WSL_COMMAND_TIMEOUT_MS } from "./wsl-process";
+import { attachSpawnTimeout, WSL_COMMAND_TIMEOUT_MS } from "./wsl";
 
 // 健壮性回归：spawn 系 WSL 子进程没有内置超时，需靠看门狗在 WSL 挂起时 SIGKILL 并 reject，
 // 正常结束时则必须取消计时器，避免误杀已完成的进程或泄漏定时器。

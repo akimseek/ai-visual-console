@@ -12,6 +12,8 @@ import {
   setSessionDatabasePath as configureSessionDatabase,
   type SessionCacheEntry
 } from "../../core/app-database";
+import { pathExists } from "../../core/fs-utils";
+import { assertSessionFileInside } from "../session-file-ops";
 
 const SESSION_FILE_RE = /^rollout-.+\.jsonl$/;
 const CACHE_VERSION = 5;
@@ -240,10 +242,7 @@ async function findTrashSessionFile(sessionId: string) {
 }
 
 function assertInsideDir(filePath: string, dirPath: string, message: string) {
-  const relative = path.relative(dirPath, filePath);
-  if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) {
-    throw new Error(message);
-  }
+  assertSessionFileInside(filePath, dirPath, "local", message);
 }
 
 async function findSessionFiles(root: string): Promise<CodexSessionFile[]> {
@@ -375,13 +374,4 @@ async function writeJsonAtomic(filePath: string, content: string) {
   const tempPath = `${filePath}.${process.pid}.${Date.now()}.tmp`;
   await fs.writeFile(tempPath, content, "utf8");
   await fs.rename(tempPath, filePath);
-}
-
-async function pathExists(filePath: string) {
-  try {
-    await fs.access(filePath);
-    return true;
-  } catch {
-    return false;
-  }
 }

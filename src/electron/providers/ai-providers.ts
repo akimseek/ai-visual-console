@@ -13,6 +13,7 @@ import * as codexTargets from "./codex/codex-targets";
 import * as geminiProvider from "./gemini/gemini-provider";
 import * as claudeProvider from "./claude/claude-provider";
 import * as qoderProvider from "./qoder/qoder-provider";
+import { getProviderIdFromTargetId } from "../../shared/target-ids";
 import { applySessionMetadata, deleteSessionMetadata, setSessionCustomTitle } from "./session-metadata";
 
 export type SessionView = "active" | "trash";
@@ -41,10 +42,20 @@ export type AiProvider = {
   purgeSessions: (targetId: string, sessions: SessionMutationRef[]) => Promise<SessionBatchMutationResult>;
 };
 
-const codexProvider: AiProvider = {
-  id: "codex",
-  label: "Codex",
-  capabilities: {
+// provider 实现模块的公共形状：AiProvider 去掉静态描述字段后的全部会话操作。
+type AiProviderModule = Omit<AiProvider, "id" | "label" | "capabilities">;
+
+function createAiProvider(
+  id: AiProviderId,
+  label: string,
+  capabilities: AiProviderCapabilities,
+  impl: AiProviderModule
+): AiProvider {
+  return { id, label, capabilities, ...impl };
+}
+
+const providers: AiProvider[] = [
+  createAiProvider("codex", "Codex", {
     skills: true,
     branch: true,
     usage: true,
@@ -55,31 +66,8 @@ const codexProvider: AiProvider = {
     sessionSettings: true,
     duplicate: true,
     vendorManagement: true
-  },
-  listCachedTargets: codexTargets.listCachedTargets,
-  listTargets: codexTargets.listTargets,
-  listCachedSessions: codexTargets.listCachedSessions,
-  listSessions: codexTargets.listSessions,
-  listTrashSessions: codexTargets.listTrashSessions,
-  searchSessions: codexTargets.searchSessions,
-  getSession: codexTargets.getSession,
-  getSessionMessagesPage: codexTargets.getSessionMessagesPage,
-  getSessionSummary: codexTargets.getSessionSummary,
-  listSessionsByParent: codexTargets.listSessionsByParent,
-  getSessionFolderPath: codexTargets.getSessionFolderPath,
-  branchSession: codexTargets.branchSession,
-  duplicateSession: codexTargets.duplicateSession,
-  deleteSession: codexTargets.deleteSession,
-  deleteSessions: codexTargets.deleteSessions,
-  restoreSession: codexTargets.restoreSession,
-  purgeSession: codexTargets.purgeSession,
-  purgeSessions: codexTargets.purgeSessions
-};
-
-const geminiAiProvider: AiProvider = {
-  id: "gemini",
-  label: "Gemini",
-  capabilities: {
+  }, codexTargets),
+  createAiProvider("gemini", "Gemini", {
     skills: false,
     branch: true,
     usage: true,
@@ -90,31 +78,8 @@ const geminiAiProvider: AiProvider = {
     sessionSettings: false,
     duplicate: true,
     vendorManagement: true
-  },
-  listCachedTargets: geminiProvider.listCachedTargets,
-  listTargets: geminiProvider.listTargets,
-  listCachedSessions: geminiProvider.listCachedSessions,
-  listSessions: geminiProvider.listSessions,
-  listTrashSessions: geminiProvider.listTrashSessions,
-  searchSessions: geminiProvider.searchSessions,
-  getSession: geminiProvider.getSession,
-  getSessionMessagesPage: geminiProvider.getSessionMessagesPage,
-  getSessionSummary: geminiProvider.getSessionSummary,
-  listSessionsByParent: geminiProvider.listSessionsByParent,
-  getSessionFolderPath: geminiProvider.getSessionFolderPath,
-  branchSession: geminiProvider.branchSession,
-  duplicateSession: geminiProvider.duplicateSession,
-  deleteSession: geminiProvider.deleteSession,
-  deleteSessions: geminiProvider.deleteSessions,
-  restoreSession: geminiProvider.restoreSession,
-  purgeSession: geminiProvider.purgeSession,
-  purgeSessions: geminiProvider.purgeSessions
-};
-
-const claudeAiProvider: AiProvider = {
-  id: "claude",
-  label: "Claude Code",
-  capabilities: {
+  }, geminiProvider),
+  createAiProvider("claude", "Claude Code", {
     skills: false,
     branch: true,
     usage: true,
@@ -125,31 +90,8 @@ const claudeAiProvider: AiProvider = {
     sessionSettings: false,
     duplicate: true,
     vendorManagement: true
-  },
-  listCachedTargets: claudeProvider.listCachedTargets,
-  listTargets: claudeProvider.listTargets,
-  listCachedSessions: claudeProvider.listCachedSessions,
-  listSessions: claudeProvider.listSessions,
-  listTrashSessions: claudeProvider.listTrashSessions,
-  searchSessions: claudeProvider.searchSessions,
-  getSession: claudeProvider.getSession,
-  getSessionMessagesPage: claudeProvider.getSessionMessagesPage,
-  getSessionSummary: claudeProvider.getSessionSummary,
-  listSessionsByParent: claudeProvider.listSessionsByParent,
-  getSessionFolderPath: claudeProvider.getSessionFolderPath,
-  branchSession: claudeProvider.branchSession,
-  duplicateSession: claudeProvider.duplicateSession,
-  deleteSession: claudeProvider.deleteSession,
-  deleteSessions: claudeProvider.deleteSessions,
-  restoreSession: claudeProvider.restoreSession,
-  purgeSession: claudeProvider.purgeSession,
-  purgeSessions: claudeProvider.purgeSessions
-};
-
-const qoderAiProvider: AiProvider = {
-  id: "qoder",
-  label: "Qoder CN",
-  capabilities: {
+  }, claudeProvider),
+  createAiProvider("qoder", "Qoder CN", {
     skills: false,
     branch: false,
     usage: true,
@@ -160,28 +102,8 @@ const qoderAiProvider: AiProvider = {
     sessionSettings: false,
     duplicate: false,
     vendorManagement: false
-  },
-  listCachedTargets: qoderProvider.listCachedTargets,
-  listTargets: qoderProvider.listTargets,
-  listCachedSessions: qoderProvider.listCachedSessions,
-  listSessions: qoderProvider.listSessions,
-  listTrashSessions: qoderProvider.listTrashSessions,
-  searchSessions: qoderProvider.searchSessions,
-  getSession: qoderProvider.getSession,
-  getSessionMessagesPage: qoderProvider.getSessionMessagesPage,
-  getSessionSummary: qoderProvider.getSessionSummary,
-  listSessionsByParent: qoderProvider.listSessionsByParent,
-  getSessionFolderPath: qoderProvider.getSessionFolderPath,
-  branchSession: qoderProvider.branchSession,
-  duplicateSession: qoderProvider.duplicateSession,
-  deleteSession: qoderProvider.deleteSession,
-  deleteSessions: qoderProvider.deleteSessions,
-  restoreSession: qoderProvider.restoreSession,
-  purgeSession: qoderProvider.purgeSession,
-  purgeSessions: qoderProvider.purgeSessions
-};
-
-const providers: AiProvider[] = [codexProvider, geminiAiProvider, claudeAiProvider, qoderAiProvider];
+  }, qoderProvider)
+];
 
 export function listAiProviders() {
   return providers;
@@ -290,11 +212,3 @@ export async function purgeSessions(targetId: string, sessions: SessionMutationR
 
 export const setWslCodexHome = codexTargets.setWslCodexHome;
 export const clearWslCodexHome = codexTargets.clearWslCodexHome;
-
-function getProviderIdFromTargetId(targetId: string): AiProviderId {
-  if (targetId.startsWith("gemini:")) return "gemini";
-  if (targetId.startsWith("claude:")) return "claude";
-  if (targetId.startsWith("qoder:")) return "qoder";
-  if (targetId.startsWith("codex:")) return "codex";
-  return "codex";
-}

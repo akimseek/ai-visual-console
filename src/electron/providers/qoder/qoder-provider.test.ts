@@ -1,3 +1,4 @@
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { buildQoderSessionStoragePaths, createQoderSessionParser, parseQoderModelList } from "./qoder-provider";
 
@@ -65,12 +66,16 @@ describe("createQoderSessionParser", () => {
 });
 
 describe("buildQoderSessionStoragePaths", () => {
-  const context = { kind: "local" as const, configDir: "/tmp/qoder" };
+  // 本地目标使用平台原生路径 API；测试输入与期望值必须按同一规则构造，才能在 Windows 与 POSIX 上同时成立。
+  const configDir = path.join(path.sep, "tmp", "qoder");
+  const trashRoot = path.join(configDir, ".visual-console-trash");
+  const context = { kind: "local" as const, configDir };
+  const projectTranscript = path.join(configDir, "projects", "project-key", "transcript.jsonl");
 
   it("将会话 JSONL 与关联状态一起映射到应用回收站", () => {
     const paths = buildQoderSessionStoragePaths(
       context,
-      "/tmp/qoder/projects/project-key/transcript.jsonl",
+      projectTranscript,
       "session-1",
       "active",
       "trash"
@@ -78,49 +83,50 @@ describe("buildQoderSessionStoragePaths", () => {
 
     expect(paths).toEqual([
       {
-        source: "/tmp/qoder/projects/project-key/session-1",
-        destination: "/tmp/qoder/.visual-console-trash/projects/project-key/session-1"
+        source: path.join(configDir, "projects", "project-key", "session-1"),
+        destination: path.join(trashRoot, "projects", "project-key", "session-1")
       },
       {
-        source: "/tmp/qoder/tasks/session-1",
-        destination: "/tmp/qoder/.visual-console-trash/tasks/session-1"
+        source: path.join(configDir, "tasks", "session-1"),
+        destination: path.join(trashRoot, "tasks", "session-1")
       },
       {
-        source: "/tmp/qoder/file-history/session-1",
-        destination: "/tmp/qoder/.visual-console-trash/file-history/session-1"
+        source: path.join(configDir, "file-history", "session-1"),
+        destination: path.join(trashRoot, "file-history", "session-1")
       },
       {
-        source: "/tmp/qoder/logs/sessions/project-key/session-1",
-        destination: "/tmp/qoder/.visual-console-trash/logs/sessions/project-key/session-1"
+        source: path.join(configDir, "logs", "sessions", "project-key", "session-1"),
+        destination: path.join(trashRoot, "logs", "sessions", "project-key", "session-1")
       },
       {
-        source: "/tmp/qoder/projects/project-key/transcript.jsonl",
-        destination: "/tmp/qoder/.visual-console-trash/projects/project-key/transcript.jsonl",
+        source: projectTranscript,
+        destination: path.join(trashRoot, "projects", "project-key", "transcript.jsonl"),
         primary: true
       }
     ]);
   });
 
   it("从回收站恢复时保留原始相对路径", () => {
+    const trashTranscript = path.join(trashRoot, "projects", "project-key", "transcript.jsonl");
     const paths = buildQoderSessionStoragePaths(
       context,
-      "/tmp/qoder/.visual-console-trash/projects/project-key/transcript.jsonl",
+      trashTranscript,
       "session-1",
       "trash",
       "active"
     );
 
     expect(paths.at(-1)).toEqual({
-      source: "/tmp/qoder/.visual-console-trash/projects/project-key/transcript.jsonl",
-      destination: "/tmp/qoder/projects/project-key/transcript.jsonl",
+      source: trashTranscript,
+      destination: projectTranscript,
       primary: true
     });
   });
 
   it("拒绝 projects 根以外或嵌套层级不符合约定的路径", () => {
-    expect(() => buildQoderSessionStoragePaths(context, "/tmp/other/session.jsonl", "session-1", "active", "trash"))
+    expect(() => buildQoderSessionStoragePaths(context, path.join(path.sep, "tmp", "other", "session.jsonl"), "session-1", "active", "trash"))
       .toThrow("拒绝操作 Qoder projects 目录之外的会话文件。");
-    expect(() => buildQoderSessionStoragePaths(context, "/tmp/qoder/projects/a/nested/session.jsonl", "session-1", "active", "trash"))
+    expect(() => buildQoderSessionStoragePaths(context, path.join(configDir, "projects", "a", "nested", "session.jsonl"), "session-1", "active", "trash"))
       .toThrow("拒绝操作 Qoder projects 目录之外的会话文件。");
   });
 });

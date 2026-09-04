@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import type { AiProviderId, AiTarget } from "../../types";
+import { buildWslProviderTargetId } from "../../../../shared/target-ids";
 import type { SessionView } from "./use-session-loader";
 import { captureError } from "../../hooks/error-utils";
 
@@ -35,7 +36,7 @@ export function useSessionSettings({
 
   async function refreshWslTarget(distro: string) {
     await loadTargets("codex", { showLoading: true });
-    const targetId = `wsl:${distro}`;
+    const targetId = buildWslProviderTargetId("codex", distro);
     invalidateLoadedView(targetId, view);
     await loadSessions(targetId, view, true);
   }

@@ -1,5 +1,6 @@
 # Dependencies
 node_modules/
+.pnpm-store/
 
 # Build output
 dist/
@@ -41,6 +42,7 @@ performance.log
 # Test and coverage output
 coverage/
 .nyc_output/
+test-results/
 
 # Editor and OS files
 .idea/

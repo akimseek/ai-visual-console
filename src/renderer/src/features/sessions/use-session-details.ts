@@ -9,7 +9,6 @@ type UseSessionDetailsOptions = {
   activeSession: AiSession | null;
   view: SessionView;
   supportsBranch: boolean;
-  onSessionLoaded: (targetId: string, session: AiSession) => void;
   notifyError: (message: string) => void;
 };
 
@@ -18,7 +17,6 @@ export function useSessionDetails({
   activeSession,
   view,
   supportsBranch,
-  onSessionLoaded,
   notifyError
 }: UseSessionDetailsOptions) {
   const [detailDialogSession, setDetailDialogSession] = useState<AiSession | null>(null);
@@ -118,7 +116,6 @@ export function useSessionDetails({
   async function refreshSessionSnapshot(nextTargetId: string, sessionId: string, filePath?: string) {
     try {
       const session = await window.codexConsole.getSession(nextTargetId, sessionId, filePath ? { filePath } : undefined);
-      onSessionLoaded(nextTargetId, session);
       setSelectedSessionDetails((current) => (current?.id === session.id ? session : current));
       setDetailDialogSession((current) => (current?.id === session.id ? session : current));
       return session;

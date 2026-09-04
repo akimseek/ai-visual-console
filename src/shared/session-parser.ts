@@ -256,7 +256,7 @@ export function shouldKeepMessage(message: { text: string }) {
   return Boolean(message.text.trim()) && !isSyntheticUserBlock(message.text);
 }
 
-export function safeJsonParse<T>(value: string): T | null {
+export function safeJsonParse<T = Record<string, unknown>>(value: string): T | null {
   try {
     return JSON.parse(value) as T;
   } catch {
@@ -312,15 +312,16 @@ function pushUniqueMessage(messages: CodexMessage[], message: CodexMessage) {
   messages.push(message);
 }
 
-function stringField(value: unknown) {
+// JSON 字段读取工具供各 Provider 共用，避免不同解析器对非法类型产生不一致行为。
+export function stringField(value: unknown) {
   return typeof value === "string" ? value : "";
 }
 
-function numberField(value: unknown) {
+export function numberField(value: unknown) {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
-function objectField(value: unknown): Record<string, unknown> {
+export function objectField(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
 }
 
@@ -359,7 +360,7 @@ function mergeModelStatus(
   };
 }
 
-function clampText(value: string, length: number) {
+export function clampText(value: string, length: number) {
   const normalized = value.replace(/\s+/g, " ").trim();
   return normalized.length > length ? `${normalized.slice(0, length - 1)}...` : normalized;
 }

@@ -48,9 +48,13 @@ const DEFAULT_COMPRESSION_PROMPT_CONTENT = `请生成“可恢复工作状态摘
 let settingsPath = "";
 let settingsQueue = Promise.resolve();
 let structuredSettingsMigration: Promise<void> | null = null;
+// settings.json 的内存缓存：主进程是唯一写入方，读盘+解析只做一次；
+// updateSettings 写透更新缓存，setSettingsPath 切换路径时丢弃。
+let settingsCache: AppSettings | null = null;
 
 export function setSettingsPath(filePath: string) {
   settingsPath = filePath;
+  settingsCache = null;
   structuredSettingsMigration = null;
 }
 
@@ -382,14 +386,22 @@ function mergeCachedTargetsByProvider(current: CodexTarget[], next: CodexTarget[
 
 async function readSettings(): Promise<AppSettings> {
   if (!settingsPath) return {};
+  if (settingsCache) return settingsCache;
   try {
-    return JSON.parse(await fs.readFile(settingsPath, "utf8")) as AppSettings;
+    const value = JSON.parse(await fs.readFile(settingsPath, "utf8")) as AppSettings;
+    settingsCache = value;
+    return value;
   } catch (error: unknown) {
-    if ((error as NodeJS.ErrnoException)?.code === "ENOENT") return {};
+    if ((error as NodeJS.ErrnoException)?.code === "ENOENT") {
+      settingsCache = {};
+      return settingsCache;
+    }
     const message = error instanceof Error ? error.message : String(error);
     console.error(`[settings-read-failed] ${message}`, error);
     await backupBrokenSettings(error);
-    return {};
+    // 损坏配置按空配置降级，并缓存本次结果，避免网关热路径重复读盘、解析和备份。
+    settingsCache = {};
+    return settingsCache;
   }
 }
 
@@ -401,6 +413,7 @@ async function updateSettings(updater: (settings: AppSettings) => AppSettings) {
     const tempPath = `${settingsPath}.${process.pid}.${Date.now()}.tmp`;
     await fs.writeFile(tempPath, JSON.stringify(settings, null, 2), "utf8");
     await fs.rename(tempPath, settingsPath);
+    settingsCache = settings;
   });
   await settingsQueue;
 }

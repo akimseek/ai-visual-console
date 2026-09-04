@@ -3,6 +3,14 @@
   "version": "1.1.2",
   "private": true,
   "packageManager": "pnpm@10.33.0",
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "electron",
+      "electron-winstaller",
+      "esbuild",
+      "node-pty"
+    ]
+  },
   "author": {
     "name": "akim",
     "email": "akim@akimsoft.local"
@@ -15,15 +23,16 @@
     "typecheck": "tsc -p tsconfig.electron.json --noEmit && tsc -p tsconfig.json --noEmit",
     "test": "vitest run --config vitest.config.ts",
     "test:watch": "vitest --config vitest.config.ts",
+    "test:ui": "playwright test",
     "lint": "eslint . --max-warnings 0",
-    "build": "npm run typecheck && tsc -p tsconfig.electron.json && vite build",
+    "build": "pnpm run typecheck && tsc -p tsconfig.electron.json && vite build",
     "build:ci": "tsc -p tsconfig.electron.json && vite build",
     "start": "electron .",
-    "pack": "npm run build && electron-builder --dir",
-    "dist": "npm run build && electron-builder",
-    "dist:win": "npm run build && electron-builder --win",
-    "dist:mac": "npm run build && electron-builder --mac",
-    "dist:linux": "npm run build && electron-builder --linux"
+    "pack": "pnpm run build && electron-builder --dir",
+    "dist": "pnpm run build && electron-builder",
+    "dist:win": "pnpm run build && electron-builder --win",
+    "dist:mac": "pnpm run build && electron-builder --mac",
+    "dist:linux": "pnpm run build && electron-builder --linux"
   },
   "build": {
     "appId": "com.akimsoft.ai.visual.console",
@@ -102,6 +111,7 @@
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
+    "@playwright/test": "^1.62.1",
     "@types/node": "^24.3.0",
     "@types/react": "^19.1.10",
     "@types/react-dom": "^19.1.7",

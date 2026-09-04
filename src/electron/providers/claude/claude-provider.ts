@@ -1,23 +1,39 @@
-import { execFile, spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { promisify } from "node:util";
 import type { AiMessage, AiSession, AiTarget, SessionBatchMutationResult, SessionFileRef, SessionMessagePage, SessionMutationRef, SessionUsage, TokenUsage } from "../../types";
 import type { SessionView } from "../ai-providers";
 import { measure } from "../../core/performance";
 import { hasAppDatabase, readSessionMessageIndex, saveSessionMessageIndex } from "../../core/app-database";
 import { applySessionMetadataList, findSessionIdsByParent, setSessionBranchMetadata } from "../session-metadata";
-import { readLocalLines, readWslLines } from "../../terminal/wsl-process";
-import { getCachedTargets, setCachedTargets } from "../../core/settings";
+import {
+  wslGetEnv,
+  wslPathExists,
+  wslReadFile,
+  wslRun,
+  wslWriteFile
+} from "../../core/wsl";
+import { readLocalLines, readWslLines } from "../../core/line-reader";
+import { getWslDistroFromProviderTarget } from "../../../shared/target-ids";
+import { shellQuote } from "../../../shared/wsl-paths";
+import { pathExists } from "../../core/fs-utils";
+import { safeJsonParse } from "../../../shared/session-parser";
+import { getCachedTargets } from "../../core/settings";
+import {
+  listCliTargets,
+  probeLocalCliTarget,
+  probeWslCliTargets,
+  searchSessionsByContent,
+  sortSessionsByRecency
+} from "../provider-common";
 import {
   findCachedProviderSession,
   listCachedProviderSessions,
   loadProviderSessionCache
 } from "../provider-session-cache";
+import { assertSessionFileInside, relocateSessionPath } from "../session-file-ops";
+import { planSessionMutationBatch } from "../session-mutation-base";
 
-const execFileAsync = promisify(execFile);
-const INTERNAL_WSL_DISTROS = new Set(["docker-desktop", "docker-desktop-data"]);
 const CLAUDE_DEFAULT_CONTEXT_WINDOW = 200_000;
 const CLAUDE_ONE_MILLION_CONTEXT_WINDOW = 1_000_000;
 const CLAUDE_LIST_PREVIEW_LIMIT = 8;
@@ -44,12 +60,6 @@ type ClaudeContextHint = {
   contextWindow?: number;
 };
 
-type SessionMutationEntry = SessionMutationRef & {
-  filePath: string;
-  movedTo?: string;
-  deleted?: string;
-};
-
 type ClaudeUsageAccumulator = {
   total: Required<Pick<TokenUsage, "inputTokens" | "cachedInputTokens" | "outputTokens" | "totalTokens">>;
   last?: TokenUsage;
@@ -64,54 +74,37 @@ export async function listCachedTargets(): Promise<AiTarget[]> {
 }
 
 export async function listTargets(): Promise<AiTarget[]> {
-  return measure("targets.list.claude", async () => {
-    const local = await probeLocalTarget();
-    const wslTargets = process.platform === "win32" || process.platform === "linux"
-      ? await probeWslTargets()
-      : [];
-    const targets = [
-      ...wslTargets,
-      ...(local ? [local] : [])
-    ];
-    await setCachedTargets(targets);
-    return targets;
-  });
+  return listCliTargets("claude", probeLocalTarget, probeWslTargets);
 }
 
 export async function listCachedSessions(_targetId: string, _view: SessionView): Promise<AiSession[]> {
   return (await applySessionMetadataList(
     _targetId,
     await listCachedProviderSessions<AiSession>(getClaudeCacheKey(_targetId, _view))
-  )).sort(sortSessionDesc);
+  )).sort(sortSessionsByRecency);
 }
 
 export async function listSessions(targetId: string): Promise<AiSession[]> {
   return measure(`sessions.list.${targetId}`, async () => {
     const sessions = await loadClaudeSessions(targetId, "active");
-    return sessions.sort(sortSessionDesc);
+    return sessions.sort(sortSessionsByRecency);
   });
 }
 
 export async function listTrashSessions(targetId: string): Promise<AiSession[]> {
   return measure(`sessions.trash.list.${targetId}`, async () => {
     const sessions = await loadClaudeSessions(targetId, "trash");
-    return sessions.sort(sortSessionDesc);
+    return sessions.sort(sortSessionsByRecency);
   });
 }
 
 export async function searchSessions(targetId: string, view: SessionView, query: string): Promise<AiSession[]> {
-  const normalized = query.trim().toLowerCase();
   const sessions = view === "trash" ? await listTrashSessions(targetId) : await listSessions(targetId);
-  if (!normalized) return sessions;
-
-  const context = await resolveClaudeTargetContext(targetId);
-  const matches: AiSession[] = [];
-  for (const session of sessions) {
-    if (matchesClaudeSessionSummary(session, normalized) || await claudeSessionContains(context, session.filePath, normalized)) {
-      matches.push(session);
-    }
-  }
-  return matches;
+  return searchSessionsByContent({
+    sessions,
+    query,
+    resolveContext: () => resolveClaudeTargetContext(targetId)
+  });
 }
 
 export async function getSession(targetId: string, sessionId: string, ref?: SessionFileRef): Promise<AiSession> {
@@ -221,7 +214,7 @@ export async function listSessionsByParent(targetId: string, parentSessionId: st
 
 export async function getSessionFolderPath(targetId: string, sessionId: string): Promise<string> {
   const session = await getSession(targetId, sessionId);
-  return targetId.startsWith("claude:wsl:")
+  return getWslDistroFromProviderTarget("claude", targetId)
     ? path.posix.dirname(session.filePath)
     : path.dirname(session.filePath);
 }
@@ -317,27 +310,31 @@ async function mutateClaudeSessionsBatch(
   return measure(`sessions.${view === "trash" ? "purge" : "delete"}.batch.${targetId}`, async () => {
     if (sessions.length === 0) return { processed: [] };
     const context = await resolveClaudeTargetContext(targetId);
-    const processed = await Promise.all(sessions.map(async (sessionRef): Promise<SessionMutationEntry> => {
+    const plans = await planSessionMutationBatch(sessions, view, async (sessionRef) => {
       const session = await getClaudeSessionForMutation(targetId, context, sessionRef.id, view, sessionRef);
+      const source = session.filePath;
+      if (!source) throw new Error("Claude 会话缺少文件路径。");
       if (view === "trash") {
-        return { ...sessionRef, filePath: session.filePath, deleted: session.filePath };
+        return { session, source, result: { ...sessionRef, filePath: source, deleted: source } };
       }
-      return { ...sessionRef, filePath: session.filePath, movedTo: buildClaudeTrashPath(context, session.filePath) };
-    }));
+      const movedTo = buildClaudeTrashPath(context, source);
+      return { session, source, destination: movedTo, result: { ...sessionRef, filePath: source, movedTo } };
+    });
+    const processed = plans.map((plan) => plan.result);
 
     if (context.kind === "wsl") {
-      const script = processed
-        .map((entry) =>
+      const script = plans
+        .map((plan) =>
           view === "trash"
-            ? `rm -f -- ${shellQuote(entry.filePath)}`
-            : `mkdir -p ${shellQuote(path.posix.dirname(entry.movedTo!))} && mv -- ${shellQuote(entry.filePath)} ${shellQuote(entry.movedTo!)}`
+            ? `rm -f -- ${shellQuote(plan.source)}`
+            : `mkdir -p ${shellQuote(path.posix.dirname(plan.destination!))} && mv -- ${shellQuote(plan.source)} ${shellQuote(plan.destination!)}`
         )
         .join("\n");
       await wslRun(context.distro!, "bash", ["-lc", script]);
     } else {
-      for (const entry of processed) {
-        if (view === "trash") await fs.unlink(entry.filePath);
-        else await moveLocalSession(entry.filePath, entry.movedTo!);
+      for (const plan of plans) {
+        if (view === "trash") await fs.unlink(plan.source);
+        else await moveLocalSession(plan.source, plan.destination!);
       }
     }
 
@@ -405,8 +402,8 @@ async function resolveClaudeTargetContext(targetId: string): Promise<ClaudeTarge
     };
   }
 
-  if (targetId.startsWith("claude:wsl:")) {
-    const distro = targetId.slice("claude:wsl:".length);
+  const distro = getWslDistroFromProviderTarget("claude", targetId);
+  if (distro) {
     const home = await wslGetEnv(distro, "HOME");
     return {
       targetId,
@@ -505,21 +502,13 @@ function getClaudeTrashProjectsRoot(context: ClaudeTargetContext) {
 function buildClaudeTrashPath(context: ClaudeTargetContext, source: string) {
   const projectsRoot = getClaudeProjectsRoot(context);
   const trashRoot = getClaudeTrashProjectsRoot(context);
-  const relative = context.kind === "wsl"
-    ? path.posix.relative(projectsRoot, source)
-    : path.relative(projectsRoot, source);
-  if (relative.startsWith("..")) throw new Error("拒绝移动 Claude projects 目录之外的文件");
-  return context.kind === "wsl" ? path.posix.join(trashRoot, relative) : path.join(trashRoot, relative);
+  return relocateSessionPath(source, projectsRoot, trashRoot, context.kind, "拒绝移动 Claude projects 目录之外的文件");
 }
 
 function buildClaudeRestorePath(context: ClaudeTargetContext, source: string) {
   const trashRoot = getClaudeTrashProjectsRoot(context);
   const projectsRoot = getClaudeProjectsRoot(context);
-  const relative = context.kind === "wsl"
-    ? path.posix.relative(trashRoot, source)
-    : path.relative(trashRoot, source);
-  if (relative.startsWith("..")) throw new Error("拒绝恢复 Claude 回收站之外的文件");
-  return context.kind === "wsl" ? path.posix.join(projectsRoot, relative) : path.join(projectsRoot, relative);
+  return relocateSessionPath(source, trashRoot, projectsRoot, context.kind, "拒绝恢复 Claude 回收站之外的文件");
 }
 
 async function moveLocalSession(source: string, destination: string) {
@@ -535,43 +524,12 @@ async function moveWslSession(context: ClaudeTargetContext, source: string, dest
   );
 }
 
-async function wslWriteFile(distro: string, filePath: string, content: string) {
-  const wslExe = await getWslExe();
-  if (!wslExe) throw new Error("未找到 wsl.exe。");
-
-  const script = `mkdir -p ${shellQuote(path.posix.dirname(filePath))} && cat > ${shellQuote(filePath)}`;
-
-  await new Promise<void>((resolve, reject) => {
-    const child = spawn(wslExe, ["-d", distro, "--", "bash", "-lc", script], {
-      windowsHide: true,
-      stdio: ["pipe", "pipe", "pipe"]
-    });
-    const stderr: Buffer[] = [];
-
-    child.stderr.on("data", (chunk: Buffer) => stderr.push(chunk));
-    child.on("error", reject);
-    child.on("close", (code) => {
-      if (code === 0) {
-        resolve();
-        return;
-      }
-
-      const message = Buffer.concat(stderr).toString("utf8").trim() || `写入 Claude 分支文件失败：${code}`;
-      reject(new Error(message));
-    });
-
-    child.stdin.end(content, "utf8");
-  });
-}
-
 function assertInsideLocal(filePath: string, root: string, message: string) {
-  const relative = path.relative(root, filePath);
-  if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) throw new Error(message);
+  assertSessionFileInside(filePath, root, "local", message);
 }
 
 function assertInsidePosix(filePath: string, root: string, message: string) {
-  const relative = path.posix.relative(root, filePath);
-  if (!relative || relative.startsWith("..") || path.posix.isAbsolute(relative)) throw new Error(message);
+  assertSessionFileInside(filePath, root, "wsl", message);
 }
 
 async function listLocalSessionFiles(context: ClaudeTargetContext, view: SessionView): Promise<ClaudeSessionFile[]> {
@@ -789,24 +747,6 @@ async function readClaudeSessionLines(
   return parser.finish();
 }
 
-function matchesClaudeSessionSummary(session: AiSession, query: string) {
-  return [session.id, session.title, session.sourceTitle || "", session.cwd || "", session.model || "", ...session.preview.map((message) => message.text)]
-    .join("\n")
-    .toLowerCase()
-    .includes(query);
-}
-
-async function claudeSessionContains(context: ClaudeTargetContext, filePath: string, query: string) {
-  let found = false;
-  const inspect = (line: string) => {
-    found ||= line.toLowerCase().includes(query);
-    return !found;
-  };
-  if (context.kind === "wsl") await readWslLines(context.distro!, filePath, inspect);
-  else await readLocalLines(filePath, inspect);
-  return found;
-}
-
 async function readClaudeBranchText(context: ClaudeTargetContext, filePath: string, branchId: string, keepMessageCount: number) {
   const output: string[] = [];
   let keptMessages = 0;
@@ -1004,18 +944,6 @@ function compactTitle(value: string) {
   return value.replace(/\s+/g, " ").trim().slice(0, 160);
 }
 
-function safeJsonParse(value: string) {
-  try {
-    return JSON.parse(value);
-  } catch {
-    return null;
-  }
-}
-
-function sortSessionDesc(left: AiSession, right: AiSession) {
-  return Date.parse(right.updatedAt || right.createdAt || "") - Date.parse(left.updatedAt || left.createdAt || "");
-}
-
 function latestIsoTimestamp(left: string, right: string) {
   const leftTime = Date.parse(left || "");
   const rightTime = Date.parse(right || "");
@@ -1024,147 +952,24 @@ function latestIsoTimestamp(left: string, right: string) {
   return rightTime > leftTime ? right : left;
 }
 
-async function probeLocalTarget(): Promise<AiTarget | null> {
-  const command = process.platform === "win32" ? "claude.cmd" : "claude";
-  const found = await commandExists(command);
-  const configDir = path.join(os.homedir(), ".claude");
-  const hasConfigDir = await pathExists(configDir);
-  if (!found && !hasConfigDir) return null;
-
-  return {
-    id: "claude:local",
+function probeLocalTarget() {
+  return probeLocalCliTarget({
     provider: "claude",
-    label: `Claude Code：本机（${os.platform()}）`,
-    kind: "local",
-    codexHome: hasConfigDir ? configDir : undefined,
-    available: found,
-    detail: found
-      ? hasConfigDir ? "找到 Claude 命令和配置目录" : "找到 Claude 命令"
-      : "找到 Claude 配置目录，未找到 claude 命令"
-  };
-}
-
-async function probeWslTargets(): Promise<AiTarget[]> {
-  const distros = await listWslDistros();
-  return (
-    await Promise.all(
-      distros.map(async (distro): Promise<AiTarget | null> => {
-        const commandFound = await wslCommandExists(distro, "claude").catch(() => false);
-        const home = await wslGetEnv(distro, "HOME").catch(() => "");
-        const configDir = home ? path.posix.join(home, ".claude") : "";
-        const hasConfigDir = configDir ? await wslPathExists(distro, configDir).catch(() => false) : false;
-        if (!commandFound && !hasConfigDir) return null;
-
-        return {
-          id: `claude:wsl:${distro}`,
-          provider: "claude",
-          label: `Claude Code：WSL：${distro}`,
-          kind: "wsl",
-          distro,
-          codexHome: hasConfigDir ? configDir : undefined,
-          available: commandFound,
-          detail: commandFound
-            ? hasConfigDir ? "找到 Claude 命令和配置目录" : "找到 Claude 命令"
-            : "找到 Claude 配置目录，未找到 claude 命令"
-        };
-      })
-    )
-  ).filter((target): target is AiTarget => Boolean(target));
-}
-
-async function listWslDistros() {
-  const wslExe = await getWslExe();
-  if (!wslExe) return [];
-
-  try {
-    const { stdout } = await execFileAsync(wslExe, ["-l", "-q"], { encoding: "buffer" });
-    return decodeWslOutput(stdout)
-      .replace(/\0/g, "")
-      .split(/\r?\n/)
-      .map((line) => line.trim().replace(/^\*\s*/, ""))
-      .filter((line) => line && !INTERNAL_WSL_DISTROS.has(line.toLowerCase()));
-  } catch {
-    return [];
-  }
-}
-
-async function getWslExe() {
-  const candidates =
-    process.platform === "win32"
-      ? [
-          process.env.SystemRoot ? path.join(process.env.SystemRoot, "System32", "wsl.exe") : "",
-          process.env.windir ? path.join(process.env.windir, "System32", "wsl.exe") : "",
-          "C:\\Windows\\System32\\wsl.exe",
-          "C:\\Windows\\Sysnative\\wsl.exe",
-          "wsl.exe"
-        ]
-      : ["/mnt/c/Windows/System32/wsl.exe"];
-
-  for (const candidate of candidates.filter(Boolean)) {
-    if (await commandExists(candidate)) return candidate;
-  }
-  return null;
-}
-
-async function wslCommandExists(distro: string, command: string) {
-  await wslRun(distro, "bash", ["-lc", `command -v ${shellQuote(command)} >/dev/null 2>&1`]);
-  return true;
-}
-
-async function wslPathExists(distro: string, filePath: string) {
-  await wslRun(distro, "test", ["-e", filePath]);
-  return true;
-}
-
-async function wslGetEnv(distro: string, name: string) {
-  const { stdout } = await wslRun(distro, "printenv", [name]);
-  return stdout.trim();
-}
-
-async function wslReadFile(distro: string, filePath: string) {
-  const { stdout } = await wslRun(distro, "cat", [filePath]);
-  return stdout;
-}
-
-async function wslRun(distro: string, command: string, args: string[] = []) {
-  const wslExe = await getWslExe();
-  if (!wslExe) throw new Error("未找到 wsl.exe。");
-
-  return execFileAsync(wslExe, ["-d", distro, "--", command, ...args], {
-    encoding: "utf8",
-    maxBuffer: 1024 * 1024
+    displayName: "Claude Code",
+    windowsCommand: "claude.cmd",
+    unixCommand: "claude",
+    configDir: path.join(os.homedir(), ".claude")
   });
 }
 
-function decodeWslOutput(output: Buffer) {
-  const utf16 = output.toString("utf16le");
-  const utf8 = output.toString("utf8");
-  return utf16.replace(/\0/g, "").trim().length >= utf8.replace(/\0/g, "").trim().length ? utf16 : utf8;
-}
-
-async function commandExists(command: string) {
-  if (command.includes("/") || command.includes("\\")) {
-    return pathExists(command);
-  }
-
-  const checker = process.platform === "win32" ? "where" : "which";
-  try {
-    await execFileAsync(checker, [command]);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-async function pathExists(filePath: string) {
-  try {
-    await fs.access(filePath);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-function shellQuote(value: string) {
-  return `'${value.replace(/'/g, "'\\''")}'`;
+function probeWslTargets() {
+  return probeWslCliTargets({
+    provider: "claude",
+    displayName: "Claude Code",
+    command: "claude",
+    resolveConfigDir: async (distro) => {
+      const home = await wslGetEnv(distro, "HOME").catch(() => "");
+      return home ? path.posix.join(home, ".claude") : "";
+    }
+  });
 }

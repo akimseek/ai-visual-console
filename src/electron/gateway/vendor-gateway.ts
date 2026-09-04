@@ -7,7 +7,7 @@ import type { AiProviderId, ApiVendor } from "../types";
 import type { BrowserWindow } from "electron";
 import { getGatewayVendorSnapshot } from "./vendor-registry";
 import { getGatewayFailureThreshold, getGatewayPort } from "../core/settings";
-import { detectWslGatewayHost } from "../terminal/wsl-process";
+import { detectWslGatewayHost } from "../core/wsl";
 import { logGatewayEvent, recordGatewayRequest } from "./gateway-log";
 import { chooseNextVendor, chooseVendor, hydrateGatewayVendorHealth, isCircuitOpen, recordGatewayVendorFailure, recordGatewayVendorSuccess } from "./gateway-resilience";
 import { recordGatewayRequest as persistGatewayRequest } from "./gateway-request-store";
@@ -257,7 +257,7 @@ async function handleGatewayRequest(request: IncomingMessage, response: ServerRe
     }
 
     // 每次请求读取最新候选池；当前供应商仍可用时保持会话粘性，只有候选池或健康状态使其不可用时才换供应商。
-    let vendors = await getGatewayVendorSnapshot();
+    const vendors = await getGatewayVendorSnapshot();
     await hydrateGatewayVendorHealth();
     const routeVendor = vendors.find((item) => item.id === route.vendorId && item.providerId === route.providerId);
     const vendor = chooseVendor(vendors, route.providerId, route.vendorId);
@@ -299,6 +299,24 @@ async function handleGatewayRequest(request: IncomingMessage, response: ServerRe
     let attemptVendor = vendor;
     let failuresOnVendor = 0;
     const attemptedVendorIds = new Set<string>();
+    // 达到切换阈值后选取下一个候选供应商并更新本次请求的转发状态。
+    // 供应商启停会使快照失效，故每次重新取快照，确保关闭项不会进入本次故障转移。
+    // 返回 false 表示没有其他候选；调用方决定抛出错误还是回放最后一次上游响应。
+    const failoverToNextVendor = async (): Promise<boolean> => {
+      attemptedVendorIds.add(attemptVendor.id);
+      const freshVendors = await getGatewayVendorSnapshot();
+      const nextVendor = chooseNextVendor(freshVendors, route.providerId, attemptVendor.id, attemptedVendorIds);
+      if (!nextVendor) return false;
+      attemptVendor = nextVendor;
+      failuresOnVendor = 0;
+      retryCount += 1;
+      switched = true;
+      vendorId = nextVendor.id;
+      inputPricePerMillion = nextVendor.pricing?.inputPerMillionUsd;
+      outputPricePerMillion = nextVendor.pricing?.outputPerMillionUsd;
+      notifyVendorSwitch(route, nextVendor.id, "failure");
+      return true;
+    };
     for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
       if (!attemptVendor?.apiKey) break;
       const attemptUrl = joinUpstreamUrl(attemptVendor.apiBaseUrl, suffix, parsed.search);
@@ -321,21 +339,7 @@ async function handleGatewayRequest(request: IncomingMessage, response: ServerRe
         if (attempt < maxAttempts - 1 && isRetryableFetchError(error, controller, timeoutSignal)) {
           await recordGatewayVendorFailure(attemptVendor, error instanceof Error ? error.message : String(error));
           failuresOnVendor += 1;
-          if (failuresOnVendor >= failureThreshold) {
-            attemptedVendorIds.add(attemptVendor.id);
-            // 供应商启停会使快照失效；重试前重新取引用，确保关闭项不会进入本次故障转移。
-            vendors = await getGatewayVendorSnapshot();
-            const nextVendor = chooseNextVendor(vendors, route.providerId, attemptVendor.id, attemptedVendorIds);
-            if (!nextVendor) throw error;
-            attemptVendor = nextVendor;
-            failuresOnVendor = 0;
-            retryCount += 1;
-            switched = true;
-            vendorId = nextVendor.id;
-            inputPricePerMillion = nextVendor.pricing?.inputPerMillionUsd;
-            outputPricePerMillion = nextVendor.pricing?.outputPerMillionUsd;
-            notifyVendorSwitch(route, nextVendor.id, "failure");
-          }
+          if (failuresOnVendor >= failureThreshold && !(await failoverToNextVendor())) throw error;
           continue;
         }
         throw error;
@@ -349,20 +353,9 @@ async function handleGatewayRequest(request: IncomingMessage, response: ServerRe
           await upstream.body?.cancel().catch(() => undefined);
           continue;
         }
-        attemptedVendorIds.add(attemptVendor.id);
-        // 供应商启停会使快照失效；重试前重新取引用，确保关闭项不会进入本次故障转移。
-        vendors = await getGatewayVendorSnapshot();
-        const nextVendor = chooseNextVendor(vendors, route.providerId, attemptVendor.id, attemptedVendorIds);
-        if (!nextVendor) break;
         await upstream.body?.cancel().catch(() => undefined);
-        attemptVendor = nextVendor;
-        failuresOnVendor = 0;
-        retryCount += 1;
-        switched = true;
-        vendorId = nextVendor.id;
-        inputPricePerMillion = nextVendor.pricing?.inputPerMillionUsd;
-        outputPricePerMillion = nextVendor.pricing?.outputPerMillionUsd;
-        notifyVendorSwitch(route, nextVendor.id, "failure");
+        // 无其他候选时回放最后一次上游响应，让客户端看到真实错误而非 502。
+        if (!(await failoverToNextVendor())) break;
         continue;
       }
       if (upstream.status >= 400) await recordGatewayVendorFailure(attemptVendor, `HTTP ${upstream.status}`);
@@ -376,15 +369,22 @@ async function handleGatewayRequest(request: IncomingMessage, response: ServerRe
       response.setHeader(key, value);
     });
     if (!upstream.body) { response.end(); outcome = "ok"; return; }
-    let captured = "";
+    // 用量提取只捕获响应体前 512KB；按 Buffer 收集、结束一次性解码，
+    // 避免长流式响应反复扩容拷贝字符串，也修复跨 chunk 的多字节字符被截断的问题。
+    const capturedChunks: Buffer[] = [];
+    let capturedBytes = 0;
     await pipeline(
       Readable.fromWeb(upstream.body as any),
       byteCountingTransform((n, chunk) => {
         bytesOut += n;
-        if (captured.length < 512 * 1024) captured += chunk.toString("utf8");
+        if (capturedBytes < 512 * 1024) {
+          capturedChunks.push(chunk);
+          capturedBytes += n;
+        }
       }),
       response
     );
+    const captured = capturedChunks.length > 0 ? Buffer.concat(capturedChunks).toString("utf8") : "";
     const parsedUsage = parseGatewayUsage(captured.startsWith("data:") ? undefined : tryParseJson(captured))
       || parseUsageFromChunk(captured);
     if (parsedUsage) mergeGatewayUsage(usage, parsedUsage);

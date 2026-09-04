@@ -1,35 +1,12 @@
 import { describe, expect, it } from "vitest";
 import {
   decodeWslOutput,
-  getWslDistroFromTargetId,
   isInsidePath,
   isInsidePosixDir,
   parseWslSessionFileList,
   sanitizeWslDistro,
   wslMountPathToWindowsPath
 } from "./wsl-paths";
-
-describe("getWslDistroFromTargetId", () => {
-  it("解析裸 wsl: 前缀", () => {
-    expect(getWslDistroFromTargetId("wsl:Ubuntu-22.04")).toBe("Ubuntu-22.04");
-  });
-
-  it("解析 gemini:/claude: 复合前缀", () => {
-    expect(getWslDistroFromTargetId("gemini:wsl:Debian")).toBe("Debian");
-    expect(getWslDistroFromTargetId("claude:wsl:Arch")).toBe("Arch");
-    expect(getWslDistroFromTargetId("qoder:wsl:Fedora")).toBe("Fedora");
-  });
-
-  it("非 WSL 目标返回空串", () => {
-    expect(getWslDistroFromTargetId("local")).toBe("");
-    expect(getWslDistroFromTargetId("gemini:local")).toBe("");
-    expect(getWslDistroFromTargetId("")).toBe("");
-  });
-
-  it("发行版名内含冒号时只剥离已知前缀", () => {
-    expect(getWslDistroFromTargetId("wsl:a:b")).toBe("a:b");
-  });
-});
 
 describe("wslMountPathToWindowsPath", () => {
   it("转换 /mnt/<盘符>/... 为 Windows 路径并大写盘符", () => {

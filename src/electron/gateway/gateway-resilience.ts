@@ -3,8 +3,13 @@ import { readAppDatabase, updateAppDatabase } from "../core/app-database";
 import { getGatewayCircuitDurationSeconds, getGatewayCircuitFailureThreshold } from "../core/settings";
 
 const FAILURE_WINDOW_MS = 5 * 60 * 1000;
+const HEALTH_SUCCESS_PERSIST_INTERVAL_MS = 5_000;
 
-type HealthState = GatewayVendorHealth & { failures: number[] };
+type HealthState = GatewayVendorHealth & {
+  failures: number[];
+  lastPersistedAt?: number;
+  persistedStatus?: GatewayVendorHealthStatus;
+};
 const states = new Map<string, HealthState>();
 let schemaPromise: Promise<void> | null = null;
 let hydrated = false;
@@ -46,24 +51,33 @@ async function ensureSchema() {
 
 export async function hydrateGatewayVendorHealth() {
   if (hydrated) return;
-  await ensureSchema();
-  const rows = await readAppDatabase((db) => db.prepare("SELECT * FROM gateway_vendor_health").all() as HealthRow[]);
-  for (const row of rows) {
-    states.set(row.vendor_id, {
-      vendorId: row.vendor_id,
-      providerId: row.provider_id,
-      status: normalizeStatus(row.status, row.circuit_until),
-      failureCount: row.failure_count,
-      successCount: row.success_count,
-      failureRate: row.failure_rate,
-      lastFailureAt: row.last_failure_at || undefined,
-      lastSuccessAt: row.last_success_at || undefined,
-      circuitUntil: row.circuit_until || undefined,
-      lastFailureReason: row.last_failure_reason || undefined,
-      failures: row.status === "open" ? [Date.now()] : []
-    });
+  try {
+    await ensureSchema();
+    const rows = await readAppDatabase((db) => db.prepare("SELECT * FROM gateway_vendor_health").all() as HealthRow[]);
+    for (const row of rows) {
+      states.set(row.vendor_id, {
+        vendorId: row.vendor_id,
+        providerId: row.provider_id,
+        status: normalizeStatus(row.status, row.circuit_until),
+        failureCount: row.failure_count,
+        successCount: row.success_count,
+        failureRate: row.failure_rate,
+        lastFailureAt: row.last_failure_at || undefined,
+        lastSuccessAt: row.last_success_at || undefined,
+        circuitUntil: row.circuit_until || undefined,
+        lastFailureReason: row.last_failure_reason || undefined,
+        failures: row.status === "open" ? [Date.now()] : [],
+        lastPersistedAt: Date.now(),
+        persistedStatus: normalizeStatus(row.status, row.circuit_until)
+      });
+    }
+    hydrated = true;
+  } catch {
+    // 健康状态只是路由辅助信息；数据库不可用时降级为内存状态，不能因此拒绝所有网关请求。
+    // 将失败结果视为本次进程生命周期内的初始化完成，避免数据库异常时每个请求重复尝试建表和读库。
+    // 健康状态会继续由内存 Map 维护；数据库恢复后由 resetGatewayVendorHealth 主动重新建立持久化状态。
+    hydrated = true;
   }
-  hydrated = true;
 }
 
 export async function listGatewayVendorHealth(): Promise<GatewayVendorHealth[]> {
@@ -148,7 +162,7 @@ export async function recordGatewayVendorSuccess(vendor: ApiVendor) {
   state.failureRate = state.failureCount + state.successCount > 0
     ? state.failureCount / (state.failureCount + state.successCount)
     : 0;
-  await persist(state);
+  if (shouldPersistHealthState(state)) await persist(state);
 }
 
 export async function recordGatewayVendorFailure(vendor: ApiVendor, reason: string) {
@@ -198,6 +212,12 @@ function stateFor(vendor: ApiVendor): HealthState {
   return state;
 }
 
+function shouldPersistHealthState(state: HealthState) {
+  return state.persistedStatus !== state.status
+    || state.lastPersistedAt === undefined
+    || Date.now() - state.lastPersistedAt >= HEALTH_SUCCESS_PERSIST_INTERVAL_MS;
+}
+
 async function persist(state: HealthState) {
   try {
     await ensureSchema();
@@ -226,6 +246,8 @@ async function persist(state: HealthState) {
       state.circuitUntil || null,
       state.lastFailureReason || null
     ));
+    state.lastPersistedAt = Date.now();
+    state.persistedStatus = state.status;
   } catch {
     // 健康状态写入失败不能影响已经完成的 Gateway 请求。
   }

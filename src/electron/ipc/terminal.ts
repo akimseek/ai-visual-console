@@ -1,8 +1,8 @@
 import { BrowserWindow, clipboard, dialog, ipcMain, shell } from "electron";
-import { execFile } from "node:child_process";
-import fs from "node:fs/promises";
-import { promisify } from "node:util";
 import { getSessionFolderPath } from "../providers/ai-providers";
+import { pathExists } from "../core/fs-utils";
+import { wslPathExists } from "../core/wsl";
+import { getWslDistroFromTargetId } from "../../shared/target-ids";
 import { writePerformanceLog } from "../core/performance";
 import {
   resizeTerminalSession,
@@ -20,8 +20,6 @@ import {
   requireSystemTerminalStartParams,
   requireOpenPathRequest
 } from "./validation";
-
-const execFileAsync = promisify(execFile);
 
 export function registerTerminalIpcHandlers() {
   ipcMain.handle("terminal:start", (event, params: unknown) =>
@@ -77,49 +75,15 @@ export function registerTerminalIpcHandlers() {
 }
 
 function toShellOpenPath(targetId: string, folderPath: string) {
-  if (targetId.startsWith("wsl:") || targetId.startsWith("gemini:wsl:") || targetId.startsWith("claude:wsl:") || targetId.startsWith("qoder:wsl:")) {
-    const distro = targetId.startsWith("gemini:wsl:")
-      ? targetId.slice("gemini:wsl:".length)
-      : targetId.startsWith("claude:wsl:")
-        ? targetId.slice("claude:wsl:".length)
-        : targetId.startsWith("qoder:wsl:")
-          ? targetId.slice("qoder:wsl:".length)
-        : targetId.slice("wsl:".length);
-    return `\\\\wsl.localhost\\${distro}${folderPath.replace(/\//g, "\\")}`;
-  }
+  const distro = getWslDistroFromTargetId(targetId);
+  if (distro) return `\\\\wsl.localhost\\${distro}${folderPath.replace(/\//g, "\\")}`;
   return folderPath;
-}
-
-async function pathExists(filePath: string) {
-  try {
-    await fs.access(filePath);
-    return true;
-  } catch {
-    return false;
-  }
 }
 
 async function pathExistsForTarget(targetId: string, folderPath: string) {
   if (!folderPath) return false;
-  if (targetId.startsWith("wsl:") || targetId.startsWith("gemini:wsl:") || targetId.startsWith("claude:wsl:") || targetId.startsWith("qoder:wsl:")) {
-    const distro = targetId.startsWith("gemini:wsl:")
-      ? targetId.slice("gemini:wsl:".length)
-      : targetId.startsWith("claude:wsl:")
-        ? targetId.slice("claude:wsl:".length)
-        : targetId.startsWith("qoder:wsl:")
-          ? targetId.slice("qoder:wsl:".length)
-        : targetId.slice("wsl:".length);
-    if (!distro) return false;
-    try {
-      await execFileAsync("wsl.exe", ["-d", distro, "--", "bash", "-lc", `test -e ${shellQuote(folderPath)}`]);
-      return true;
-    } catch {
-      return false;
-    }
-  }
+  const distro = getWslDistroFromTargetId(targetId);
+  if (distro) return wslPathExists(distro, folderPath);
   return pathExists(folderPath);
 }
 
-function shellQuote(value: string) {
-  return `'${value.replace(/'/g, "'\\''")}'`;
-}

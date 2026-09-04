@@ -18,17 +18,28 @@ import type { SessionView } from "../ai-providers";
 import { measure } from "../../core/performance";
 import { hasAppDatabase, readSessionMessageIndex, saveSessionMessageIndex } from "../../core/app-database";
 import { applySessionMetadataList } from "../session-metadata";
-import { getCachedTargets, setCachedTargets } from "../../core/settings";
+import { getCachedTargets } from "../../core/settings";
 import {
   findCachedProviderSession,
   listCachedProviderSessions,
   loadProviderSessionCache
 } from "../provider-session-cache";
-import { getWslExe, readLocalLines, readWslLines, runWslShell, shellQuote } from "../../terminal/wsl-process";
-import { decodeWslOutput, isInsidePosixDir } from "../../../shared/wsl-paths";
+import { runWslShell, wslPathExists } from "../../core/wsl";
+import { readLocalLines, readWslLines } from "../../core/line-reader";
+import { getWslDistroFromProviderTarget } from "../../../shared/target-ids";
+import { isInsidePath, isInsidePosixDir, shellQuote } from "../../../shared/wsl-paths";
+import { pathExists } from "../../core/fs-utils";
+import { clampText, numberField, objectField, safeJsonParse, stringField } from "../../../shared/session-parser";
+import { assertSessionFileInside } from "../session-file-ops";
+import {
+  listCliTargets,
+  probeLocalCliTarget,
+  probeWslCliTargets,
+  searchSessionsByContent,
+  sortSessionsByRecency
+} from "../provider-common";
 
 const execFileAsync = promisify(execFile);
-const INTERNAL_WSL_DISTROS = new Set(["docker-desktop", "docker-desktop-data"]);
 const QODER_CONFIG_DIR_NAME = ".qoder-cn";
 const QODER_LIST_PREVIEW_LIMIT = 8;
 const QODER_TRASH_DIR_NAME = ".visual-console-trash";
@@ -65,15 +76,7 @@ export async function listCachedTargets(): Promise<CodexTarget[]> {
 }
 
 export async function listTargets(): Promise<CodexTarget[]> {
-  return measure("targets.list.qoder", async () => {
-    const local = await probeLocalTarget();
-    const wslTargets = process.platform === "win32" || process.platform === "linux"
-      ? await probeWslTargets()
-      : [];
-    const targets = [...wslTargets, ...(local ? [local] : [])];
-    await setCachedTargets(targets);
-    return targets;
-  });
+  return listCliTargets("qoder", probeLocalTarget, probeWslTargets);
 }
 
 /** 读取 Qoder CLI 当前账号可用的真实模型，避免把其他平台的供应商模型混入 Qoder。 */
@@ -100,27 +103,25 @@ export function parseQoderModelList(output: string): Array<{ id: string }> {
 }
 
 export async function listCachedSessions(targetId: string, view: SessionView): Promise<CodexSession[]> {
-  return (await applySessionMetadataList(targetId, await listCachedProviderSessions<CodexSession>(getCacheKey(targetId, view)))).sort(sortSessions);
+  return (await applySessionMetadataList(targetId, await listCachedProviderSessions<CodexSession>(getCacheKey(targetId, view)))).sort(sortSessionsByRecency);
 }
 
 export async function listSessions(targetId: string): Promise<CodexSession[]> {
-  return measure(`sessions.list.${targetId}`, async () => (await loadQoderSessions(targetId)).sort(sortSessions));
+  return measure(`sessions.list.${targetId}`, async () => (await loadQoderSessions(targetId)).sort(sortSessionsByRecency));
 }
 
 export async function listTrashSessions(targetId: string): Promise<CodexSession[]> {
-  return measure(`sessions.trash.list.${targetId}`, async () => (await loadQoderSessions(targetId, "trash")).sort(sortSessions));
+  return measure(`sessions.trash.list.${targetId}`, async () => (await loadQoderSessions(targetId, "trash")).sort(sortSessionsByRecency));
 }
 
 export async function searchSessions(targetId: string, view: SessionView, query: string): Promise<CodexSession[]> {
-  const normalized = query.trim().toLowerCase();
   const sessions = view === "trash" ? await listTrashSessions(targetId) : await listSessions(targetId);
-  if (!normalized) return sessions;
-  const context = await resolveTargetContext(targetId);
-  const matches: CodexSession[] = [];
-  for (const session of sessions) {
-    if (matchesSummary(session, normalized) || await sessionContains(context, session.filePath, normalized)) matches.push(session);
-  }
-  return matches;
+  return searchSessionsByContent({
+    sessions,
+    query,
+    resolveContext: () => resolveTargetContext(targetId),
+    extractLineText: (line) => toQoderMessage(safeJsonParse(line))?.text ?? null
+  });
 }
 
 export async function getSession(targetId: string, sessionId: string, ref?: SessionFileRef): Promise<CodexSession> {
@@ -480,9 +481,8 @@ async function resolveTargetContext(targetId: string): Promise<QoderTargetContex
       configDir: localConfigDir()
     };
   }
-  if (targetId.startsWith("qoder:wsl:")) {
-    const distro = targetId.slice("qoder:wsl:".length);
-    if (!distro) throw new Error("缺少 Qoder WSL 发行版。" );
+  const distro = getWslDistroFromProviderTarget("qoder", targetId);
+  if (distro) {
     return {
       targetId,
       kind: "wsl",
@@ -690,29 +690,9 @@ function addOptional(current?: number, next?: number) {
   return typeof current === "number" || typeof next === "number" ? (current || 0) + (next || 0) : undefined;
 }
 
-function matchesSummary(session: CodexSession, query: string) {
-  return [session.id, session.title, session.cwd || "", session.model || "", ...session.preview.map((message) => message.text)]
-    .join("\n")
-    .toLowerCase()
-    .includes(query);
-}
-
-async function sessionContains(context: QoderTargetContext, filePath: string, query: string) {
-  let found = false;
-  const inspect = (line: string) => {
-    const message = toQoderMessage(safeJsonParse(line));
-    found = Boolean(message?.text.toLowerCase().includes(query));
-    return !found;
-  };
-  if (context.kind === "wsl") await readWslLines(context.distro!, filePath, inspect);
-  else await readLocalLines(filePath, inspect);
-  return found;
-}
-
 function assertSessionPath(context: QoderTargetContext, filePath: string, view: SessionView) {
   const root = getQoderProjectsRoot(context, view);
-  if (context.kind === "wsl" ? isInsidePosixDir(filePath, root) : isInsideLocal(filePath, root)) return;
-  throw new Error("拒绝操作 Qoder 会话目录之外的文件。");
+  assertSessionFileInside(filePath, root, context.kind, "拒绝操作 Qoder 会话目录之外的文件。");
 }
 
 function getSessionViewForPath(context: QoderTargetContext, filePath: string): SessionView {
@@ -720,8 +700,8 @@ function getSessionViewForPath(context: QoderTargetContext, filePath: string): S
     if (isInsidePosixDir(filePath, getQoderProjectsRoot(context, "active"))) return "active";
     if (isInsidePosixDir(filePath, getQoderProjectsRoot(context, "trash"))) return "trash";
   } else {
-    if (isInsideLocal(filePath, getQoderProjectsRoot(context, "active"))) return "active";
-    if (isInsideLocal(filePath, getQoderProjectsRoot(context, "trash"))) return "trash";
+    if (isInsidePath(filePath, getQoderProjectsRoot(context, "active"))) return "active";
+    if (isInsidePath(filePath, getQoderProjectsRoot(context, "trash"))) return "trash";
   }
   throw new Error("拒绝操作 Qoder 会话目录之外的文件。");
 }
@@ -756,114 +736,27 @@ async function verifySessionId(context: QoderTargetContext, filePath: string, se
   if (!found) throw new Error(`会话文件与会话编号不匹配：${sessionId}`);
 }
 
-async function probeLocalTarget(): Promise<CodexTarget | null> {
-  const command = process.platform === "win32" ? "qodercn.cmd" : "qodercn";
-  const configDir = localConfigDir();
-  const [found, hasConfigDir] = await Promise.all([commandExists(command), pathExists(configDir)]);
-  if (!found && !hasConfigDir) return null;
-  return {
-    id: "qoder:local",
+function probeLocalTarget() {
+  return probeLocalCliTarget({
     provider: "qoder",
-    label: `Qoder：本机（${os.platform()}）`,
-    kind: "local",
-    codexHome: hasConfigDir ? configDir : undefined,
-    available: found,
-    detail: found
-      ? hasConfigDir ? "找到 Qoder 命令和配置目录" : "找到 Qoder 命令"
-      : "找到 Qoder 配置目录，未找到 qodercn 命令"
-  };
+    displayName: "Qoder",
+    windowsCommand: "qodercn.cmd",
+    unixCommand: "qodercn",
+    configDir: localConfigDir()
+  });
 }
 
-async function probeWslTargets(): Promise<CodexTarget[]> {
-  const distros = await listWslDistros();
-  return (await Promise.all(distros.map(async (distro): Promise<CodexTarget | null> => {
-    const configDir = await wslConfigDir(distro).catch(() => "");
-    const [found, hasConfigDir] = await Promise.all([
-      wslCommandExists(distro, "qodercn").catch(() => false),
-      configDir ? wslPathExists(distro, configDir).catch(() => false) : false
-    ]);
-    if (!found && !hasConfigDir) return null;
-    return {
-      id: `qoder:wsl:${distro}`,
-      provider: "qoder",
-      label: `Qoder：WSL：${distro}`,
-      kind: "wsl",
-      distro,
-      codexHome: hasConfigDir ? configDir : undefined,
-      available: found,
-      detail: found
-        ? hasConfigDir ? "找到 Qoder 命令和配置目录" : "找到 Qoder 命令"
-        : "找到 Qoder 配置目录，未找到 qodercn 命令"
-    };
-  }))).filter((target): target is CodexTarget => Boolean(target));
-}
-
-async function listWslDistros() {
-  const wslExe = await getWslExe();
-  if (!wslExe) return [];
-  try {
-    const { stdout } = await execFileAsync(wslExe, ["-l", "-q"], { encoding: "buffer" });
-    return decodeWslOutput(stdout)
-      .replace(/\0/g, "")
-      .split(/\r?\n/)
-      .map((line) => line.trim().replace(/^\*\s*/, ""))
-      .filter((line) => line && !INTERNAL_WSL_DISTROS.has(line.toLowerCase()));
-  } catch {
-    return [];
-  }
+function probeWslTargets() {
+  return probeWslCliTargets({
+    provider: "qoder",
+    displayName: "Qoder",
+    command: "qodercn",
+    resolveConfigDir: wslConfigDir
+  });
 }
 
 async function wslConfigDir(distro: string) {
   return (await runWslShell(distro, 'printf %s "${QODERCN_CONFIG_DIR:-$HOME/.qoder-cn}"')).trim();
-}
-
-async function wslCommandExists(distro: string, command: string) {
-  await runWslShell(distro, `command -v ${shellQuote(command)} >/dev/null 2>&1`);
-  return true;
-}
-
-async function wslPathExists(distro: string, filePath: string) {
-  await runWslShell(distro, `test -e ${shellQuote(filePath)}`);
-  return true;
-}
-
-async function commandExists(command: string) {
-  try {
-    await execFileAsync(command, ["--version"], { encoding: "utf8", timeout: 5_000, windowsHide: true });
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-async function pathExists(filePath: string) {
-  try {
-    await fs.access(filePath);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-function safeJsonParse(value: string): Record<string, unknown> | null {
-  try {
-    const parsed = JSON.parse(value);
-    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed as Record<string, unknown> : null;
-  } catch {
-    return null;
-  }
-}
-
-function objectField(value: unknown): Record<string, unknown> {
-  return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
-}
-
-function stringField(value: unknown) {
-  return typeof value === "string" ? value : "";
-}
-
-function numberField(value: unknown) {
-  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
 function firstString(value: unknown) {
@@ -872,20 +765,6 @@ function firstString(value: unknown) {
 
 function isDuplicate(previous: CodexMessage | null, message: CodexMessage) {
   return previous?.role === message.role && previous.text === message.text;
-}
-
-function clampText(value: string, maxLength: number) {
-  const normalized = value.replace(/\s+/g, " ").trim();
-  return normalized.length > maxLength ? `${normalized.slice(0, maxLength - 1)}...` : normalized;
-}
-
-function sortSessions(a: CodexSession, b: CodexSession) {
-  return new Date(b.updatedAt || b.createdAt || 0).getTime() - new Date(a.updatedAt || a.createdAt || 0).getTime();
-}
-
-function isInsideLocal(filePath: string, root: string) {
-  const relative = path.relative(path.resolve(root), path.resolve(filePath));
-  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
 }
 
 function unsupported(action: string): never {

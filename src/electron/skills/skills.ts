@@ -1,8 +1,9 @@
-import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { getCodexHome } from "../providers/codex/codex-store";
-import { attachSpawnTimeout } from "../terminal/wsl-process";
+import { pathExists } from "../core/fs-utils";
+import { runWslShell, wslPathExists, wslReadFile, wslWriteFile } from "../core/wsl";
+import { shellQuote } from "../../shared/wsl-paths";
 import type { CodexTarget, InstalledSkill } from "../types";
 
 const MAX_SKILL_MD_BYTES = 2 * 1024 * 1024;
@@ -43,7 +44,7 @@ export async function planSkillImport(sourcePath: string, target: CodexTarget): 
     skillName: metadata.name,
     description: metadata.description,
     kind,
-    exists: target.kind === "wsl" ? await wslPathExists(target, destinationPath) : await pathExists(destinationPath),
+    exists: target.kind === "wsl" ? await wslPathExists(target.distro!, destinationPath) : await pathExists(destinationPath),
     target
   };
 }
@@ -126,7 +127,7 @@ export async function setSkillEnabled(target: CodexTarget, skillName: string, en
   const destinationPath = target.kind === "wsl" ? path.posix.join(skillsPath, destinationName) : path.join(skillsPath, destinationName);
 
   if (target.kind === "wsl") {
-    await wslRunShell(target, [
+    await runWslShell(target.distro!, [
       `test -d ${shellQuote(sourcePath)}`,
       `if [ -e ${shellQuote(destinationPath)} ]; then echo ${shellQuote("目标 skill 已存在。")} >&2; exit 17; fi`,
       `mv -- ${shellQuote(sourcePath)} ${shellQuote(destinationPath)}`
@@ -152,7 +153,7 @@ export async function deleteSkill(target: CodexTarget, skillName: string) {
       : path.join(codexHome, ".visual-console-trash", "skills", `${safeName}-${Date.now()}`);
 
   if (target.kind === "wsl") {
-    await wslRunShell(target, [
+    await runWslShell(target.distro!, [
       `test -d ${shellQuote(sourcePath)}`,
       `mkdir -p -- ${shellQuote(path.posix.dirname(trashPath))}`,
       `mv -- ${shellQuote(sourcePath)} ${shellQuote(trashPath)}`
@@ -180,7 +181,7 @@ export async function restoreSkill(target: CodexTarget, skillName: string) {
     : path.join(codexHome, "skills", activeName);
 
   if (target.kind === "wsl") {
-    await wslRunShell(target, [
+    await runWslShell(target.distro!, [
       `test -d ${shellQuote(trashPath)}`,
       `if [ -e ${shellQuote(restoredPath)} ]; then echo ${shellQuote("目标 skill 已存在，无法恢复。")} >&2; exit 17; fi`,
       `mkdir -p -- ${shellQuote(path.posix.dirname(restoredPath))}`,
@@ -206,7 +207,7 @@ export async function purgeSkill(target: CodexTarget, skillName: string) {
       : path.join(codexHome, ".visual-console-trash", "skills", safeName);
 
   if (target.kind === "wsl") {
-    await wslRunShell(target, [
+    await runWslShell(target.distro!, [
       `test -d ${shellQuote(trashPath)}`,
       `rm -rf -- ${shellQuote(trashPath)}`
     ].join("\n"));
@@ -251,7 +252,7 @@ async function listLocalSkillNames(skillsPath: string) {
 
 async function listWslSkillNames(target: CodexTarget, skillsPath: string) {
   try {
-    const output = await wslRunShellOutput(target, `find ${shellQuote(skillsPath)} -mindepth 1 -maxdepth 1 -type d -printf '%f\\n'`);
+    const output = await runWslShell(target.distro!, `find ${shellQuote(skillsPath)} -mindepth 1 -maxdepth 1 -type d -printf '%f\\n'`);
     return output.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
   } catch {
     return [];
@@ -265,7 +266,7 @@ async function readInstalledSkill(target: CodexTarget, skillsPath: string, direc
   const skillFilePath = target.kind === "wsl" ? path.posix.join(skillPath, "SKILL.md") : path.join(skillPath, "SKILL.md");
 
   try {
-    const content = target.kind === "wsl" ? await wslReadFile(target, skillFilePath) : await fs.readFile(skillFilePath, "utf8");
+    const content = target.kind === "wsl" ? await wslReadFile(target.distro!, skillFilePath) : await fs.readFile(skillFilePath, "utf8");
     const frontmatter = extractFrontmatter(content);
     return {
       name: frontmatter.name?.trim() || displayName,
@@ -372,7 +373,7 @@ async function importWslSkill(plan: SkillImportPlan) {
 
   if (plan.kind === "file") {
     const content = await fs.readFile(plan.sourcePath, "utf8");
-    await wslWriteFile(plan.target, path.posix.join(tempPath, "SKILL.md"), content);
+    await wslWriteFile(plan.target.distro!, path.posix.join(tempPath, "SKILL.md"), content);
   } else {
     await copyDirectoryToWsl(plan.target, plan.sourcePath, tempPath);
   }
@@ -380,89 +381,12 @@ async function importWslSkill(plan: SkillImportPlan) {
   try {
     await replaceWslDirectory(plan.target, plan.destinationPath, tempPath, backupPath, plan.exists);
   } catch (error) {
-    await wslRunShell(plan.target, `rm -rf -- ${shellQuote(tempPath)}`).catch(() => undefined);
-    if (plan.exists && !(await wslPathExists(plan.target, plan.destinationPath)) && (await wslPathExists(plan.target, backupPath))) {
-      await wslRunShell(plan.target, `mv -- ${shellQuote(backupPath)} ${shellQuote(plan.destinationPath)}`).catch(() => undefined);
+    await runWslShell(plan.target.distro!, `rm -rf -- ${shellQuote(tempPath)}`).catch(() => undefined);
+    if (plan.exists && !(await wslPathExists(plan.target.distro!, plan.destinationPath)) && (await wslPathExists(plan.target.distro!, backupPath))) {
+      await runWslShell(plan.target.distro!, `mv -- ${shellQuote(backupPath)} ${shellQuote(plan.destinationPath)}`).catch(() => undefined);
     }
     throw error;
   }
-}
-
-async function wslPathExists(target: CodexTarget, filePath: string) {
-  try {
-    await wslRunShell(target, `test -e ${shellQuote(filePath)}`);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-async function wslWriteFile(target: CodexTarget, filePath: string, content: string) {
-  await wslRunShell(target, `mkdir -p -- ${shellQuote(path.posix.dirname(filePath))} && cat > ${shellQuote(filePath)}`, content);
-}
-
-async function wslRunShell(target: CodexTarget, script: string, input?: string) {
-  if (!target.distro) throw new Error("缺少 WSL 发行版名称。");
-  const wslExe = process.platform === "win32" ? "wsl.exe" : "wsl";
-
-  await new Promise<void>((resolve, reject) => {
-    const child = spawn(wslExe, ["-d", target.distro!, "--", "bash", "-lc", script], {
-      windowsHide: true,
-      stdio: ["pipe", "pipe", "pipe"]
-    });
-    const stderr: Buffer[] = [];
-    const clearTimer = attachSpawnTimeout(child, reject, `WSL 命令（${target.distro}）`);
-
-    child.stderr.on("data", (chunk: Buffer) => stderr.push(chunk));
-    child.on("error", (error) => {
-      clearTimer();
-      reject(error);
-    });
-    child.on("close", (code) => {
-      clearTimer();
-      if (code === 0) {
-        resolve();
-        return;
-      }
-      reject(new Error(Buffer.concat(stderr).toString("utf8").trim() || `WSL 命令执行失败：${code}`));
-    });
-
-    child.stdin.end(input || "", "utf8");
-  });
-}
-
-async function wslRunShellOutput(target: CodexTarget, script: string) {
-  if (!target.distro) throw new Error("缺少 WSL 发行版名称。");
-  const wslExe = process.platform === "win32" ? "wsl.exe" : "wsl";
-
-  return new Promise<string>((resolve, reject) => {
-    const child = spawn(wslExe, ["-d", target.distro!, "--", "bash", "-lc", script], {
-      windowsHide: true,
-      stdio: ["ignore", "pipe", "pipe"]
-    });
-    const stdout: Buffer[] = [];
-    const stderr: Buffer[] = [];
-    const clearTimer = attachSpawnTimeout(child, reject, `WSL 命令（${target.distro}）`);
-
-    child.stdout.on("data", (chunk: Buffer) => stdout.push(chunk));
-    child.stderr.on("data", (chunk: Buffer) => stderr.push(chunk));
-    child.on("error", (error) => {
-      clearTimer();
-      reject(error);
-    });
-    child.on("close", (code) => {
-      clearTimer();
-      if (code === 0) {
-        resolve(Buffer.concat(stdout).toString("utf8"));
-        return;
-      }
-      reject(new Error(Buffer.concat(stderr).toString("utf8").trim() || `WSL 命令执行失败：${code}`));
-    });
-  });
-}
-
-async function wslReadFile(target: CodexTarget, filePath: string) {
-  return wslRunShellOutput(target, `cat -- ${shellQuote(filePath)}`);
 }
 
 async function copyDirectoryToWsl(target: CodexTarget, sourcePath: string, destinationPath: string) {
@@ -474,12 +398,12 @@ async function copyDirectoryToWsl(target: CodexTarget, sourcePath: string, desti
     `cp -a "$source_path"/. ${shellQuote(destinationPath)}/`,
     `rm -rf -- ${shellQuote(path.posix.join(destinationPath, ".git"))} ${shellQuote(path.posix.join(destinationPath, "node_modules"))}`
   ].join("\n");
-  await wslRunShell(target, script);
+  await runWslShell(target.distro!, script);
 }
 
 async function assertSourceVisibleToWsl(target: CodexTarget, sourcePath: string) {
   try {
-    await wslRunShell(target, [
+    await runWslShell(target.distro!, [
       `source_path=$(wslpath -a ${shellQuote(sourcePath)})`,
       `test -e "$source_path"`
     ].join("\n"));
@@ -501,18 +425,5 @@ async function replaceWslDirectory(
     `mv -- ${shellQuote(tempPath)} ${shellQuote(destinationPath)}`,
     exists ? `rm -rf -- ${shellQuote(backupPath)}` : ""
   ].filter(Boolean);
-  await wslRunShell(target, commands.join("\n"));
-}
-
-function shellQuote(value: string) {
-  return `'${value.replace(/'/g, "'\\''")}'`;
-}
-
-async function pathExists(filePath: string) {
-  try {
-    await fs.access(filePath);
-    return true;
-  } catch {
-    return false;
-  }
+  await runWslShell(target.distro!, commands.join("\n"));
 }

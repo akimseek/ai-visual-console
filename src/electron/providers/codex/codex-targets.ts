@@ -1,10 +1,8 @@
-import { execFile, spawn } from "node:child_process";
+import { spawn } from "node:child_process";
 import { once } from "node:events";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { createInterface } from "node:readline";
-import { promisify } from "node:util";
 import type { AiMessage, CodexSession, CodexSessionFile, CodexTarget, SessionBatchMutationResult, SessionFileRef, SessionMessagePage, SessionMutationRef } from "../../types";
 import {
   deleteSession as deleteLocalSession,
@@ -47,21 +45,39 @@ import {
   shouldKeepMessage,
   type SessionLine
 } from "../../../shared/session-parser";
+import { buildWslProviderTargetId, getWslDistroFromProviderTarget } from "../../../shared/target-ids";
 import {
-  decodeWslOutput,
   isInsidePath,
   isInsidePosixDir,
   parseWslSessionFileList,
-  sanitizeWslDistro
+  sanitizeWslDistro,
+  shellQuote
 } from "../../../shared/wsl-paths";
-import { WSL_COMMAND_TIMEOUT_MS, attachSpawnTimeout } from "../../terminal/wsl-process";
+import { pathExists } from "../../core/fs-utils";
+import {
+  attachSpawnTimeout,
+  commandExists,
+  getWslExe,
+  listWslDistros,
+  runWslShell,
+  wslCommandExists,
+  wslGetEnv,
+  wslGetText,
+  wslPathExists,
+  wslReadFile,
+  wslRun,
+  wslWriteFile
+} from "../../core/wsl";
+import { readWslLines } from "../../core/line-reader";
+import { assertSessionFileInside } from "../session-file-ops";
 
-const execFileAsync = promisify(execFile);
-const INTERNAL_WSL_DISTROS = new Set(["docker-desktop", "docker-desktop-data"]);
 let targetsCache: { at: number; targets: CodexTarget[] } | null = null;
 let targetsInFlight: Promise<CodexTarget[]> | null = null;
 const TARGETS_CACHE_TTL_MS = 30_000;
 const MAX_WSL_SESSION_READ_BYTES = 32 * 1024 * 1024;
+// 截断消息之后的控制记录只为 codex resume 保留一轮上下文；无限保留会让分支逼近整文件大小，
+// 分支自身超过 WSL 读取上限后反而无法再打开。
+const MAX_BRANCH_TAIL_BYTES = 8 * 1024 * 1024;
 
 export async function listTargets(): Promise<CodexTarget[]> {
   return measure("targets.list", listTargetsInner);
@@ -76,11 +92,8 @@ export async function listCachedSessions(targetId: string, view: "active" | "tra
     return applySessionMetadataList(targetId, await listCachedSessionsFromCache(view === "trash" ? getTrashCachePath() : getCachePath()));
   }
 
-  if (targetId.startsWith("wsl:")) {
-    const distro = targetId.slice("wsl:".length);
-    if (!distro) return [];
-    return applySessionMetadataList(targetId, await listCachedSessionsFromCache(getWslCachePath(distro, view)));
-  }
+  const distro = getWslDistroFromProviderTarget("codex", targetId);
+  if (distro) return applySessionMetadataList(targetId, await listCachedSessionsFromCache(getWslCachePath(distro, view)));
 
   return [];
 }
@@ -111,7 +124,7 @@ async function probeAllTargets(): Promise<CodexTarget[]> {
         const probe = overrideCodexHome ? null : await probeWslDistro(distro);
         const codexHome = overrideCodexHome || probe?.codexHome;
         return {
-          id: `wsl:${distro}`,
+          id: buildWslProviderTargetId("codex", distro),
           provider: "codex",
           label: `WSL：${distro}`,
           kind: "wsl" as const,
@@ -223,7 +236,7 @@ export async function getSessionMessagesPage(targetId: string, sessionId: string
     };
     const startLine = latest ? 1 : anchor?.lineNumber || 1;
     if (target.kind === "local") await readSessionFileLines(session.filePath, push, startLine);
-    else await wslReadSessionLines(target.distro!, session.filePath, push, startLine);
+    else await readWslLines(target.distro!, session.filePath, push, startLine);
     if (hasAppDatabase()) await saveSessionMessageIndex({
       targetId,
       sessionId,
@@ -388,7 +401,7 @@ export async function deleteSession(targetId: string, sessionId: string, ref?: S
     await verifyWslSessionId(target.distro!, source, sessionId);
     const relative = source.slice(codexHome.replace(/\/+$/, "").length + 1);
     const movedTo = path.posix.join(codexHome, ".visual-console-trash", relative);
-    await wslRunShell(
+    await runWslShell(
       target.distro!,
       `mkdir -p ${shellQuote(path.posix.dirname(movedTo))} && mv -- ${shellQuote(source)} ${shellQuote(movedTo)}`
     );
@@ -423,7 +436,7 @@ export async function deleteSessions(targetId: string, sessions: SessionMutation
     const script = entries
       .map((entry) => `mkdir -p ${shellQuote(path.posix.dirname(entry.movedTo))} && mv -- ${shellQuote(entry.filePath)} ${shellQuote(entry.movedTo)}`)
       .join("\n");
-    await wslRunShell(target.distro!, script, 1024 * 1024 * 4);
+    await runWslShell(target.distro!, script);
     await Promise.all([
       removeSessionsFromCache(getWslCachePath(target.distro!), entries.map((entry) => entry.filePath)),
       removeSessionsFromCache(getWslCachePath(target.distro!, "trash"), entries.map((entry) => entry.movedTo))
@@ -447,7 +460,7 @@ export async function restoreSession(targetId: string, sessionId: string) {
     }
     const relative = source.slice(trashRoot.replace(/\/+$/, "").length + 1);
     const restoredTo = path.posix.join(codexHome, relative);
-    await wslRunShell(
+    await runWslShell(
       target.distro!,
       [
         `if [ -e ${shellQuote(restoredTo)} ]; then echo ${shellQuote("原位置已存在同名会话文件，无法恢复。")} >&2; exit 17; fi`,
@@ -570,7 +583,7 @@ async function loadLocalSession(filePath: string) {
 
 async function loadWslSession(distro: string, filePath: string) {
   const parser = createSessionContentParser(filePath);
-  await wslReadSessionLines(distro, filePath, parser.push);
+  await readWslLines(distro, filePath, parser.push);
   const session = parser.finish();
   if (!session) throw new Error(`未找到会话：${filePath}`);
   return session;
@@ -588,9 +601,7 @@ async function resolveLocalSessionFile(target: CodexTarget, sessionId: string, f
   const codexHome = target.codexHome || getCodexHome();
   const activeRoot = path.join(codexHome, "sessions");
   const trashRoot = path.join(codexHome, ".visual-console-trash", "sessions");
-  if (!isInsidePath(filePath, activeRoot) && !isInsidePath(filePath, trashRoot)) {
-    throw new Error("拒绝读取 Codex 会话目录之外的文件。");
-  }
+  if (!isInsidePath(filePath, activeRoot)) assertSessionFileInside(filePath, trashRoot, "local", "拒绝读取 Codex 会话目录之外的文件。");
   await verifyLocalSessionId(filePath, sessionId);
   return filePath;
 }
@@ -607,9 +618,7 @@ async function resolveWslSessionFile(target: CodexTarget, sessionId: string, fil
   const codexHome = target.codexHome || "";
   const activeRoot = path.posix.join(codexHome, "sessions");
   const trashRoot = path.posix.join(codexHome, ".visual-console-trash", "sessions");
-  if (!isInsidePosixDir(filePath, activeRoot) && !isInsidePosixDir(filePath, trashRoot)) {
-    throw new Error("拒绝读取 Codex 会话目录之外的文件。");
-  }
+  if (!isInsidePosixDir(filePath, activeRoot)) assertSessionFileInside(filePath, trashRoot, "wsl", "拒绝读取 Codex 会话目录之外的文件。");
   await verifyWslSessionId(target.distro!, filePath, sessionId);
   return filePath;
 }
@@ -635,6 +644,7 @@ async function writeBranchSession(
   let uniqueMessages = 0;
   let currentMessageKey = "";
   let cutoffKey = "";
+  let tailBytes = 0;
   let complete = false;
 
   const writeLine = async (rawLine: string): Promise<boolean> => {
@@ -680,13 +690,31 @@ async function writeBranchSession(
       }
       if (uniqueMessages === keepCount) cutoffKey = messageKey;
     }
+    // 截断消息之后的尾部记录按字节封顶：真实一轮的控制记录远小于该值，
+    // 超限说明源会话尾部是事件风暴，继续复制只会得到打不开的巨型分支。
+    if (cutoffKey && messageKey !== cutoffKey) {
+      tailBytes += Buffer.byteLength(rawLine, "utf8") + 1;
+      if (tailBytes > MAX_BRANCH_TAIL_BYTES) {
+        complete = true;
+        return false;
+      }
+    }
+    // Codex 以 payload.thread_id 归属恢复记录；分支必须将父线程标识改为新线程，
+    // 否则虽然 JSONL 中保留了历史消息，恢复时仍会被 CLI 过滤掉。
+    if (item.payload?.thread_id === session.id) {
+      await writer.write(JSON.stringify({
+        ...item,
+        payload: { ...item.payload, thread_id: branchId }
+      }));
+      return true;
+    }
     await writer.write(rawLine);
     return true;
   };
 
   try {
     if (target.kind === "local") await readSessionFileLines(session.filePath, writeLine);
-    else await wslReadSessionLines(target.distro!, session.filePath, writeLine);
+    else await readWslLines(target.distro!, session.filePath, writeLine);
     if (!rewrittenMeta) throw new Error("创建分支失败：缺少 session_meta 记录。");
     await writer.close();
   } catch (error) {
@@ -768,7 +796,7 @@ async function createWslSessionLineWriter(distro: string, filePath: string): Pro
       if (closed) return;
       closed = true;
       await finish();
-      await wslRunShell(distro, `mv -f ${shellQuote(temporaryPath)} ${shellQuote(filePath)}`);
+      await runWslShell(distro, `mv -f ${shellQuote(temporaryPath)} ${shellQuote(filePath)}`);
     },
     abort: async () => {
       if (!closed) {
@@ -778,7 +806,7 @@ async function createWslSessionLineWriter(distro: string, filePath: string): Pro
       }
       clearTimer();
       await exit.catch(() => undefined);
-      await wslRunShell(distro, `rm -f ${shellQuote(temporaryPath)}`).catch(() => undefined);
+      await runWslShell(distro, `rm -f ${shellQuote(temporaryPath)}`).catch(() => undefined);
     }
   };
 }
@@ -846,40 +874,6 @@ function buildBranchSessionPath(target: CodexTarget, sourcePath: string, branchI
   throw new Error("分支只能从会话目录或回收站内的会话生成。");
 }
 
-async function wslWriteFile(distro: string, filePath: string, content: string) {
-  const wslExe = await getWslExe();
-  if (!wslExe) throw new Error("未找到 wsl.exe。");
-
-  const script = `mkdir -p ${shellQuote(path.posix.dirname(filePath))} && cat > ${shellQuote(filePath)}`;
-
-  await new Promise<void>((resolve, reject) => {
-    const child = spawn(wslExe, ["-d", distro, "--", "bash", "-lc", script], {
-      windowsHide: true,
-      stdio: ["pipe", "pipe", "pipe"]
-    });
-    const stderr: Buffer[] = [];
-    const clearTimer = attachSpawnTimeout(child, reject, `写入 ${filePath}`);
-
-    child.stderr.on("data", (chunk: Buffer) => stderr.push(chunk));
-    child.on("error", (error) => {
-      clearTimer();
-      reject(error);
-    });
-    child.on("close", (code) => {
-      clearTimer();
-      if (code === 0) {
-        resolve();
-        return;
-      }
-
-      const message = Buffer.concat(stderr).toString("utf8").trim() || `写入文件失败：${code}`;
-      reject(new Error(message));
-    });
-
-    child.stdin.end(content, "utf8");
-  });
-}
-
 async function appendHistoryEntry(target: CodexTarget, session: CodexSession) {
   const entry = JSON.stringify({
     session_id: session.id,
@@ -895,7 +889,7 @@ async function appendHistoryEntry(target: CodexTarget, session: CodexSession) {
   }
 
   const historyPath = path.posix.join(target.codexHome || "", "history.jsonl");
-  await wslRunShell(
+  await runWslShell(
     target.distro!,
     `mkdir -p ${shellQuote(path.posix.dirname(historyPath))} && printf '%s\\n' ${shellQuote(entry)} >> ${shellQuote(historyPath)}`
   );
@@ -949,10 +943,8 @@ async function resolveTarget(targetId: string): Promise<CodexTarget> {
     if (target) return target;
   }
 
-  if (targetId.startsWith("wsl:")) {
-    const distro = targetId.slice("wsl:".length);
-    if (!distro) throw new Error(`未知的 Codex 目标：${targetId}`);
-
+  const distro = getWslDistroFromProviderTarget("codex", targetId);
+  if (distro) {
     const overrideCodexHome = await getWslCodexHomeOverride(distro);
     const probe = overrideCodexHome ? null : await probeWslDistro(distro);
     return {
@@ -968,22 +960,6 @@ async function resolveTarget(targetId: string): Promise<CodexTarget> {
   }
 
   throw new Error(`未知的 Codex 目标：${targetId}`);
-}
-
-async function listWslDistros() {
-  const wslExe = await getWslExe();
-  if (!wslExe) return [];
-
-  try {
-    const { stdout } = await execFileAsync(wslExe, ["-l", "-q"], { encoding: "buffer" });
-    return decodeWslOutput(stdout)
-      .replace(/\0/g, "")
-      .split(/\r?\n/)
-      .map((line) => line.trim().replace(/^\*\s*/, ""))
-      .filter((line) => line && !INTERNAL_WSL_DISTROS.has(line.toLowerCase()));
-  } catch {
-    return [];
-  }
 }
 
 async function probeLocalTarget(): Promise<CodexTarget | null> {
@@ -1032,7 +1008,7 @@ async function probeWslDistro(
     if (!hasSessions && !hasCodexHome && !codexFound) return null;
     if (!codexHome) return null;
     const user = await wslGetText(distro, "whoami");
-    const home = await wslGetEnv(distro, "HOME");
+    const home = await wslGetEnv(distro, "HOME").catch(() => "");
     const userInfo = user?.trim() && home?.trim() ? `（${user.trim()}：${home.trim()}）` : "";
     return {
       codexHome: codexHome.trim(),
@@ -1051,8 +1027,8 @@ async function probeWslDistro(
 }
 
 async function resolveWslCodexHome(distro: string) {
-  const home = await wslGetEnv(distro, "HOME");
-  const codexHome = await wslGetEnv(distro, "CODEX_HOME");
+  const home = await wslGetEnv(distro, "HOME").catch(() => "");
+  const codexHome = await wslGetEnv(distro, "CODEX_HOME").catch(() => "");
   const candidates = [
     codexHome,
     home ? path.posix.join(home, ".codex") : "",
@@ -1068,125 +1044,12 @@ async function resolveWslCodexHome(distro: string) {
   return "";
 }
 
-async function wslRun(distro: string, command: string, args: string[] = [], maxBuffer = 1024 * 1024 * 16) {
-  const wslExe = await getWslExe();
-  if (!wslExe) throw new Error("未找到 wsl.exe。");
-
-  return execFileAsync(wslExe, ["-d", distro, "--", command, ...args], {
-    encoding: "utf8",
-    maxBuffer,
-    timeout: WSL_COMMAND_TIMEOUT_MS
-  });
-}
-
-async function wslRunShell(distro: string, script: string, maxBuffer = 1024 * 1024) {
-  const wslExe = await getWslExe();
-  if (!wslExe) throw new Error("未找到 wsl.exe。");
-
-  return execFileAsync(wslExe, ["-d", distro, "--", "bash", "-lc", script], {
-    encoding: "utf8",
-    maxBuffer,
-    timeout: WSL_COMMAND_TIMEOUT_MS
-  });
-}
-
-async function wslReadFile(distro: string, filePath: string) {
-  const wslExe = await getWslExe();
-  if (!wslExe) throw new Error("未找到 wsl.exe。");
-
-  return new Promise<string>((resolve, reject) => {
-    const child = spawn(wslExe, ["-d", distro, "--", "cat", filePath], {
-      windowsHide: true,
-      stdio: ["ignore", "pipe", "pipe"]
-    });
-    const stdout: Buffer[] = [];
-    const stderr: Buffer[] = [];
-    const clearTimer = attachSpawnTimeout(child, reject, `读取 ${filePath}`);
-
-    child.stdout.on("data", (chunk: Buffer) => stdout.push(chunk));
-    child.stderr.on("data", (chunk: Buffer) => stderr.push(chunk));
-    child.on("error", (error) => {
-      clearTimer();
-      reject(error);
-    });
-    child.on("close", (code) => {
-      clearTimer();
-      if (code === 0) {
-        resolve(Buffer.concat(stdout).toString("utf8"));
-        return;
-      }
-
-      const message = Buffer.concat(stderr).toString("utf8").trim() || `cat 退出码：${code}`;
-      reject(new Error(message));
-    });
-  });
-}
-
 async function wslReadSessionFile(distro: string, filePath: string) {
   const size = await wslFileSize(distro, filePath);
   if (size > MAX_WSL_SESSION_READ_BYTES) {
     throw new Error(`会话文件过大，拒绝一次性读取：${path.posix.basename(filePath)}`);
   }
   return wslReadFile(distro, filePath);
-}
-
-async function wslReadSessionLines(
-  distro: string,
-  filePath: string,
-  onLine: (line: string, lineNumber: number) => void | boolean | Promise<void | boolean>,
-  startLine = 1
-) {
-  const wslExe = await getWslExe();
-  if (!wslExe) throw new Error("未找到 wsl.exe。");
-
-  const command = startLine > 1 ? "tail" : "cat";
-  const args = startLine > 1 ? ["-n", `+${startLine}`, filePath] : [filePath];
-  const child = spawn(wslExe, ["-d", distro, "--", command, ...args], {
-    windowsHide: true,
-    stdio: ["ignore", "pipe", "pipe"]
-  });
-  const lines = createInterface({ input: child.stdout, crlfDelay: Infinity });
-  const stderr: Buffer[] = [];
-  let timeoutError: Error | null = null;
-  let processClosed = false;
-  const exit = new Promise<number | null>((resolve, reject) => {
-    child.on("error", reject);
-    child.on("close", (code) => {
-      processClosed = true;
-      resolve(code);
-    });
-  });
-  const clearTimer = attachSpawnTimeout(child, (error) => {
-    timeoutError = error;
-  }, `读取 ${filePath}`);
-  child.stderr.on("data", (chunk: Buffer) => stderr.push(chunk));
-  let lineNumber = startLine - 1;
-
-  try {
-    for await (const line of lines) {
-      lineNumber += 1;
-      if ((await onLine(line, lineNumber)) === false) {
-        lines.close();
-        child.stdout.destroy();
-        child.kill("SIGKILL");
-        await exit.catch(() => undefined);
-        return;
-      }
-    }
-    const code = await exit;
-    if (timeoutError) throw timeoutError;
-    if (code !== 0) throw new Error(Buffer.concat(stderr).toString("utf8").trim() || `cat 退出码：${code}`);
-  } catch (error) {
-    if (!processClosed) {
-      lines.close();
-      child.stdout.destroy();
-      child.kill("SIGKILL");
-      await exit.catch(() => undefined);
-    }
-    throw error;
-  } finally {
-    clearTimer();
-  }
 }
 
 async function wslReadFileHead(distro: string, filePath: string) {
@@ -1199,38 +1062,6 @@ async function wslFileSize(distro: string, filePath: string) {
   const size = Number(stdout.trim());
   if (!Number.isFinite(size)) throw new Error(`无法读取文件大小：${filePath}`);
   return size;
-}
-
-async function wslGetText(distro: string, command: string, args: string[] = []) {
-  try {
-    const { stdout } = await wslRun(distro, command, args);
-    return stdout.trim();
-  } catch {
-    return "";
-  }
-}
-
-async function wslGetEnv(distro: string, name: string) {
-  return wslGetText(distro, "printenv", [name]);
-}
-
-async function wslPathExists(distro: string, filePath: string) {
-  if (!filePath) return false;
-  try {
-    await wslRun(distro, "test", ["-e", filePath]);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-async function wslCommandExists(distro: string, command: string) {
-  try {
-    await wslRun(distro, "which", [command]);
-    return true;
-  } catch {
-    return false;
-  }
 }
 
 async function wslFindCodexHomes(distro: string) {
@@ -1262,60 +1093,10 @@ async function wslRealpath(distro: string, filePath: string) {
   }
 }
 
-async function getWslExe() {
-  const candidates =
-    process.platform === "win32"
-      ? [
-          process.env.SystemRoot ? path.join(process.env.SystemRoot, "System32", "wsl.exe") : "",
-          process.env.windir ? path.join(process.env.windir, "System32", "wsl.exe") : "",
-          "C:\\Windows\\System32\\wsl.exe",
-          "C:\\Windows\\Sysnative\\wsl.exe",
-          "wsl.exe"
-        ]
-      : ["/mnt/c/Windows/System32/wsl.exe"];
-
-  for (const candidate of candidates.filter(Boolean)) {
-    if (await commandExists(candidate)) return candidate;
-  }
-  return null;
-}
-
 function getWslCachePath(distro: string, view = "active") {
   const safeDistro = sanitizeWslDistro(distro);
   const suffix = view === "active" ? "" : `-${view}`;
   return path.join(path.dirname(getCachePath()), `sessions-wsl-${safeDistro}${suffix}.json`);
-}
-
-function shellQuote(value: string) {
-  return `'${value.replace(/'/g, "'\\''")}'`;
-}
-
-async function commandExists(command: string) {
-  if (command.includes("/") || command.includes("\\")) {
-    try {
-      await fs.access(command);
-      return true;
-    } catch {
-      return false;
-    }
-  }
-
-  const checker = process.platform === "win32" ? "where" : "which";
-  try {
-    await execFileAsync(checker, [command]);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-async function pathExists(filePath: string) {
-  try {
-    await fs.access(filePath);
-    return true;
-  } catch {
-    return false;
-  }
 }
 
 function formatProcessError(error: unknown) {
@@ -1330,6 +1111,7 @@ function formatProcessError(error: unknown) {
   return clampText(error instanceof Error ? error.message : String(error) || "未知错误", 160);
 }
 
+// 错误信息仅做长度截断，保留原始空白，避免改变 CLI 返回的诊断文本。
 function clampText(value: string, maxLength: number) {
   return value.length > maxLength ? `${value.slice(0, maxLength - 1)}...` : value;
 }
