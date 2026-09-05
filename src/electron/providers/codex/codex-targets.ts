@@ -17,7 +17,6 @@ import {
   listSessionsFromFiles,
   purgeSession as purgeLocalSession,
   readSessionFile,
-  readSessionFileLines,
   removeSessionFromCache,
   removeSessionsFromCache,
   restoreSession as restoreLocalSession
@@ -68,8 +67,9 @@ import {
   wslRun,
   wslWriteFile
 } from "../../core/wsl";
-import { readWslLines } from "../../core/line-reader";
 import { assertSessionFileInside } from "../session-file-ops";
+import { createSessionStorage } from "../session-storage";
+import { readSessionWithParser } from "../session-reader";
 
 let targetsCache: { at: number; targets: CodexTarget[] } | null = null;
 let targetsInFlight: Promise<CodexTarget[]> | null = null;
@@ -202,6 +202,7 @@ export async function getSessionMessagesPage(targetId: string, sessionId: string
   return measure(`sessions.page.${targetId}`, async () => {
     const session = await getSessionSummary(targetId, sessionId);
     const target = await resolveTarget(targetId);
+    const storage = createSessionStorage(target);
     const latest = offset === -1;
     const pageOffset = latest ? 0 : offset;
     const messages: AiMessage[] = [];
@@ -235,8 +236,7 @@ export async function getSessionMessagesPage(targetId: string, sessionId: string
       return true;
     };
     const startLine = latest ? 1 : anchor?.lineNumber || 1;
-    if (target.kind === "local") await readSessionFileLines(session.filePath, push, startLine);
-    else await readWslLines(target.distro!, session.filePath, push, startLine);
+    await storage.readLines(session.filePath, push, startLine);
     if (hasAppDatabase()) await saveSessionMessageIndex({
       targetId,
       sessionId,
@@ -575,16 +575,14 @@ export async function clearWslCodexHome(distro: string) {
 
 async function loadLocalSession(filePath: string) {
   const parser = createSessionContentParser(filePath);
-  await readSessionFileLines(filePath, parser.push);
-  const session = parser.finish();
+  const session = await readSessionWithParser(createSessionStorage({ kind: "local" }), filePath, parser);
   if (!session) throw new Error(`未找到会话：${filePath}`);
   return session;
 }
 
 async function loadWslSession(distro: string, filePath: string) {
   const parser = createSessionContentParser(filePath);
-  await readWslLines(distro, filePath, parser.push);
-  const session = parser.finish();
+  const session = await readSessionWithParser(createSessionStorage({ kind: "wsl", distro }), filePath, parser);
   if (!session) throw new Error(`未找到会话：${filePath}`);
   return session;
 }
@@ -713,8 +711,7 @@ async function writeBranchSession(
   };
 
   try {
-    if (target.kind === "local") await readSessionFileLines(session.filePath, writeLine);
-    else await readWslLines(target.distro!, session.filePath, writeLine);
+    await createSessionStorage(target).readLines(session.filePath, writeLine);
     if (!rewrittenMeta) throw new Error("创建分支失败：缺少 session_meta 记录。");
     await writer.close();
   } catch (error) {

@@ -9,14 +9,11 @@ import { applySessionMetadataList, findSessionIdsByParent, setSessionBranchMetad
 import {
   runWslShell,
   wslGetEnv,
-  wslReadFile,
-  wslRun,
-  wslWriteFile
+  wslRun
 } from "../../core/wsl";
-import { readLocalLines, readWslLines } from "../../core/line-reader";
 import { getWslDistroFromProviderTarget } from "../../../shared/target-ids";
 import { isInsidePosixDir, shellQuote } from "../../../shared/wsl-paths";
-import { isInsideLocalPath, pathExists } from "../../core/fs-utils";
+import { isInsideLocalPath } from "../../core/fs-utils";
 import { clampText, numberField, objectField, safeJsonParse, stringField } from "../../../shared/session-parser";
 import { getCachedTargets } from "../../core/settings";
 import {
@@ -33,6 +30,8 @@ import {
 } from "../provider-session-cache";
 import { assertSessionFileInside } from "../session-file-ops";
 import { planSessionMutationBatch } from "../session-mutation-base";
+import { createSessionStorage } from "../session-storage";
+import { readSessionWithParser } from "../session-reader";
 
 const GEMINI_SESSION_PREFIX = "session-";
 const GEMINI_LIST_PREVIEW_LIMIT = 8;
@@ -139,6 +138,7 @@ export async function getSession(targetId: string, sessionId: string, ref?: Sess
 export async function getSessionMessagesPage(targetId: string, sessionId: string, offset: number, limit: number): Promise<SessionMessagePage> {
   return measure(`sessions.page.${targetId}`, async () => {
     const context = await resolveGeminiTargetContext(targetId);
+    const storage = createSessionStorage(context);
     const session = await getSessionSummary(targetId, sessionId);
     const latest = offset === -1;
     const pageOffset = latest ? 0 : Math.max(0, Math.floor(offset));
@@ -183,8 +183,7 @@ export async function getSessionMessagesPage(targetId: string, sessionId: string
       return typeof item.type === "string" ? pushMessage(item, lineNumber, true) : true;
     };
     const startLine = latest ? 1 : anchor?.lineNumber || 1;
-    if (context.kind === "wsl") await readWslLines(context.distro!, session.filePath, push, startLine);
-    else await readLocalLines(session.filePath, push, startLine);
+    await storage.readLines(session.filePath, push, startLine);
     if (hasAppDatabase()) await saveSessionMessageIndex({
       targetId,
       sessionId,
@@ -249,16 +248,12 @@ export async function branchSession(targetId: string, sessionId: string, message
     }
 
     const context = await resolveGeminiTargetContext(targetId);
+    const storage = createSessionStorage(context);
     const branchId = crypto.randomUUID();
     const branchText = await readGeminiBranchText(context, session.filePath, branchId, keepCount);
     const branchPath = buildGeminiBranchPath(context, session.filePath, branchId);
 
-    if (context.kind === "wsl") {
-      await wslWriteFile(context.distro!, branchPath, branchText);
-    } else {
-      await fs.mkdir(path.dirname(branchPath), { recursive: true });
-      await fs.writeFile(branchPath, branchText, "utf8");
-    }
+    await storage.writeText(branchPath, branchText);
 
     const branch = parseGeminiSessionFile({
       filePath: branchPath,
@@ -280,20 +275,14 @@ export async function branchSession(targetId: string, sessionId: string, message
 export async function duplicateSession(targetId: string, sessionId: string): Promise<CodexSession> {
   return measure(`sessions.duplicate.${targetId}`, async () => {
     const context = await resolveGeminiTargetContext(targetId);
+    const storage = createSessionStorage(context);
     const session = await findGeminiSession(targetId, sessionId, "active");
     const duplicateId = crypto.randomUUID();
-    const sourceText = context.kind === "wsl"
-      ? await wslReadFile(context.distro!, session.filePath)
-      : await fs.readFile(session.filePath, "utf8");
+    const sourceText = await storage.readText(session.filePath);
     const duplicateText = buildGeminiDuplicateSessionText(sourceText, duplicateId);
     const duplicatePath = buildGeminiBranchPath(context, session.filePath, duplicateId);
 
-    if (context.kind === "wsl") {
-      await wslWriteFile(context.distro!, duplicatePath, duplicateText);
-    } else {
-      await fs.mkdir(path.dirname(duplicatePath), { recursive: true });
-      await fs.writeFile(duplicatePath, duplicateText, "utf8");
-    }
+    await storage.writeText(duplicatePath, duplicateText);
 
     const duplicated = parseGeminiSessionFile({
       filePath: duplicatePath,
@@ -309,14 +298,15 @@ export async function duplicateSession(targetId: string, sessionId: string): Pro
 export async function deleteSession(targetId: string, sessionId: string, ref?: SessionFileRef): Promise<{ movedTo: string }> {
   return measure(`sessions.delete.${targetId}`, async () => {
     const context = await resolveGeminiTargetContext(targetId);
+    const storage = createSessionStorage(context);
     const session = await getGeminiSessionForMutation(targetId, context, sessionId, "active", ref);
     const movedTo = buildGeminiTrashPath(context, session.filePath);
 
     if (context.kind === "wsl") {
-      await moveWslSession(context, session.filePath, movedTo);
+      await storage.move(session.filePath, movedTo, "目标位置已存在同名 Gemini 会话文件，无法移动。");
     } else {
       assertInsideLocal(session.filePath, path.join(context.configDir, "tmp"), "拒绝移动 Gemini tmp 目录之外的文件");
-      await moveLocalSession(session.filePath, movedTo);
+      await storage.move(session.filePath, movedTo, "目标位置已存在同名 Gemini 会话文件，无法移动。");
     }
 
     return { movedTo };
@@ -339,6 +329,7 @@ async function mutateGeminiSessionsBatch(
   return measure(`sessions.${view === "trash" ? "purge" : "delete"}.batch.${targetId}`, async () => {
     if (sessions.length === 0) return { processed: [] };
     const context = await resolveGeminiTargetContext(targetId);
+    const storage = createSessionStorage(context);
     const plans = await planSessionMutationBatch(sessions, view, async (sessionRef) => {
       const session = await getGeminiSessionForMutation(targetId, context, sessionRef.id, view, sessionRef);
       const source = session.filePath;
@@ -366,8 +357,8 @@ async function mutateGeminiSessionsBatch(
       await runWslShell(context.distro!, script);
     } else {
       for (const plan of plans) {
-        if (view === "trash") await fs.unlink(plan.source);
-        else await moveLocalSession(plan.source, plan.destination!);
+        if (view === "trash") await storage.remove(plan.source);
+        else await storage.move(plan.source, plan.destination!, "目标位置已存在同名 Gemini 会话文件，无法移动。");
       }
     }
 
@@ -378,14 +369,15 @@ async function mutateGeminiSessionsBatch(
 export async function restoreSession(targetId: string, sessionId: string): Promise<{ restoredTo: string }> {
   return measure(`sessions.restore.${targetId}`, async () => {
     const context = await resolveGeminiTargetContext(targetId);
+    const storage = createSessionStorage(context);
     const session = await findGeminiSession(targetId, sessionId, "trash");
     const restoredTo = buildGeminiRestorePath(context, session.filePath);
 
     if (context.kind === "wsl") {
-      await moveWslSession(context, session.filePath, restoredTo);
+      await storage.move(session.filePath, restoredTo, "目标位置已存在同名 Gemini 会话文件，无法恢复。");
     } else {
       assertInsideLocal(session.filePath, getLocalTrashRoot(context), "拒绝恢复 Gemini 回收站之外的文件");
-      await moveLocalSession(session.filePath, restoredTo);
+      await storage.move(session.filePath, restoredTo, "目标位置已存在同名 Gemini 会话文件，无法恢复。");
     }
 
     return { restoredTo };
@@ -395,14 +387,15 @@ export async function restoreSession(targetId: string, sessionId: string): Promi
 export async function purgeSession(targetId: string, sessionId: string, ref?: SessionFileRef): Promise<{ deleted: string }> {
   return measure(`sessions.purge.${targetId}`, async () => {
     const context = await resolveGeminiTargetContext(targetId);
+    const storage = createSessionStorage(context);
     const session = await getGeminiSessionForMutation(targetId, context, sessionId, "trash", ref);
 
     if (context.kind === "wsl") {
       assertInsidePosix(session.filePath, getWslTrashRoot(context), "拒绝删除 Gemini 回收站之外的文件");
-      await wslRun(context.distro!, "rm", ["-f", session.filePath]);
+      await storage.remove(session.filePath);
     } else {
       assertInsideLocal(session.filePath, getLocalTrashRoot(context), "拒绝删除 Gemini 回收站之外的文件");
-      await fs.unlink(session.filePath);
+      await storage.remove(session.filePath);
     }
 
     return { deleted: session.filePath };
@@ -450,9 +443,7 @@ async function readGeminiSessionContent(
   context: GeminiTargetContext,
   file: GeminiSessionFile
 ): Promise<GeminiSessionContentFile> {
-  const content = context.kind === "wsl"
-    ? await wslReadFile(context.distro!, file.filePath)
-    : await fs.readFile(file.filePath, "utf8");
+  const content = await createSessionStorage(context).readText(file.filePath);
   return { ...file, content };
 }
 
@@ -473,7 +464,7 @@ async function getGeminiSessionForMutation(
   const root = view === "trash" ? getGeminiTrashSessionRoot(context) : getGeminiActiveSessionRoot(context);
   if (context.kind === "wsl") {
     assertInsidePosix(ref.filePath, root, "拒绝操作 Gemini 会话目录之外的文件");
-    const content = await wslReadFile(context.distro!, ref.filePath);
+    const content = await createSessionStorage(context).readText(ref.filePath);
     const session = parseGeminiSessionFile({
       filePath: ref.filePath,
       content,
@@ -483,7 +474,7 @@ async function getGeminiSessionForMutation(
     return session;
   }
   assertInsideLocal(ref.filePath, root, "拒绝操作 Gemini 会话目录之外的文件");
-  const content = await fs.readFile(ref.filePath, "utf8");
+  const content = await createSessionStorage(context).readText(ref.filePath);
   const session = parseGeminiSessionFile({
     filePath: ref.filePath,
     content,
@@ -509,8 +500,7 @@ async function verifyGeminiSessionId(context: GeminiTargetContext, filePath: str
     if (candidate !== sessionId) throw new Error(`会话文件与会话编号不匹配：${sessionId}`);
     return false;
   };
-  if (context.kind === "wsl") await readWslLines(context.distro!, filePath, inspect);
-  else await readLocalLines(filePath, inspect);
+  await createSessionStorage(context).readLines(filePath, inspect);
   if (!found) throw new Error(`会话文件与会话编号不匹配：${sessionId}`);
 }
 
@@ -538,7 +528,7 @@ async function resolveGeminiTargetContext(targetId: string): Promise<GeminiTarge
 }
 
 async function listLocalSessionFiles(context: GeminiTargetContext, view: SessionView): Promise<GeminiSessionFile[]> {
-  const projects = await readLocalProjects(context.configDir);
+  const projects = await readLocalProjects(context);
   const tmpDir = view === "trash" ? path.join(getLocalTrashRoot(context), "tmp") : path.join(context.configDir, "tmp");
   const projectKeys = await fs.readdir(tmpDir).catch(() => []);
   const files: GeminiSessionFile[] = [];
@@ -599,14 +589,14 @@ async function listWslSessionFiles(context: GeminiTargetContext, view: SessionVi
   return files;
 }
 
-async function readLocalProjects(configDir: string) {
-  const content = await fs.readFile(path.join(configDir, "projects.json"), "utf8").catch(() => "");
+async function readLocalProjects(context: GeminiTargetContext) {
+  const content = await createSessionStorage(context).readText(path.join(context.configDir, "projects.json")).catch(() => "");
   return parseProjects(content);
 }
 
 async function readWslProjects(context: GeminiTargetContext) {
   if (!context.distro) return new Map<string, string>();
-  const content = await wslReadFile(context.distro, path.posix.join(context.configDir, "projects.json")).catch(() => "");
+  const content = await createSessionStorage(context).readText(path.posix.join(context.configDir, "projects.json")).catch(() => "");
   return parseProjects(content);
 }
 
@@ -719,9 +709,7 @@ async function readGeminiSessionLines(
   options?: { maxMessages?: number }
 ): Promise<CodexSession | null> {
   const parser = createGeminiSessionParser(file, options);
-  if (context.kind === "wsl") await readWslLines(context.distro!, file.filePath, parser.push);
-  else await readLocalLines(file.filePath, parser.push);
-  return parser.finish();
+  return readSessionWithParser(createSessionStorage(context), file.filePath, parser);
 }
 
 function pushGeminiMessage(
@@ -978,8 +966,7 @@ async function readGeminiBranchText(context: GeminiTargetContext, filePath: stri
     lines.push(rawLine);
     return visibleMessages < keepCount;
   };
-  if (context.kind === "wsl") await readWslLines(context.distro!, filePath, push);
-  else await readLocalLines(filePath, push);
+  await createSessionStorage(context).readLines(filePath, push);
   if (!rewrittenMeta) throw new Error("Gemini 源会话缺少 session 元数据。");
   if (visibleMessages < keepCount) throw new Error("Gemini 源会话上下文不足，无法创建分支。");
   lines.push(JSON.stringify({ $set: { lastUpdated: now } }));
@@ -1019,26 +1006,6 @@ function buildGeminiDuplicateSessionText(sourceText: string, duplicateId: string
   // Gemini 按 lastUpdated 排序；复制时显式更新它，避免刷新后回到源会话的旧位置。
   lines.push(JSON.stringify({ $set: { lastUpdated: now } }));
   return `${lines.join("\n")}\n`;
-}
-
-async function moveLocalSession(source: string, destination: string) {
-  if (await pathExists(destination)) {
-    throw new Error("目标位置已存在同名 Gemini 会话文件，无法移动。");
-  }
-  await fs.mkdir(path.dirname(destination), { recursive: true });
-  await fs.rename(source, destination);
-}
-
-async function moveWslSession(context: GeminiTargetContext, source: string, destination: string) {
-  if (!context.distro) throw new Error("缺少 WSL 发行版。");
-  await runWslShell(
-    context.distro,
-    [
-      `if [ -e ${shellQuote(destination)} ]; then echo ${shellQuote("目标位置已存在同名 Gemini 会话文件，无法移动。")} >&2; exit 17; fi`,
-      `mkdir -p ${shellQuote(path.posix.dirname(destination))}`,
-      `mv -- ${shellQuote(source)} ${shellQuote(destination)}`
-    ].join("; ")
-  );
 }
 
 function assertInsideLocal(filePath: string, root: string, message: string) {

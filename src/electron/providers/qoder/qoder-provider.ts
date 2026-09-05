@@ -25,7 +25,6 @@ import {
   loadProviderSessionCache
 } from "../provider-session-cache";
 import { runWslShell, wslPathExists } from "../../core/wsl";
-import { readLocalLines, readWslLines } from "../../core/line-reader";
 import { getWslDistroFromProviderTarget } from "../../../shared/target-ids";
 import { isInsidePath, isInsidePosixDir, shellQuote } from "../../../shared/wsl-paths";
 import { pathExists } from "../../core/fs-utils";
@@ -38,6 +37,8 @@ import {
   searchSessionsByContent,
   sortSessionsByRecency
 } from "../provider-common";
+import { createSessionStorage } from "../session-storage";
+import { readSessionWithParser } from "../session-reader";
 
 const execFileAsync = promisify(execFile);
 const QODER_CONFIG_DIR_NAME = ".qoder-cn";
@@ -175,6 +176,7 @@ export async function getSessionMessagesPage(
 ): Promise<SessionMessagePage> {
   return measure(`sessions.page.${targetId}`, async () => {
     const context = await resolveTargetContext(targetId);
+    const storage = createSessionStorage(context);
     const session = await getSessionSummary(targetId, sessionId);
     assertSessionPath(context, session.filePath, getSessionViewForPath(context, session.filePath));
     await verifySessionId(context, session.filePath, sessionId);
@@ -214,8 +216,7 @@ export async function getSessionMessagesPage(
     };
 
     const startLine = latest ? 1 : anchor?.lineNumber || 1;
-    if (context.kind === "wsl") await readWslLines(context.distro!, session.filePath, push, startLine);
-    else await readLocalLines(session.filePath, push, startLine);
+    await storage.readLines(session.filePath, push, startLine);
 
     if (hasAppDatabase()) {
       await saveSessionMessageIndex({
@@ -552,9 +553,7 @@ async function readSession(
   options: { maxMessages?: number } = {}
 ): Promise<CodexSession | null> {
   const parser = createQoderSessionParser(file, options);
-  if (context.kind === "wsl") await readWslLines(context.distro!, file.filePath, parser.push);
-  else await readLocalLines(file.filePath, parser.push);
-  return parser.finish();
+  return readSessionWithParser(createSessionStorage(context), file.filePath, parser);
 }
 
 export function createQoderSessionParser(file: QoderSessionFile, options: { maxMessages?: number } = {}) {
@@ -731,8 +730,7 @@ async function verifySessionId(context: QoderTargetContext, filePath: string, se
     if (candidate !== sessionId) throw new Error(`会话文件与会话编号不匹配：${sessionId}`);
     return false;
   };
-  if (context.kind === "wsl") await readWslLines(context.distro!, filePath, inspect);
-  else await readLocalLines(filePath, inspect);
+  await createSessionStorage(context).readLines(filePath, inspect);
   if (!found) throw new Error(`会话文件与会话编号不匹配：${sessionId}`);
 }
 

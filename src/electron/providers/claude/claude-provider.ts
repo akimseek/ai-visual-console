@@ -8,15 +8,10 @@ import { hasAppDatabase, readSessionMessageIndex, saveSessionMessageIndex } from
 import { applySessionMetadataList, findSessionIdsByParent, setSessionBranchMetadata } from "../session-metadata";
 import {
   wslGetEnv,
-  wslPathExists,
-  wslReadFile,
   wslRun,
-  wslWriteFile
 } from "../../core/wsl";
-import { readLocalLines, readWslLines } from "../../core/line-reader";
 import { getWslDistroFromProviderTarget } from "../../../shared/target-ids";
 import { shellQuote } from "../../../shared/wsl-paths";
-import { pathExists } from "../../core/fs-utils";
 import { safeJsonParse } from "../../../shared/session-parser";
 import { getCachedTargets } from "../../core/settings";
 import {
@@ -33,6 +28,8 @@ import {
 } from "../provider-session-cache";
 import { assertSessionFileInside, relocateSessionPath } from "../session-file-ops";
 import { planSessionMutationBatch } from "../session-mutation-base";
+import { createSessionStorage } from "../session-storage";
+import { readSessionWithParser } from "../session-reader";
 
 const CLAUDE_DEFAULT_CONTEXT_WINDOW = 200_000;
 const CLAUDE_ONE_MILLION_CONTEXT_WINDOW = 1_000_000;
@@ -135,6 +132,7 @@ export async function getSession(targetId: string, sessionId: string, ref?: Sess
 
 export async function getSessionMessagesPage(targetId: string, sessionId: string, offset: number, limit: number): Promise<SessionMessagePage> {
   const context = await resolveClaudeTargetContext(targetId);
+  const storage = createSessionStorage(context);
   const session = await getSessionSummary(targetId, sessionId);
   const latest = offset === -1;
   const pageOffset = latest ? 0 : offset;
@@ -168,8 +166,7 @@ export async function getSessionMessagesPage(targetId: string, sessionId: string
     return true;
   };
   const startLine = latest ? 1 : anchor?.lineNumber || 1;
-  if (context.kind === "wsl") await readWslLines(context.distro!, session.filePath, push, startLine);
-  else await readLocalLines(session.filePath, push, startLine);
+  await storage.readLines(session.filePath, push, startLine);
   if (hasAppDatabase()) await saveSessionMessageIndex({
     targetId,
     sessionId,
@@ -229,12 +226,7 @@ export async function branchSession(targetId: string, sessionId: string, message
     const branchText = await readClaudeBranchText(context, session.filePath, branchId, messageIndex);
     const branchPath = buildClaudeBranchPath(context, session.filePath, branchId);
 
-    if (context.kind === "wsl") {
-      await wslWriteFile(context.distro!, branchPath, branchText);
-    } else {
-      await fs.mkdir(path.dirname(branchPath), { recursive: true });
-      await fs.writeFile(branchPath, branchText, "utf8");
-    }
+    await createSessionStorage(context).writeText(branchPath, branchText);
 
     const branch = parseClaudeSessionFile({
       filePath: branchPath,
@@ -257,18 +249,12 @@ export async function duplicateSession(targetId: string, sessionId: string): Pro
     const context = await resolveClaudeTargetContext(targetId);
     const session = await findClaudeSession(targetId, sessionId, "active");
     const duplicateId = crypto.randomUUID();
-    const sourceText = context.kind === "wsl"
-      ? await wslReadFile(context.distro!, session.filePath)
-      : await fs.readFile(session.filePath, "utf8");
+    const storage = createSessionStorage(context);
+    const sourceText = await storage.readText(session.filePath);
     const duplicateText = buildClaudeDuplicateText(sourceText, duplicateId);
     const duplicatePath = buildClaudeBranchPath(context, session.filePath, duplicateId);
 
-    if (context.kind === "wsl") {
-      await wslWriteFile(context.distro!, duplicatePath, duplicateText);
-    } else {
-      await fs.mkdir(path.dirname(duplicatePath), { recursive: true });
-      await fs.writeFile(duplicatePath, duplicateText, "utf8");
-    }
+    await storage.writeText(duplicatePath, duplicateText);
 
     const duplicated = parseClaudeSessionFile({ filePath: duplicatePath, content: duplicateText });
     if (!duplicated) throw new Error("复制 Claude Code 会话失败。");
@@ -279,16 +265,12 @@ export async function duplicateSession(targetId: string, sessionId: string): Pro
 export async function deleteSession(targetId: string, sessionId: string, ref?: SessionFileRef): Promise<{ movedTo: string }> {
   return measure(`sessions.delete.${targetId}`, async () => {
     const context = await resolveClaudeTargetContext(targetId);
+    const storage = createSessionStorage(context);
     const session = await getClaudeSessionForMutation(targetId, context, sessionId, "active", ref);
     const movedTo = buildClaudeTrashPath(context, session.filePath);
 
-    if (context.kind === "wsl") {
-      assertInsidePosix(session.filePath, getClaudeProjectsRoot(context), "拒绝移动 Claude projects 目录之外的文件");
-      await moveWslSession(context, session.filePath, movedTo);
-    } else {
-      assertInsideLocal(session.filePath, getClaudeProjectsRoot(context), "拒绝移动 Claude projects 目录之外的文件");
-      await moveLocalSession(session.filePath, movedTo);
-    }
+    assertClaudeSessionPath(context, session.filePath, "active");
+    await storage.move(session.filePath, movedTo);
 
     return { movedTo };
   });
@@ -310,6 +292,7 @@ async function mutateClaudeSessionsBatch(
   return measure(`sessions.${view === "trash" ? "purge" : "delete"}.batch.${targetId}`, async () => {
     if (sessions.length === 0) return { processed: [] };
     const context = await resolveClaudeTargetContext(targetId);
+    const storage = createSessionStorage(context);
     const plans = await planSessionMutationBatch(sessions, view, async (sessionRef) => {
       const session = await getClaudeSessionForMutation(targetId, context, sessionRef.id, view, sessionRef);
       const source = session.filePath;
@@ -333,8 +316,8 @@ async function mutateClaudeSessionsBatch(
       await wslRun(context.distro!, "bash", ["-lc", script]);
     } else {
       for (const plan of plans) {
-        if (view === "trash") await fs.unlink(plan.source);
-        else await moveLocalSession(plan.source, plan.destination!);
+        if (view === "trash") await storage.remove(plan.source);
+        else await storage.move(plan.source, plan.destination!);
       }
     }
 
@@ -345,18 +328,13 @@ async function mutateClaudeSessionsBatch(
 export async function restoreSession(targetId: string, sessionId: string): Promise<{ restoredTo: string }> {
   return measure(`sessions.restore.${targetId}`, async () => {
     const context = await resolveClaudeTargetContext(targetId);
+    const storage = createSessionStorage(context);
     const session = await findClaudeSession(targetId, sessionId, "trash");
     const restoredTo = buildClaudeRestorePath(context, session.filePath);
 
-    if (context.kind === "wsl") {
-      assertInsidePosix(session.filePath, getClaudeTrashProjectsRoot(context), "拒绝恢复 Claude 回收站之外的文件");
-      if (await wslPathExists(context.distro!, restoredTo).catch(() => false)) throw new Error("恢复目标已存在，已拒绝覆盖。");
-      await moveWslSession(context, session.filePath, restoredTo);
-    } else {
-      assertInsideLocal(session.filePath, getClaudeTrashProjectsRoot(context), "拒绝恢复 Claude 回收站之外的文件");
-      if (await pathExists(restoredTo)) throw new Error("恢复目标已存在，已拒绝覆盖。");
-      await moveLocalSession(session.filePath, restoredTo);
-    }
+    assertClaudeSessionPath(context, session.filePath, "trash");
+    if (await storage.exists(restoredTo)) throw new Error("恢复目标已存在，已拒绝覆盖。");
+    await storage.move(session.filePath, restoredTo);
 
     return { restoredTo };
   });
@@ -365,15 +343,11 @@ export async function restoreSession(targetId: string, sessionId: string): Promi
 export async function purgeSession(targetId: string, sessionId: string, ref?: SessionFileRef): Promise<{ deleted: string }> {
   return measure(`sessions.purge.${targetId}`, async () => {
     const context = await resolveClaudeTargetContext(targetId);
+    const storage = createSessionStorage(context);
     const session = await getClaudeSessionForMutation(targetId, context, sessionId, "trash", ref);
 
-    if (context.kind === "wsl") {
-      assertInsidePosix(session.filePath, getClaudeTrashProjectsRoot(context), "拒绝删除 Claude 回收站之外的文件");
-      await wslRun(context.distro!, "rm", ["-f", session.filePath]);
-    } else {
-      assertInsideLocal(session.filePath, getClaudeTrashProjectsRoot(context), "拒绝删除 Claude 回收站之外的文件");
-      await fs.unlink(session.filePath);
-    }
+    assertClaudeSessionPath(context, session.filePath, "trash");
+    await storage.remove(session.filePath);
 
     return { deleted: session.filePath };
   });
@@ -437,9 +411,7 @@ async function readClaudeSessionContent(
   context: ClaudeTargetContext,
   file: ClaudeSessionFile
 ): Promise<ClaudeSessionContentFile> {
-  const content = context.kind === "wsl"
-    ? await wslReadFile(context.distro!, file.filePath)
-    : await fs.readFile(file.filePath, "utf8");
+  const content = await createSessionStorage(context).readText(file.filePath);
   return { ...file, content };
 }
 
@@ -451,16 +423,8 @@ async function getClaudeSessionForMutation(
   ref?: SessionFileRef
 ) {
   if (!ref?.filePath) return findClaudeSession(targetId, sessionId, view);
-  const root = view === "trash" ? getClaudeTrashProjectsRoot(context) : getClaudeProjectsRoot(context);
-  if (context.kind === "wsl") {
-    assertInsidePosix(ref.filePath, root, "拒绝操作 Claude 会话目录之外的文件");
-    const content = await wslReadFile(context.distro!, ref.filePath);
-    const session = parseClaudeSessionFile({ filePath: ref.filePath, content });
-    if (!session || session.id !== sessionId) throw new Error(`会话文件与会话编号不匹配：${sessionId}`);
-    return session;
-  }
-  assertInsideLocal(ref.filePath, root, "拒绝操作 Claude 会话目录之外的文件");
-  const content = await fs.readFile(ref.filePath, "utf8");
+  assertClaudeSessionPath(context, ref.filePath, view);
+  const content = await createSessionStorage(context).readText(ref.filePath);
   const session = parseClaudeSessionFile({ filePath: ref.filePath, content });
   if (!session || session.id !== sessionId) throw new Error(`会话文件与会话编号不匹配：${sessionId}`);
   return session;
@@ -482,8 +446,7 @@ async function verifyClaudeSessionId(context: ClaudeTargetContext, filePath: str
     if (candidate !== sessionId) throw new Error(`会话文件与会话编号不匹配：${sessionId}`);
     return false;
   };
-  if (context.kind === "wsl") await readWslLines(context.distro!, filePath, inspect);
-  else await readLocalLines(filePath, inspect);
+  await createSessionStorage(context).readLines(filePath, inspect);
   if (!found) throw new Error(`会话文件与会话编号不匹配：${sessionId}`);
 }
 
@@ -509,19 +472,6 @@ function buildClaudeRestorePath(context: ClaudeTargetContext, source: string) {
   const trashRoot = getClaudeTrashProjectsRoot(context);
   const projectsRoot = getClaudeProjectsRoot(context);
   return relocateSessionPath(source, trashRoot, projectsRoot, context.kind, "拒绝恢复 Claude 回收站之外的文件");
-}
-
-async function moveLocalSession(source: string, destination: string) {
-  await fs.mkdir(path.dirname(destination), { recursive: true });
-  await fs.rename(source, destination);
-}
-
-async function moveWslSession(context: ClaudeTargetContext, source: string, destination: string) {
-  await wslRun(
-    context.distro!,
-    "bash",
-    ["-lc", `mkdir -p ${shellQuote(path.posix.dirname(destination))} && mv -- ${shellQuote(source)} ${shellQuote(destination)}`]
-  );
 }
 
 function assertInsideLocal(filePath: string, root: string, message: string) {
@@ -595,12 +545,11 @@ async function loadClaudeContextHints(context: ClaudeTargetContext): Promise<Map
   const files = context.kind === "wsl"
     ? await listWslTelemetryFiles(context)
     : await listLocalTelemetryFiles(context);
+  const storage = createSessionStorage(context);
   const hints = new Map<string, ClaudeContextHint>();
 
   for (const file of files) {
-    const content = context.kind === "wsl"
-      ? await wslReadFile(context.distro!, file).catch(() => "")
-      : await fs.readFile(file, "utf8").catch(() => "");
+    const content = await storage.readText(file).catch(() => "");
     if (!content) continue;
     collectClaudeContextHints(content, hints);
   }
@@ -742,9 +691,7 @@ async function readClaudeSessionLines(
   options?: { maxMessages?: number }
 ): Promise<AiSession | null> {
   const parser = createClaudeSessionParser(file, options);
-  if (context.kind === "wsl") await readWslLines(context.distro!, file.filePath, parser.push);
-  else await readLocalLines(file.filePath, parser.push);
-  return parser.finish();
+  return readSessionWithParser(createSessionStorage(context), file.filePath, parser);
 }
 
 async function readClaudeBranchText(context: ClaudeTargetContext, filePath: string, branchId: string, keepMessageCount: number) {
@@ -762,8 +709,7 @@ async function readClaudeBranchText(context: ClaudeTargetContext, filePath: stri
     }
     return true;
   };
-  if (context.kind === "wsl") await readWslLines(context.distro!, filePath, push);
-  else await readLocalLines(filePath, push);
+  await createSessionStorage(context).readLines(filePath, push);
   if (keptMessages < keepMessageCount) throw new Error("创建 Claude 分支失败：原始 jsonl 中可保留消息不足。");
   return `${output.join("\n")}\n`;
 }
