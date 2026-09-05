@@ -1,0 +1,6 @@
+# 仅允许这些依赖执行安装生命周期脚本，避免非必要依赖在安装阶段执行代码。
+onlyBuiltDependencies:
+  - electron
+  - electron-winstaller
+  - esbuild
+  - node-pty
