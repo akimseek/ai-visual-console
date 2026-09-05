@@ -1,4 +1,4 @@
-import type { AiProviderId, GatewayUsage, GatewayUsageSummary } from "../types";
+import type { AiProviderId, GatewayFailureDiagnostic, GatewayFailureDiagnosticsPage, GatewayFailureOutcomeFilter, GatewayRecentFailure, GatewayUsage, GatewayUsageSummary } from "../types";
 import { readAppDatabase, updateAppDatabase } from "../core/app-database";
 
 export type GatewayRequestRecord = {
@@ -56,7 +56,7 @@ async function ensureSchema() {
   await schemaPromise;
 }
 
-export async function recordGatewayRequest(entry: GatewayRequestRecord) {
+export async function recordGatewayRequest(entry: GatewayRequestRecord): Promise<boolean> {
   try {
     await ensureSchema();
     await updateAppDatabase((db) => db.prepare(`
@@ -83,8 +83,10 @@ export async function recordGatewayRequest(entry: GatewayRequestRecord) {
       entry.usage ? JSON.stringify(entry.usage) : null,
       entry.createdAt
     ));
+    return true;
   } catch {
     // 统计持久化失败不能影响上游响应；文本 Gateway 日志仍会保留元数据。
+    return false;
   }
 }
 
@@ -121,4 +123,87 @@ export async function getGatewayUsageSummary(periodStart: string, periodEnd: str
       periodEnd
     };
   });
+}
+
+// 工作台只需要近期异常的定位线索；固定小窗口避免侧栏查询变成日志全表读取。
+export async function getRecentGatewayFailures(): Promise<GatewayRecentFailure[]> {
+  return listGatewayFailureDiagnostics(3);
+}
+
+// 诊断弹窗按需读取固定数量的异常元数据，只返回截断后的错误代码和受控错误摘要。
+export async function getGatewayFailureDiagnostics(): Promise<GatewayFailureDiagnostic[]> {
+  return listGatewayFailureDiagnostics(3);
+}
+
+export async function getGatewayFailureDiagnosticsPage(page = 1, pageSize = 10, vendorId = "", outcome: GatewayFailureOutcomeFilter = "", periodStart = "", periodEnd = ""): Promise<GatewayFailureDiagnosticsPage> {
+  await ensureSchema();
+  const safePage = Math.max(1, Math.floor(page));
+  const safePageSize = Math.min(50, Math.max(1, Math.floor(pageSize)));
+  return readAppDatabase((db) => {
+    const filters = ["outcome IN ('error', 'timeout')"];
+    const filterParams: string[] = [];
+    if (vendorId.trim()) {
+      filters.push("vendor_id = ?");
+      filterParams.push(vendorId.trim());
+    }
+    if (outcome) {
+      filters.push("outcome = ?");
+      filterParams.push(outcome);
+    }
+    if (periodStart) {
+      filters.push("created_at >= ?");
+      filterParams.push(periodStart);
+    }
+    if (periodEnd) {
+      filters.push("created_at <= ?");
+      filterParams.push(periodEnd);
+    }
+    const whereClause = filters.join(" AND ");
+    const totalRow = db.prepare(`
+      SELECT COUNT(*) AS total
+      FROM gateway_request_logs
+      WHERE ${whereClause}
+    `).get(...filterParams) as Record<string, unknown>;
+    const rows = db.prepare(`
+      SELECT vendor_id, provider_id, upstream_status, outcome, retry_count, duration_ms, error_code, error_message, created_at
+      FROM gateway_request_logs
+      WHERE ${whereClause}
+      ORDER BY created_at DESC
+      LIMIT ? OFFSET ?
+    `).all(...filterParams, safePageSize, (safePage - 1) * safePageSize) as Array<Record<string, unknown>>;
+    return {
+      items: rows.map(toGatewayFailureDiagnostic),
+      total: Number(totalRow?.total || 0),
+      page: safePage,
+      pageSize: safePageSize
+    };
+  });
+}
+
+async function listGatewayFailureDiagnostics(limit: number): Promise<GatewayFailureDiagnostic[]> {
+  await ensureSchema();
+  return readAppDatabase((db) => {
+    const rows = db.prepare(`
+      SELECT vendor_id, provider_id, upstream_status, outcome, retry_count, duration_ms, error_code, error_message, created_at
+      FROM gateway_request_logs
+      WHERE outcome IN ('error', 'timeout')
+      ORDER BY created_at DESC
+      LIMIT ?
+    `).all(limit) as Array<Record<string, unknown>>;
+    return rows.map(toGatewayFailureDiagnostic);
+  });
+}
+
+function toGatewayFailureDiagnostic(row: Record<string, unknown>): GatewayFailureDiagnostic {
+  return {
+    vendorId: String(row.vendor_id || ""),
+    providerId: String(row.provider_id || "") as AiProviderId,
+    outcome: row.outcome === "timeout" ? "timeout" : "error",
+    upstreamStatus: typeof row.upstream_status === "number" ? row.upstream_status : undefined,
+    retryCount: typeof row.retry_count === "number" ? row.retry_count : 0,
+    durationMs: typeof row.duration_ms === "number" ? row.duration_ms : 0,
+    errorCode: typeof row.error_code === "string" ? row.error_code : undefined,
+    errorMessage: typeof row.error_message === "string" ? row.error_message : undefined,
+    createdAt: String(row.created_at || "")
+  };
 }

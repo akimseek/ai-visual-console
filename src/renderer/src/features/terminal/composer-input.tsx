@@ -5,6 +5,22 @@ import type {
   KeyboardEvent as ReactKeyboardEvent,
   MouseEvent as ReactMouseEvent
 } from "react";
+import {
+  Archive,
+  ArrowUp,
+  ChevronDown,
+  Copy,
+  File,
+  FileCode2,
+  FileText,
+  Image as ImageIcon,
+  Layers3,
+  Minus,
+  Paperclip,
+  Plus,
+  X
+} from "lucide-react";
+import type { LucideIcon } from "lucide-react";
 import type { ApiVendor, VendorModel } from "../../types";
 
 export type ComposerAttachment = {
@@ -315,13 +331,13 @@ export function ComposerInput({
     return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
   }
 
-  function getFileIcon(type?: string): string {
-    if (!type) return "\u{1F4C4}";
-    if (type.startsWith("image/")) return "\u{1F5BC}";
-    if (type.includes("pdf")) return "\u{1F4D5}";
-    if (type.includes("text") || type.includes("json") || type.includes("javascript") || type.includes("typescript")) return "\u{1F4C3}";
-    if (type.includes("zip") || type.includes("archive") || type.includes("compressed")) return "\u{1F4E6}";
-    return "\u{1F4C4}";
+  function getFileIcon(type?: string): LucideIcon {
+    if (!type) return File;
+    if (type.startsWith("image/")) return ImageIcon;
+    if (type.includes("pdf")) return FileText;
+    if (type.includes("text") || type.includes("json") || type.includes("javascript") || type.includes("typescript")) return FileCode2;
+    if (type.includes("zip") || type.includes("archive") || type.includes("compressed")) return Archive;
+    return File;
   }
 
   function getFileExtension(name: string): string {
@@ -363,7 +379,7 @@ export function ComposerInput({
                 aria-label="移除附件"
                 onClick={() => removeAttachment(attachment.id)}
               >
-                ×
+                <X aria-hidden="true" size={14} strokeWidth={2.2} />
               </button>
               {attachment.kind === "image" && attachment.dataUrl ? (
                 <button
@@ -376,7 +392,12 @@ export function ComposerInput({
                 </button>
               ) : (
                 <div className="composer-attachment-file" title={attachment.path}>
-                  <span className="composer-attachment-icon">{getFileIcon(attachment.type)}</span>
+                  <span className="composer-attachment-icon" aria-hidden="true">
+                    {(() => {
+                      const Icon = getFileIcon(attachment.type);
+                      return <Icon size={20} strokeWidth={1.8} />;
+                    })()}
+                  </span>
                   <div className="composer-attachment-info">
                     <span className="composer-attachment-name">{attachment.name}</span>
                     <span className="composer-attachment-type">
@@ -412,10 +433,7 @@ export function ComposerInput({
           title="发送 (Enter)"
           aria-label="发送"
         >
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-            <line x1="12" y1="19" x2="12" y2="5" />
-            <polyline points="5 12 12 5 19 12" />
-          </svg>
+          <ArrowUp aria-hidden="true" size={18} strokeWidth={2.4} />
         </button>
       </div>
 
@@ -437,9 +455,7 @@ export function ComposerInput({
               aria-expanded={attachMenuOpen}
               onClick={handleAttachClick}
             >
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M21.44 11.05l-9.19 9.19a6 6 0 01-8.49-8.49l9.19-9.19a4 4 0 015.66 5.66l-9.2 9.19a2 2 0 01-2.83-2.83l8.49-8.48" />
-              </svg>
+              <Paperclip aria-hidden="true" size={17} strokeWidth={2} />
             </button>
             {attachMenuOpen && (
               <div className="composer-attach-dropdown" role="menu">
@@ -460,15 +476,9 @@ export function ComposerInput({
                 className="composer-toolbar-btn composer-model-btn"
                 onClick={() => setModelDropdownOpen(!modelDropdownOpen)}
               >
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M12 2L2 7l10 5 10-5-10-5z" />
-                  <path d="M2 17l10 5 10-5" />
-                  <path d="M2 12l10 5 10-5" />
-                </svg>
+                <Layers3 aria-hidden="true" size={15} strokeWidth={1.9} />
                 <span>{displayModelName}</span>
-                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <polyline points="6 9 12 15 18 9" />
-                </svg>
+                <ChevronDown aria-hidden="true" size={14} strokeWidth={2} />
               </button>
               {modelDropdownOpen && (
                 <div className="composer-model-dropdown">
@@ -520,16 +530,10 @@ export function ComposerInput({
           <div className="composer-image-modal" onClick={(e) => e.stopPropagation()}>
             <div className="composer-image-actions">
               <button type="button" className="composer-image-action-btn" onClick={copyImagePreview} title="复制">
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
-                  <path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1" />
-                </svg>
+                <Copy aria-hidden="true" size={16} strokeWidth={2} />
               </button>
               <button type="button" className="composer-image-action-btn" onClick={closeImagePreview} title="关闭">
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <line x1="18" y1="6" x2="6" y2="18" />
-                  <line x1="6" y1="6" x2="18" y2="18" />
-                </svg>
+                <X aria-hidden="true" size={16} strokeWidth={2} />
               </button>
             </div>
             <div className="composer-image-container">
@@ -542,9 +546,9 @@ export function ComposerInput({
             <div className="composer-image-footer">
               <span className="composer-image-name">{imagePreview.attachment.name}</span>
               <div className="composer-image-zoom">
-                <button type="button" onClick={() => zoomImagePreview(-0.1)}>-</button>
+                <button type="button" aria-label="缩小预览" title="缩小预览" onClick={() => zoomImagePreview(-0.1)}><Minus aria-hidden="true" size={15} /></button>
                 <span>{Math.round(imagePreview.zoom * 100)}%</span>
-                <button type="button" onClick={() => zoomImagePreview(0.1)}>+</button>
+                <button type="button" aria-label="放大预览" title="放大预览" onClick={() => zoomImagePreview(0.1)}><Plus aria-hidden="true" size={15} /></button>
               </div>
             </div>
           </div>

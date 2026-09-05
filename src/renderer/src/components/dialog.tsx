@@ -1,6 +1,8 @@
 import type { ReactNode } from "react";
 import { useCallback, useRef, useEffect } from "react";
+import { X } from "lucide-react";
 import { useDismissableOverlay } from "../hooks/use-dismissable-overlay";
+import { IconButton } from "./icon-button";
 
 // 统一的弹窗骨架，覆盖 10 个 Dialog 组件中重复的 overlay/modal 模式。
 // 用法：
@@ -65,9 +67,7 @@ export function Dialog({
       >
         <header>
           <h2 id={titleId}>{title}</h2>
-          <button type="button" title="关闭" aria-label="关闭" onClick={onClose} disabled={busy}>
-            ×
-          </button>
+          <IconButton icon={X} label="关闭" onClick={onClose} disabled={busy} />
         </header>
         {children}
         {footer && <footer>{footer}</footer>}

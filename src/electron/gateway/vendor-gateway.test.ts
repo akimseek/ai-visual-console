@@ -7,6 +7,7 @@ vi.mock("../vendors/vendor-manager", () => ({ listApiVendors: listApiVendorsMock
 import {
   createVendorRoute,
   destroyVendorRoute,
+  extractGatewayResponseError,
   stopVendorGateway,
   switchVendorRoute
 } from "./vendor-gateway";
@@ -22,6 +23,12 @@ afterEach(async () => {
 });
 
 describe("vendor gateway", () => {
+  it("从 JSON 或 SSE 错误响应提取受限的具体错误信息", () => {
+    expect(extractGatewayResponseError('{"error":{"message":"模型不存在"}}')).toBe("模型不存在");
+    expect(extractGatewayResponseError('data: {"error":{"message":"请求被限流"}}\n\ndata: [DONE]\n\n')).toBe("请求被限流");
+    expect(extractGatewayResponseError('{"data":"private response"}')).toBeUndefined();
+  });
+
   it("按 route token 转发并在切换后使用新供应商", async () => {
     const requests: Array<{ authorization?: string; body: string }> = [];
     const upstream = createServer((request, response) => {

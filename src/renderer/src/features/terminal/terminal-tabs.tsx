@@ -1,4 +1,5 @@
 import type { MouseEvent, RefObject, WheelEvent } from "react";
+import { X } from "lucide-react";
 
 type TerminalTabInfo = { key: string; title: string; session?: { id: string } | null };
 
@@ -39,12 +40,14 @@ export function TerminalTabs({
             onContextMenu={(event) => onContextMenu(event, tab.key)}
             onClick={() => onSelect(tab.key, tab.session?.id || "")}
             title={tab.title}
-          >
-            <span>{label}</span>
-            <strong
+            >
+              <span>{label}</span>
+            <span
+              className="terminal-tab-close"
               role="button"
               tabIndex={0}
               title="关闭"
+              aria-label={`关闭 ${tab.title}`}
               onClick={(event) => {
                 event.stopPropagation();
                 onClose(tab.key);
@@ -56,8 +59,8 @@ export function TerminalTabs({
                 onClose(tab.key);
               }}
             >
-              x
-            </strong>
+              <X aria-hidden="true" size={14} strokeWidth={2} />
+            </span>
           </button>
         );
       })}

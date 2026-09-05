@@ -1,7 +1,11 @@
+import { LayoutDashboard, MessagesSquare } from "lucide-react";
+
 type SessionView = "active" | "trash";
 
 // 侧栏控件区：会话视图切换、全文搜索框、批量操作工具条。从 App.tsx 的内联 JSX 抽出为展示组件。
 export function SidebarControls({
+  workbenchOpen,
+  onOpenWorkbench,
   view,
   supportsTrash,
   onSwitchView,
@@ -18,6 +22,8 @@ export function SidebarControls({
   onPurgeBatch,
   onDeleteBatch
 }: {
+  workbenchOpen: boolean;
+  onOpenWorkbench: () => void;
   view: SessionView;
   supportsTrash: boolean;
   onSwitchView: (view: SessionView) => void;
@@ -36,6 +42,18 @@ export function SidebarControls({
 }) {
   return (
     <>
+      <nav className="sidebar-navigation" aria-label="主视图">
+        <button type="button" className={workbenchOpen ? "active" : ""} onClick={onOpenWorkbench}>
+          <LayoutDashboard aria-hidden="true" size={15} strokeWidth={1.9} />
+          工作台
+        </button>
+        <button type="button" className={!workbenchOpen ? "active" : ""} onClick={() => onSwitchView("active")}>
+          <MessagesSquare aria-hidden="true" size={15} strokeWidth={1.9} />
+          会话
+        </button>
+      </nav>
+
+      {!workbenchOpen && <>
       <div className="view-switch" role="tablist" aria-label="会话视图">
         <button className={view === "active" ? "active" : ""} onClick={() => onSwitchView("active")}>
           当前会话
@@ -82,6 +100,7 @@ export function SidebarControls({
           )}
         </div>
       )}
+      </>}
     </>
   );
 }

@@ -247,6 +247,31 @@ export type GatewayUsageSummary = GatewayUsage & {
   periodEnd: string;
 };
 
+// 工作台仅使用安全的失败摘要；诊断明细中的错误文本由主进程截断并清洗后提供。
+export type GatewayRecentFailure = {
+  vendorId: string;
+  providerId: AiProviderId;
+  outcome: "timeout" | "error";
+  upstreamStatus?: number;
+  createdAt: string;
+};
+
+export type GatewayFailureDiagnostic = GatewayRecentFailure & {
+  retryCount: number;
+  durationMs: number;
+  errorCode?: string;
+  errorMessage?: string;
+};
+
+export type GatewayFailureDiagnosticsPage = {
+  items: GatewayFailureDiagnostic[];
+  total: number;
+  page: number;
+  pageSize: number;
+};
+
+export type GatewayFailureOutcomeFilter = "" | "error" | "timeout";
+
 export type ApiVendorInput = {
   id?: string;
   providerId: AiProviderId;
@@ -435,6 +460,14 @@ export type GatewayVendorSwitchEvent = {
   terminalId: string;
   vendorId: string;
   reason: "manual" | "candidate-pool" | "failure";
+};
+
+/** Gateway 请求完成并写入本地日志后通知工作台刷新统计。 */
+export type GatewayRequestRecordedEvent = {
+  providerId: AiProviderId;
+  vendorId: string;
+  outcome: "ok" | "client-aborted" | "timeout" | "error";
+  switched: boolean;
 };
 
 export type SystemTerminalKind =

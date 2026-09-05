@@ -1,4 +1,5 @@
 import type { KeyboardEvent as ReactKeyboardEvent, RefObject } from "react";
+import { ArrowDown, ArrowUp, CaseSensitive, WholeWord, X } from "lucide-react";
 import { formatTerminalSearchResult, type TerminalSearchResult } from "./use-terminal-search";
 
 type TerminalSearchBarProps = {
@@ -57,34 +58,20 @@ export function TerminalSearchBar({
       <span className="terminal-search-count" aria-live="polite">
         {formatTerminalSearchResult(result)}
       </span>
-      <button
-        type="button"
-        className={caseSensitive ? "active" : ""}
-        aria-label="区分大小写"
-        aria-pressed={caseSensitive}
-        title="区分大小写"
-        onClick={() => onCaseSensitiveChange(!caseSensitive)}
-      >
-        Aa
+      <button type="button" className={caseSensitive ? "active" : ""} aria-label="区分大小写" aria-pressed={caseSensitive} title="区分大小写" onClick={() => onCaseSensitiveChange(!caseSensitive)}>
+        <CaseSensitive aria-hidden="true" size={15} strokeWidth={1.9} />
       </button>
-      <button
-        type="button"
-        className={wholeWord ? "active" : ""}
-        aria-label="全词匹配"
-        aria-pressed={wholeWord}
-        title="全词匹配"
-        onClick={() => onWholeWordChange(!wholeWord)}
-      >
-        全词
+      <button type="button" className={wholeWord ? "active" : ""} aria-label="全词匹配" aria-pressed={wholeWord} title="全词匹配" onClick={() => onWholeWordChange(!wholeWord)}>
+        <WholeWord aria-hidden="true" size={15} strokeWidth={1.9} />
       </button>
       <button type="button" disabled={!query} aria-label="上一个匹配项" title="上一个（Shift + Enter）" onClick={onPrevious}>
-        ↑
+        <ArrowUp aria-hidden="true" size={15} strokeWidth={2} />
       </button>
       <button type="button" disabled={!query} aria-label="下一个匹配项" title="下一个（Enter）" onClick={onNext}>
-        ↓
+        <ArrowDown aria-hidden="true" size={15} strokeWidth={2} />
       </button>
       <button type="button" aria-label="关闭搜索" title="关闭（Esc）" onClick={onClose}>
-        ×
+        <X aria-hidden="true" size={15} strokeWidth={2} />
       </button>
     </div>
   );

@@ -31,6 +31,9 @@ import type {
   VendorBalanceBatchResult,
   VendorBalanceRefreshResult,
   GatewayVendorHealth,
+  GatewayRecentFailure,
+  GatewayFailureDiagnosticsPage,
+  GatewayFailureOutcomeFilter,
   GatewayUsageSummary,
   WorkspacePreset,
   WorkspacePresetInput
@@ -84,6 +87,10 @@ export type {
   VendorBalanceBatchResult,
   VendorBalanceRefreshResult,
   GatewayVendorHealth,
+  GatewayRecentFailure,
+  GatewayFailureDiagnostic,
+  GatewayFailureDiagnosticsPage,
+  GatewayFailureOutcomeFilter,
   GatewayUsageSummary,
   WorkspacePreset,
   WorkspacePresetInput
@@ -117,6 +124,8 @@ export type CodexConsoleApi = {
   getGatewayVendorHealth: () => Promise<GatewayVendorHealth[]>;
   resetGatewayVendorHealth: (vendorId?: string) => Promise<void>;
   getGatewayUsageSummary: (periodStart: string, periodEnd: string) => Promise<GatewayUsageSummary>;
+  getGatewayRecentFailures: () => Promise<GatewayRecentFailure[]>;
+  getGatewayFailureDiagnostics: (page?: number, pageSize?: number, vendorId?: string, outcome?: GatewayFailureOutcomeFilter, periodStart?: string, periodEnd?: string) => Promise<GatewayFailureDiagnosticsPage>;
   listModels: (targetId: string) => Promise<VendorModel[]>;
   listCompressionPrompts: () => Promise<CompressionPrompt[]>;
   saveCompressionPrompt: (input: CompressionPromptInput) => Promise<CompressionPrompt>;
@@ -170,6 +179,7 @@ export type CodexConsoleApi = {
   onTerminalData: (handler: (terminalId: string, data: string) => void) => () => void;
   onTerminalExit: (handler: (terminalId: string, exitCode: number) => void) => () => void;
   onGatewayVendorSwitched: (handler: (event: import("../../shared/types").GatewayVendorSwitchEvent) => void) => () => void;
+  onGatewayRequestRecorded: (handler: (event: import("../../shared/types").GatewayRequestRecordedEvent) => void) => () => void;
   openSessionFolder: (targetId: string, sessionId: string) => Promise<void>;
   openPath: (params: OpenPathRequest) => Promise<void>;
   pathExists: (params: OpenPathRequest) => Promise<boolean>;

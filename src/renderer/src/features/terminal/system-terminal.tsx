@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { ChevronDown, Maximize2, Minimize2, Plus, X } from "lucide-react";
 import "@xterm/xterm/css/xterm.css";
 import { TerminalSearchBar } from "./terminal-search-bar";
 import type { SystemTerminalKind } from "../../types";
@@ -180,7 +181,8 @@ export function SystemTerminal({ targetId, cwd, minimized, createSignal, onClose
               onClick={() => setActiveKey(tab.key)}
             >
               <span>{tab.title}</span>
-              <strong
+              <span
+                className="system-terminal-tab-close"
                 role="button"
                 tabIndex={0}
                 title="关闭"
@@ -195,8 +197,8 @@ export function SystemTerminal({ targetId, cwd, minimized, createSignal, onClose
                   closeTab(tab.key);
                 }}
               >
-                x
-              </strong>
+                <X aria-hidden="true" size={13} strokeWidth={2} />
+              </span>
             </button>
           ))}
         </div>
@@ -204,6 +206,7 @@ export function SystemTerminal({ targetId, cwd, minimized, createSignal, onClose
           <div className="system-terminal-kind" onMouseDown={(event) => event.stopPropagation()}>
             <button type="button" className="system-terminal-kind-trigger" onClick={() => setKindMenuOpen((current) => !current)}>
               {terminalKindOptionLabel(availableKinds, selectedKind)}
+              <ChevronDown aria-hidden="true" size={14} />
             </button>
             {kindMenuOpen && (
               <div className="system-terminal-kind-menu" role="menu">
@@ -224,14 +227,16 @@ export function SystemTerminal({ targetId, cwd, minimized, createSignal, onClose
               </div>
             )}
           </div>
-          <button type="button" onClick={() => openTab(selectedKind)}>
-            新建
+          <button type="button" onClick={() => openTab(selectedKind)} title="新建终端">
+            <Plus aria-hidden="true" size={15} />
+            <span>新建</span>
           </button>
           <button type="button" onClick={onToggleMinimized}>
-            {minimized ? "展开" : "最小化"}
+            {minimized ? <><Maximize2 aria-hidden="true" size={15} /><span>展开</span></> : <><Minimize2 aria-hidden="true" size={15} /><span>最小化</span></>}
           </button>
           <button type="button" onClick={onClose}>
-            关闭面板
+            <X aria-hidden="true" size={15} />
+            <span>关闭面板</span>
           </button>
         </div>
       </header>

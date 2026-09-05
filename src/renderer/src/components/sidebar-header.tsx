@@ -1,4 +1,6 @@
 import type { AiProviderId, AiProviderSummary, AiTarget } from "../types";
+import { CircleHelp, RefreshCw } from "lucide-react";
+import { IconButton } from "./icon-button";
 
 // 侧栏头部：标题、平台状态/刷新按钮、平台与目标选择器。从 App.tsx 的内联 JSX 抽出为展示组件。
 export function SidebarHeader({
@@ -27,12 +29,8 @@ export function SidebarHeader({
           <h1>AI 控制台</h1>
         </div>
         <div className="sidebar-actions">
-          <button className="icon-button" title="平台状态" disabled={!providerId} onClick={onOpenStatus}>
-            i
-          </button>
-          <button className="icon-button" title="刷新" disabled={!providerId} onClick={onRefresh}>
-            ↻
-          </button>
+          <IconButton icon={CircleHelp} label="平台状态" disabled={!providerId} onClick={onOpenStatus} />
+          <IconButton icon={RefreshCw} label="刷新目标" disabled={!providerId} onClick={onRefresh} />
         </div>
       </header>
 

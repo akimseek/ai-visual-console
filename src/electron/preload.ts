@@ -33,6 +33,9 @@ import type {
   VendorBalanceBatchResult,
   VendorBalanceRefreshResult,
   GatewayVendorHealth,
+  GatewayRecentFailure,
+  GatewayFailureDiagnosticsPage,
+  GatewayFailureOutcomeFilter,
   GatewayUsageSummary,
   WorkspacePreset,
   WorkspacePresetInput
@@ -72,6 +75,8 @@ const api = {
   getGatewayVendorHealth: () => ipcRenderer.invoke("gateway:get-vendor-health") as Promise<GatewayVendorHealth[]>,
   resetGatewayVendorHealth: (vendorId?: string) => ipcRenderer.invoke("gateway:reset-vendor-health", vendorId) as Promise<void>,
   getGatewayUsageSummary: (periodStart: string, periodEnd: string) => ipcRenderer.invoke("gateway:get-usage-summary", periodStart, periodEnd) as Promise<GatewayUsageSummary>,
+  getGatewayRecentFailures: () => ipcRenderer.invoke("gateway:get-recent-failures") as Promise<GatewayRecentFailure[]>,
+  getGatewayFailureDiagnostics: (page?: number, pageSize?: number, vendorId?: string, outcome?: GatewayFailureOutcomeFilter, periodStart?: string, periodEnd?: string) => ipcRenderer.invoke("gateway:get-failure-diagnostics", page, pageSize, vendorId, outcome, periodStart, periodEnd) as Promise<GatewayFailureDiagnosticsPage>,
   listModels: (targetId: string) => ipcRenderer.invoke("models:list", targetId) as Promise<VendorModel[]>,
   listCompressionPrompts: () => ipcRenderer.invoke("compression-prompt:list") as Promise<CompressionPrompt[]>,
   saveCompressionPrompt: (input: CompressionPromptInput) =>
@@ -175,6 +180,11 @@ const api = {
     const listener = (_event: Electron.IpcRendererEvent, payload: import("./types").GatewayVendorSwitchEvent) => handler(payload);
     ipcRenderer.on("gateway:vendor-switched", listener);
     return () => ipcRenderer.off("gateway:vendor-switched", listener);
+  },
+  onGatewayRequestRecorded: (handler: (event: import("./types").GatewayRequestRecordedEvent) => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, payload: import("./types").GatewayRequestRecordedEvent) => handler(payload);
+    ipcRenderer.on("gateway:request-recorded", listener);
+    return () => ipcRenderer.off("gateway:request-recorded", listener);
   },
   openSessionFolder: (targetId: string, sessionId: string) =>
     ipcRenderer.invoke("shell:open-session-folder", targetId, sessionId) as Promise<void>,

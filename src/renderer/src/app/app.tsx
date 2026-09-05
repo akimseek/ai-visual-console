@@ -12,6 +12,7 @@ import {
 } from "../features/sessions/session-format";
 import { useTabVendors } from "../features/vendors/use-tab-vendors";
 import { AppMenuBar } from "./app-menu-bar";
+import { CommandPalette } from "./command-palette";
 import { useVendors } from "../features/vendors/use-vendors";
 import { useCompressionPrompts } from "../features/settings/use-compression-prompts";
 import { useCliInstaller } from "../hooks/use-cli-installer";
@@ -56,6 +57,7 @@ import { SessionOverlays } from './session-overlays'
 import { VendorManagerOverlay } from './vendor-manager-overlay'
 import { CompressionPromptOverlay } from './compression-prompt-overlay'
 import { SkillManagerOverlay } from './skill-manager-overlay'
+import { SidebarWorkbench } from "../features/workbench/workbench-view";
 export function App() {
   const workspaceRef = useRef<HTMLElement | null>(null);
   const [error, setError] = useState("");
@@ -65,6 +67,8 @@ export function App() {
   const [providerStatusOpen, setProviderStatusOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [usageDetailsOpen, setUsageDetailsOpen] = useState(false);
+  const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
+  const [workbenchOpen, setWorkbenchOpen] = useState(false);
   const { openAppMenu, setOpenAppMenu } = useAppMenuState();
   const usageDetailsRef = useRef<HTMLDivElement | null>(null);
 
@@ -122,6 +126,7 @@ export function App() {
     closeTerminalTabs,
     setTerminalInputState,
     registerTerminalReady,
+    markTerminalExited,
     clearPendingTerminalTab
   } = useTerminalTabs({ setSelectedId });
   const activeTab = openTabs.find((tab) => tab.key === activeTabKey) || openTabs[0] || null;
@@ -227,7 +232,7 @@ export function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [targetId]);
   // 已有终端路由时只展示该路由的供应商；找不到名称也显示占位符，不能回退到候选池首项造成误导。
-  const { activeVendorName, bindTabVendor, releaseTabVendor, handleVendorSwitch } = useTabVendors({
+  const { activeVendorId, activeVendorName, activeVendorSwitch, bindTabVendor, releaseTabVendor, handleVendorSwitch } = useTabVendors({
     vendors,
     loadApiVendors,
     setNotice,
@@ -319,6 +324,19 @@ export function App() {
   });
   const activeTerminalInputState = activeTab ? terminalInputStatesByTabKey[activeTab.key] : null;
   const canToggleTerminalInput = Boolean(activeTab && activeTerminalInputState?.composerVisible);
+
+  useEffect(() => {
+    const openCommandPalette = (event: KeyboardEvent) => {
+      if (!(event.ctrlKey || event.metaKey) || event.key.toLowerCase() !== "k") return;
+      // 终端原生输入保留 Ctrl+K，避免命令面板拦截 CLI 自身的快捷键。
+      if (activeTerminalInputState?.mode === "terminal") return;
+      event.preventDefault();
+      setOpenAppMenu("");
+      setCommandPaletteOpen(true);
+    };
+    window.addEventListener("keydown", openCommandPalette);
+    return () => window.removeEventListener("keydown", openCommandPalette);
+  }, [activeTerminalInputState?.mode, setOpenAppMenu]);
   const workspaceActions = useWorkspaceSessionActions({
     workspaceRef,
     terminalTabsRef,
@@ -581,6 +599,11 @@ export function App() {
     if (tab?.customTitle) void finalizeNewSession(tab);
   }
 
+  function handleTerminalExit(tabKey: string, exitCode: number) {
+    markTerminalExited(tabKey);
+    sessionTabs.handleTerminalExit(tabKey, exitCode);
+  }
+
   async function exportDiagnostics() {
     try {
       const result = await window.codexConsole.exportDiagnostics();
@@ -618,6 +641,10 @@ export function App() {
     isWslTarget: selectedTarget?.kind === "wsl",
     hasActiveSession: Boolean(activeSession),
     actions: {
+      openCommandPalette: () => {
+        setOpenAppMenu("");
+        setCommandPaletteOpen(true);
+      },
       manageSkills: () => void openSkillManager(),
       openSessionSettings: openSessionSettingsDialog,
       openGatewayPortSettings: () => void gatewayPort.openGatewayPortDialog(),
@@ -635,7 +662,12 @@ export function App() {
 
   return (
     <div className="app-frame">
-      <AppMenuBar menus={appMenus} openMenu={openAppMenu} onOpenMenu={setOpenAppMenu} />
+      <AppMenuBar
+        menus={appMenus}
+        openMenu={openAppMenu}
+        onOpenMenu={setOpenAppMenu}
+      />
+      <CommandPalette menus={appMenus} open={commandPaletteOpen} onClose={() => setCommandPaletteOpen(false)} />
     <main className={`app-shell ${sidebarCollapsed ? "sidebar-collapsed" : ""}`}>
       <aside className="sidebar" hidden={sidebarCollapsed}>
         <SidebarHeader
@@ -650,9 +682,14 @@ export function App() {
         />
 
         <SidebarControls
+          workbenchOpen={workbenchOpen}
+          onOpenWorkbench={() => setWorkbenchOpen(true)}
           view={view}
           supportsTrash={supportsTrash}
-          onSwitchView={workspaceActions.switchView}
+          onSwitchView={(nextView) => {
+            setWorkbenchOpen(false);
+            workspaceActions.switchView(nextView);
+          }}
           query={query}
           onQueryChange={setQuery}
           searchActive={Boolean(searchQuery)}
@@ -667,7 +704,20 @@ export function App() {
           onDeleteBatch={() => void deleteSelectedBatch()}
         />
 
-        <SessionList
+        {workbenchOpen ? (
+          <SidebarWorkbench
+            provider={selectedProvider}
+            target={selectedTarget}
+            vendors={vendors}
+            activeVendorId={activeVendorId}
+            activeVendorName={activeVendorName}
+            lastVendorSwitch={activeVendorSwitch}
+            session={statusSession}
+            model={statusModel}
+            tokenUsage={statusTokenUsage}
+            contextUsage={statusContextUsage}
+          />
+        ) : <SessionList
           sessions={filtered}
           loading={sessionLoading || searchLoading}
           emptyMessage={searchQuery ? "未找到匹配会话。" : view === "trash" ? "回收站为空。" : "未找到会话。"}
@@ -677,7 +727,7 @@ export function App() {
           onContextMenu={handleSessionContextMenu}
           onToggleBatch={handleToggleBatchSelection}
           onOpen={handleOpenSessionTab}
-        />
+        />}
       </aside>
       <section className="workspace">
         {error && <div className="error-banner">{error}</div>}
@@ -706,7 +756,7 @@ export function App() {
           terminalInputStates={terminalInputStatesByTabKey}
           onTerminalReady={handleTerminalReady}
           onVendorSwitch={handleVendorSwitch}
-          onTerminalExit={sessionTabs.handleTerminalExit}
+          onTerminalExit={handleTerminalExit}
           onTerminalInputState={handleTerminalInputState}
           systemTerminalOpen={systemTerminalOpen}
           activeCwd={activeCwd}

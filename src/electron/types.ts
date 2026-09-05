@@ -46,6 +46,7 @@ export type {
   TerminalStartRequest,
   TerminalStartResult,
   GatewayVendorSwitchEvent,
+  GatewayRequestRecordedEvent,
   SystemTerminalKind,
   SystemTerminalStartRequest,
   WorkspacePreset,
@@ -62,4 +63,8 @@ export type {
   ,GatewayVendorHealthStatus
   ,GatewayUsage
   ,GatewayUsageSummary
+  ,GatewayRecentFailure
+  ,GatewayFailureDiagnostic
+  ,GatewayFailureDiagnosticsPage
+  ,GatewayFailureOutcomeFilter
 } from "../shared/types";

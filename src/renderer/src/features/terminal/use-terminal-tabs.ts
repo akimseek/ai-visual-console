@@ -1,5 +1,10 @@
 import { useState, type Dispatch, type SetStateAction } from "react";
-import { omitTerminalTabRecords, removeTerminalTabs, type TerminalTab, upsertTerminalTab } from "./terminal-tab-state";
+import {
+  omitTerminalTabRecords,
+  removeTerminalTabs,
+  type TerminalTab,
+  upsertTerminalTab
+} from "./terminal-tab-state";
 
 type TerminalInputState = {
   mode: "composer" | "terminal";
@@ -60,6 +65,10 @@ export function useTerminalTabs({ setSelectedId }: { setSelectedId: Dispatch<Set
     if (pendingTerminalTabKey === tabKey) setPendingTerminalTabKey("");
   }
 
+  function markTerminalExited(tabKey: string) {
+    setTerminalIdsByTabKey((current) => omitTerminalTabRecords(current, new Set([tabKey])));
+  }
+
   function clearPendingTerminalTab() {
     setPendingTerminalTabKey("");
   }
@@ -76,6 +85,7 @@ export function useTerminalTabs({ setSelectedId }: { setSelectedId: Dispatch<Set
     closeTerminalTabs,
     setTerminalInputState,
     registerTerminalReady,
+    markTerminalExited,
     clearPendingTerminalTab
   };
 }

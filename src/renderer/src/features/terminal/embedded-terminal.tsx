@@ -406,6 +406,8 @@ export function EmbeddedTerminal({
       xterm.terminalRef.current?.writeln("");
       xterm.terminalRef.current?.writeln(`Codex 已退出，退出码 ${exitCode}`);
       terminalIdRef.current = "";
+      // 非零退出保留现有终端错误输出，同时通知工作台更新为异常退出状态。
+      onExitRef.current?.(exitCode);
     });
     const removeVendorSwitchListener = window.codexConsole.onGatewayVendorSwitched((event) => {
       if (!event.vendorId) return;

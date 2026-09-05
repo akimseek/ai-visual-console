@@ -223,10 +223,13 @@ async function handleGatewayRequest(request: IncomingMessage, response: ServerRe
   let routeId = extractRouteId(request.url || "");
   let providerId = extractProvider(request.url || "");
   let vendorId = "";
+  let routeWindow: BrowserWindow | undefined;
   const requestId = crypto.randomUUID();
   let retryCount = 0;
   let switched = false;
   let model: string | undefined;
+  let errorCode: string | undefined;
+  let errorMessage: string | undefined;
   const usage: import("../types").GatewayUsage = {};
   let inputPricePerMillion: number | undefined;
   let outputPricePerMillion: number | undefined;
@@ -250,6 +253,7 @@ async function handleGatewayRequest(request: IncomingMessage, response: ServerRe
     }
     routeId = route.routeId;
     providerId = route.providerId;
+    routeWindow = route.window;
     if (!hasRouteToken(request, route.localToken)) {
       respondJson(response, 401, { error: "gateway unauthorized" });
       outcome = "ok";
@@ -345,6 +349,10 @@ async function handleGatewayRequest(request: IncomingMessage, response: ServerRe
         throw error;
       }
       upstreamStatus = upstream.status;
+      if (upstream.status >= 400) {
+        errorCode = `HTTP_${upstream.status}`;
+        errorMessage = upstream.statusText || `HTTP ${upstream.status}`;
+      }
       if (attempt < maxAttempts - 1 && isRetryableStatus(upstream.status)) {
         await recordGatewayVendorFailure(attemptVendor, `HTTP ${upstream.status}`);
         failuresOnVendor += 1;
@@ -359,7 +367,11 @@ async function handleGatewayRequest(request: IncomingMessage, response: ServerRe
         continue;
       }
       if (upstream.status >= 400) await recordGatewayVendorFailure(attemptVendor, `HTTP ${upstream.status}`);
-      else await recordGatewayVendorSuccess(attemptVendor);
+      else {
+        await recordGatewayVendorSuccess(attemptVendor);
+        errorCode = undefined;
+        errorMessage = undefined;
+      }
       break;
     }
     if (!upstream) throw new Error("没有可用的供应商。");
@@ -368,7 +380,12 @@ async function handleGatewayRequest(request: IncomingMessage, response: ServerRe
       if (key === "content-length" || key === "transfer-encoding" || key === "connection") return;
       response.setHeader(key, value);
     });
-    if (!upstream.body) { response.end(); outcome = "ok"; return; }
+    if (!upstream.body) {
+      response.end();
+      // 没有响应体时也必须按 HTTP 状态记录结果，不能把 4xx/5xx 误记为成功。
+      outcome = upstream.status >= 400 ? "error" : "ok";
+      return;
+    }
     // 用量提取只捕获响应体前 512KB；按 Buffer 收集、结束一次性解码，
     // 避免长流式响应反复扩容拷贝字符串，也修复跨 chunk 的多字节字符被截断的问题。
     const capturedChunks: Buffer[] = [];
@@ -385,6 +402,9 @@ async function handleGatewayRequest(request: IncomingMessage, response: ServerRe
       response
     );
     const captured = capturedChunks.length > 0 ? Buffer.concat(capturedChunks).toString("utf8") : "";
+    if (upstream.status >= 400) {
+      errorMessage = extractGatewayResponseError(captured) || errorMessage;
+    }
     const parsedUsage = parseGatewayUsage(captured.startsWith("data:") ? undefined : tryParseJson(captured))
       || parseUsageFromChunk(captured);
     if (parsedUsage) mergeGatewayUsage(usage, parsedUsage);
@@ -402,11 +422,15 @@ async function handleGatewayRequest(request: IncomingMessage, response: ServerRe
     }
     if (error?.name === "TimeoutError") {
       outcome = "timeout";
+      errorCode = "GATEWAY_TIMEOUT";
+      errorMessage = "上游响应超时。";
       if (!response.headersSent) respondJson(response, 504, { error: "上游响应超时。" });
       else response.destroy();
       return;
     }
     outcome = "error";
+    errorCode = getGatewayErrorCode(error);
+    errorMessage = getGatewayErrorMessage(error);
     if (!response.headersSent) respondJson(response, 502, { error: error?.message || "gateway upstream request failed" });
     else response.destroy();
   } finally {
@@ -418,6 +442,8 @@ async function handleGatewayRequest(request: IncomingMessage, response: ServerRe
       method: request.method || "GET",
       path: request.url || "/",
       upstreamStatus,
+      errorCode,
+      error: errorMessage,
       durationMs: Math.round(performance.now() - startedAt),
       bytesIn,
       bytesOut,
@@ -433,6 +459,8 @@ async function handleGatewayRequest(request: IncomingMessage, response: ServerRe
       model,
       upstreamStatus,
       outcome,
+      errorCode,
+      errorMessage,
       durationMs: Math.round(performance.now() - startedAt),
       bytesIn,
       bytesOut,
@@ -440,8 +468,53 @@ async function handleGatewayRequest(request: IncomingMessage, response: ServerRe
       switched,
       usage: Object.keys(usage).length > 0 ? usage : undefined,
       createdAt: new Date().toISOString()
+    }).then((persisted) => {
+      if (!persisted) return;
+      if (!routeWindow || routeWindow.isDestroyed() || routeWindow.webContents.isDestroyed()) return;
+      routeWindow.webContents.send("gateway:request-recorded", {
+        providerId: providerId as AiProviderId,
+        vendorId,
+        outcome,
+        switched
+      });
     });
   }
+}
+
+function getGatewayErrorCode(error: unknown) {
+  if (error && typeof error === "object" && "code" in error && typeof error.code === "string") return error.code.slice(0, 80);
+  if (error && typeof error === "object" && "name" in error && typeof error.name === "string") return error.name.slice(0, 80);
+  return "GATEWAY_ERROR";
+}
+
+function getGatewayErrorMessage(error: unknown) {
+  const message = error instanceof Error ? error.message : String(error);
+  return message.replace(/[\r\n\t]+/g, " ").trim().slice(0, 500) || "Gateway 请求失败。";
+}
+
+// 仅从错误响应中提取常见的 message 字段，避免把完整上游响应写入本地日志。
+export function extractGatewayResponseError(body: string) {
+  const candidates = [body.trim()];
+  for (const line of body.split(/\r?\n/)) {
+    const data = line.trim().replace(/^data:\s*/, "");
+    if (data && data !== "[DONE]") candidates.push(data);
+  }
+  for (const candidate of candidates) {
+    const parsed = tryParseJson(candidate);
+    const message = readGatewayErrorMessage(parsed);
+    if (message) return message.replace(/[\r\n\t]+/g, " ").trim().slice(0, 500);
+  }
+  return undefined;
+}
+
+function readGatewayErrorMessage(value: unknown): string | undefined {
+  if (!value || typeof value !== "object") return typeof value === "string" ? value : undefined;
+  const record = value as Record<string, unknown>;
+  if (typeof record.message === "string") return record.message;
+  if (typeof record.error === "string") return record.error;
+  if (record.error && typeof record.error === "object") return readGatewayErrorMessage(record.error);
+  if (typeof record.detail === "string") return record.detail;
+  return undefined;
 }
 
 class GatewayAbort extends Error {

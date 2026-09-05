@@ -33,4 +33,5 @@ describe("terminal tab state", () => {
     expect(omitTerminalTabRecords(records, new Set(["a"]))).toEqual({ b: "two" });
     expect(omitTerminalTabRecords(records, new Set(["missing"]))).toBe(records);
   });
+
 });

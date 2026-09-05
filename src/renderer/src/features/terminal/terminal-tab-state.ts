@@ -16,6 +16,7 @@ export type TerminalTab = {
   createdAt?: number;
 };
 
+// 终端运行状态只服务于渲染层展示，不参与 PTY 启动、停止或会话文件写入。
 export function upsertTerminalTab(tabs: TerminalTab[], tab: TerminalTab) {
   const index = tabs.findIndex((item) => item.key === tab.key);
   if (index === -1) return [...tabs, tab];

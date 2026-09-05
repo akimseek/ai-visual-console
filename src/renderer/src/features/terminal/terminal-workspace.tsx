@@ -1,4 +1,5 @@
 import { lazy, Suspense, type MouseEvent, type RefObject, type WheelEvent } from "react";
+import { PanelLeftClose, PanelLeftOpen } from "lucide-react";
 import type { AiSession, ApiVendor } from "../../types";
 import type { TerminalTab } from "./terminal-tab-state";
 import { TerminalTabs } from "./terminal-tabs";
@@ -84,9 +85,10 @@ export function TerminalWorkspace({
             <button
               className="workspace-sidebar-toggle"
               title={sidebarCollapsed ? "展开侧栏" : "收起侧栏"}
+              aria-label={sidebarCollapsed ? "展开侧栏" : "收起侧栏"}
               onClick={onToggleSidebar}
             >
-              {sidebarCollapsed ? "›" : "‹"}
+              {sidebarCollapsed ? <PanelLeftOpen aria-hidden="true" size={18} /> : <PanelLeftClose aria-hidden="true" size={18} />}
             </button>
             <h2 title={activeTitle}>{activeTitle}</h2>
           </div>

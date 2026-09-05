@@ -1,7 +1,9 @@
 import { useEffect, useRef, useState } from "react";
 import type { ChangeEvent, PointerEvent, ReactNode } from "react";
+import { ChevronLeft, ChevronRight, Pencil, Plus, RefreshCw, Trash2, X } from "lucide-react";
 import type { AiProviderId, AiTarget, ApiVendor, ApiVendorConfigTemplate, VendorBalanceQueryConfig, VendorModelQueryConfig } from "../../types";
 import { formatDate } from "../../lib/format";
+import { IconButton } from "../../components/icon-button";
 import {
   buildVendorDraft,
   renderVendorConfigPreview,
@@ -205,9 +207,7 @@ export function VendorManagerDialog({
               供应商信息保存在本地数据库中。参与候选池的供应商将由本地 Gateway 按协议参与请求路由和故障切换。
             </p>
           </div>
-          <button type="button" title="关闭" aria-label="关闭" onClick={onClose} disabled={Boolean(busy)}>
-            ×
-          </button>
+          <IconButton icon={X} label="关闭" onClick={onClose} disabled={Boolean(busy)} />
         </header>
         {mode === "list" ? (
           <div className="vendor-list-page">
@@ -218,9 +218,11 @@ export function VendorManagerDialog({
               </div>
               <div className="vendor-list-toolbar-actions">
                 <button type="button" onClick={() => { setCurrentPage(1); onNew(); }} disabled={Boolean(busy)}>
+                  <Plus aria-hidden="true" size={15} strokeWidth={2} />
                   新增供应商
                 </button>
                 <button type="button" onClick={onRefreshAllBalances} disabled={Boolean(busy) || vendors.length === 0}>
+                  <RefreshCw aria-hidden="true" size={15} strokeWidth={2} className={refreshingAllBalances ? "is-spinning" : undefined} />
                   刷新全部余额
                 </button>
               </div>
@@ -280,16 +282,13 @@ export function VendorManagerDialog({
                         </VendorTableCell>
                         <VendorTableCell className="vendor-balance-placeholder" title={vendor.balanceError || vendor.balanceQueriedAt || undefined}>
                           <span className="vendor-balance-value">{renderVendorBalance(vendor, refreshingAllBalances || refreshingVendorIds.includes(vendor.id))}</span>
-                          <button
-                            type="button"
-                            className="vendor-balance-refresh"
-                            title="刷新余额"
-                            aria-label={`刷新 ${vendor.name} 的余额`}
+                          <IconButton
+                            icon={RefreshCw}
+                            label={`刷新 ${vendor.name} 的余额`}
+                            className={`vendor-balance-refresh ${refreshingVendorIds.includes(vendor.id) ? "is-spinning" : ""}`}
                             onClick={() => onRefreshBalance(vendor.id)}
                             disabled={Boolean(busy) || refreshingAllBalances || refreshingVendorIds.includes(vendor.id)}
-                          >
-                            {refreshingVendorIds.includes(vendor.id) ? "..." : "↻"}
-                          </button>
+                          />
                         </VendorTableCell>
                         <VendorTableCell>{vendor.sort}</VendorTableCell>
                         <VendorTableCell title={vendor.createdAt}>{formatDate(vendor.createdAt)}</VendorTableCell>
@@ -307,9 +306,11 @@ export function VendorManagerDialog({
                         <td className="vendor-actions-cell">
                           <div className="vendor-card-actions">
                             <button type="button" onClick={() => onEdit(vendor)} disabled={Boolean(busy)}>
+                              <Pencil aria-hidden="true" size={14} strokeWidth={2} />
                               编辑
                             </button>
                             <button type="button" className="danger" onClick={() => setDeleteCandidate(vendor)} disabled={Boolean(busy)}>
+                              <Trash2 aria-hidden="true" size={14} strokeWidth={2} />
                               删除
                             </button>
                           </div>
@@ -330,6 +331,7 @@ export function VendorManagerDialog({
                     onClick={() => setCurrentPage((page) => Math.max(1, page - 1))}
                     disabled={currentPage <= 1}
                   >
+                    <ChevronLeft aria-hidden="true" size={15} strokeWidth={2} />
                     上一页
                   </button>
                   <button
@@ -338,6 +340,7 @@ export function VendorManagerDialog({
                     onClick={() => setCurrentPage((page) => Math.min(totalPages, page + 1))}
                     disabled={currentPage >= totalPages}
                   >
+                    <ChevronRight aria-hidden="true" size={15} strokeWidth={2} />
                     下一页
                   </button>
                 </div>

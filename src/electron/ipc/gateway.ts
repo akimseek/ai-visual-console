@@ -16,7 +16,7 @@ import {
   requireGatewayFailureThreshold,
   requireGatewayPort
 } from "./validation";
-import { getGatewayUsageSummary } from "../gateway/gateway-request-store";
+import { getGatewayFailureDiagnosticsPage, getGatewayUsageSummary, getRecentGatewayFailures } from "../gateway/gateway-request-store";
 import { listGatewayVendorHealth, resetGatewayVendorHealth } from "../gateway/gateway-resilience";
 
 export function registerGatewayIpcHandlers() {
@@ -60,5 +60,15 @@ export function registerGatewayIpcHandlers() {
   ipcMain.handle("gateway:get-usage-summary", (_event, periodStart: unknown, periodEnd: unknown) => {
     if (typeof periodStart !== "string" || typeof periodEnd !== "string") throw new Error("统计时间范围无效。");
     return getGatewayUsageSummary(periodStart, periodEnd);
+  });
+  ipcMain.handle("gateway:get-recent-failures", () => getRecentGatewayFailures());
+  ipcMain.handle("gateway:get-failure-diagnostics", (_event, page: unknown, pageSize: unknown, vendorId: unknown, outcome: unknown, periodStart: unknown, periodEnd: unknown) => {
+    const requestedPage = typeof page === "number" && Number.isFinite(page) ? page : 1;
+    const requestedPageSize = typeof pageSize === "number" && Number.isFinite(pageSize) ? pageSize : 10;
+    const requestedVendorId = typeof vendorId === "string" ? vendorId : "";
+    const requestedOutcome = outcome === "error" || outcome === "timeout" ? outcome : "";
+    const requestedPeriodStart = typeof periodStart === "string" ? periodStart : "";
+    const requestedPeriodEnd = typeof periodEnd === "string" ? periodEnd : "";
+    return getGatewayFailureDiagnosticsPage(requestedPage, requestedPageSize, requestedVendorId, requestedOutcome, requestedPeriodStart, requestedPeriodEnd);
   });
 }
