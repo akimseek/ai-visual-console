@@ -1,10 +1,11 @@
 import { useRef, useState } from "react";
+import { ArrowUp, ChevronDown, ChevronUp, X } from "lucide-react";
 import type { AiSession } from "../../types";
 import { formatDate } from "../../lib/format";
 import { shortSessionId } from "./session-format";
 import { BranchPanel } from "./branch-panel";
 import type { BranchPanelState } from "./branch-panel";
-import { buildConversationTurns, type ConversationTurn } from "./conversation";
+import { buildConversationTurns, type ConversationMessageEntry, type ConversationTurn } from "./conversation";
 
 const COLLAPSE_MESSAGE_LENGTH = 4_000;
 
@@ -15,13 +16,21 @@ function MessageText({ text }: { text: string }) {
   return (
     <>
       <p>{visibleText}</p>
-      {collapsible && <button type="button" className="message-expand" onClick={() => setExpanded((value) => !value)}>{expanded ? "收起" : "展开"}</button>}
+      {collapsible && (
+        <button
+          type="button"
+          className="message-expand"
+          aria-expanded={expanded}
+          onClick={() => setExpanded((value) => !value)}
+        >
+          {expanded ? <ChevronUp aria-hidden="true" size={14} /> : <ChevronDown aria-hidden="true" size={14} />}
+          <span>{expanded ? "收起" : "展开"}</span>
+        </button>
+      )}
     </>
   );
 }
 
-// 会话详情弹框：展示完整对话（按问答轮次分组）、分支关系，并按轮次提供“从此处分支”。
-// 从 App.tsx 的内联 JSX + renderSessionDetailContent 抽出为独立组件。
 export function SessionDetailModal({
   session,
   selectedSessionDetails,
@@ -62,76 +71,61 @@ export function SessionDetailModal({
     if (hasMore && !loadingMore && (bodyRef.current?.scrollTop || 0) < 24) void loadEarlierMessages();
   }
 
+  const turns = buildConversationTurns(detailSession.preview || [], detailSession.previewOffset);
+
   return (
     <div className="session-detail-modal-overlay" role="presentation" onMouseDown={onClose}>
-      <section
-        className="session-detail-modal"
-        role="dialog"
-        aria-modal="true"
-        aria-label="会话详情"
-        onMouseDown={(event) => event.stopPropagation()}
-      >
+      <section className="session-detail-modal" role="dialog" aria-modal="true" aria-label="会话详情" onMouseDown={(event) => event.stopPropagation()}>
         <header>
-          <div>
+          <div className="session-detail-heading">
+            <span className="session-detail-eyebrow">会话详情</span>
             <h2 title={detailSession.title}>{detailSession.title}</h2>
-            <span>{shortSessionId(session.id)}</span>
+            <span className="session-detail-subtitle">{shortSessionId(session.id)} · {detailSession.messageCount} 条消息</span>
           </div>
-          <button type="button" aria-label="关闭详情" onClick={onClose}>
-            ×
+          <button type="button" className="session-detail-close" aria-label="关闭会话详情" onClick={onClose}>
+            <X aria-hidden="true" size={18} strokeWidth={1.9} />
           </button>
         </header>
         <div ref={bodyRef} className="session-detail-modal-body" onScroll={handleBodyScroll}>
-          {loading ? (
-            <div className="detail-loading">正在加载完整会话...</div>
-          ) : (
+          {loading ? <div className="detail-loading">正在加载完整会话...</div> : (
             <>
               <BranchPanel session={detailSession} state={branchPanel} onOpen={onOpenSession} />
-              {hasMore && <button type="button" className="secondary" disabled={loadingMore} onClick={() => void loadEarlierMessages()}>{loadingMore ? "正在加载..." : "加载更早消息"}</button>}
-              {buildConversationTurns(detailSession.preview || [], detailSession.previewOffset).map((turn, turnIndex) => (
-                <article key={`turn-${turnIndex}`} className="conversation-turn">
-                  {turn.user && (
-                    <div className="conversation-block conversation-question">
-                      <article className={`message ${turn.user.message.role}`}>
-                        <header>
-                          <div className="message-meta">
-                            <span>{turn.user.message.role}</span>
-                            <time>{formatDate(turn.user.message.timestamp)}</time>
-                          </div>
-                        </header>
-                        <MessageText text={turn.user.message.text} />
-                      </article>
-                    </div>
-                  )}
-                  <div className="conversation-block conversation-answer">
-                    {turn.replies.map((entry) => (
-                      <article key={`${entry.message.timestamp}-${entry.index}`} className={`message ${entry.message.role}`}>
-                        <header>
-                          <div className="message-meta">
-                            <span>{entry.message.role}</span>
-                            <time>{formatDate(entry.message.timestamp)}</time>
-                          </div>
-                        </header>
-                        <MessageText text={entry.message.text} />
-                      </article>
-                    ))}
-                    {supportsBranch && (
-                      <div className="conversation-actions">
-                        <button
-                          type="button"
-                          className="message-branch"
-                          onClick={() => onBranchFromTurn(detailSession, turn)}
-                        >
-                          从此处分支
-                        </button>
-                      </div>
-                    )}
+              <section className="session-detail-timeline" aria-label="会话时间线">
+                <div className="session-detail-timeline-heading">
+                  <span>消息记录</span>
+                  <span>{detailSession.messageCount} 条</span>
+                </div>
+                {hasMore && (
+                  <div className="session-detail-history-boundary">
+                    <span className="session-detail-history-line" aria-hidden="true" />
+                    <button type="button" className="session-detail-load-earlier" disabled={loadingMore} onClick={() => void loadEarlierMessages()}>
+                      <ArrowUp aria-hidden="true" size={15} />
+                      {loadingMore ? "正在加载更早消息..." : "加载更早消息"}
+                    </button>
+                    <span className="session-detail-history-line" aria-hidden="true" />
                   </div>
-                </article>
-              ))}
+                )}
+                {turns.map((turn, turnIndex) => (
+                  <article key={`turn-${turnIndex}`} className="conversation-turn">
+                    {turn.user && <div className="conversation-block conversation-question"><MessageArticle entry={turn.user} /></div>}
+                    <div className="conversation-block conversation-answer">
+                      {turn.replies.map((entry) => <MessageArticle key={`${entry.message.timestamp}-${entry.index}`} entry={entry} />)}
+                      {supportsBranch && <div className="conversation-actions"><button type="button" className="message-branch" onClick={() => onBranchFromTurn(detailSession, turn)}>从此处分支</button></div>}
+                    </div>
+                  </article>
+                ))}
+              </section>
             </>
           )}
         </div>
       </section>
     </div>
   );
+}
+
+function MessageArticle({ entry }: { entry: ConversationMessageEntry }) {
+  return <article className={`message ${entry.message.role}`}>
+    <header><div className="message-meta"><span>{entry.message.role}</span><time>{formatDate(entry.message.timestamp)}</time></div></header>
+    <MessageText text={entry.message.text} />
+  </article>;
 }

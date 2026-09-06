@@ -6698,3 +6698,247 @@ textarea:focus-visible {
     grid-template-columns: minmax(0, 1fr);
   }
 }
+
+/* Session detail follows the same restrained data-panel language as Gateway usage and diagnostics. */
+.session-detail-modal-overlay {
+  background: rgba(17, 24, 39, 0.34);
+  padding: 24px;
+}
+
+.session-detail-modal {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  width: min(1060px, calc(100vw - 48px));
+  height: min(760px, calc(100vh - 48px));
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  border: 1px solid var(--ui-border);
+  border-radius: 8px;
+  background: var(--ui-bg);
+  box-shadow: 0 24px 58px rgba(27, 50, 55, 0.2);
+}
+
+.session-detail-modal > header {
+  align-items: center;
+  min-width: 0;
+  border-bottom: 1px solid var(--ui-border);
+  background: var(--ui-surface);
+  padding: 14px 16px;
+}
+
+.session-detail-heading {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.session-detail-eyebrow {
+  margin: 0;
+  color: var(--ui-accent-strong);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.session-detail-modal h2 {
+  color: var(--ui-text);
+  font-size: 18px;
+  font-weight: 700;
+}
+
+.session-detail-modal .session-detail-subtitle {
+  margin-top: 2px;
+  color: var(--ui-muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.session-detail-modal > header .session-detail-close {
+  display: grid;
+  width: 32px;
+  height: 32px;
+  flex: 0 0 auto;
+  place-items: center;
+  border: 1px solid var(--ui-border-strong);
+  border-radius: 6px;
+  background: var(--ui-surface);
+  color: var(--ui-text);
+  cursor: pointer;
+  font-size: 0;
+  line-height: 1;
+}
+
+.session-detail-modal > header .session-detail-close:hover {
+  border-color: var(--ui-accent);
+  background: var(--ui-accent-soft);
+  color: var(--ui-accent-strong);
+}
+
+.session-detail-modal-body {
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+  padding: 18px 20px 24px;
+  scrollbar-color: var(--ui-border-strong) transparent;
+  scrollbar-width: thin;
+}
+
+.session-detail-timeline {
+  display: grid;
+  min-width: 0;
+  gap: 12px;
+}
+
+.session-detail-timeline-heading {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--ui-border);
+  color: var(--ui-text);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.session-detail-timeline-heading span:last-child {
+  color: var(--ui-muted);
+  font-size: 11px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
+
+.session-detail-history-boundary {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  padding: 2px 0 4px;
+}
+
+.session-detail-history-line {
+  height: 1px;
+  flex: 1 1 auto;
+  background: var(--ui-border);
+}
+
+.session-detail-load-earlier {
+  display: inline-flex;
+  align-items: center;
+  flex: 0 0 auto;
+  gap: 6px;
+  height: 30px;
+  padding: 0 11px;
+  border: 1px solid var(--ui-border-strong);
+  border-radius: 5px;
+  background: var(--ui-surface);
+  color: var(--ui-accent-strong);
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.session-detail-load-earlier:hover:not(:disabled) {
+  border-color: var(--ui-accent);
+  background: var(--ui-accent-soft);
+}
+
+.session-detail-load-earlier:disabled {
+  cursor: progress;
+  opacity: 0.58;
+}
+
+.session-detail-modal .conversation-turn {
+  margin-bottom: 8px;
+}
+
+.session-detail-modal .message {
+  border-color: var(--ui-border);
+  border-radius: 7px;
+  background: var(--ui-surface);
+  padding: 12px 14px;
+}
+
+.session-detail-modal .message.user,
+.session-detail-modal .conversation-question .message {
+  border-left-color: var(--ui-accent-strong);
+}
+
+.session-detail-modal .message.assistant {
+  border-left-color: #2b8a66;
+}
+
+.session-detail-modal .message header {
+  margin-bottom: 7px;
+  color: var(--ui-muted);
+  font-size: 11px;
+}
+
+.session-detail-modal .message p {
+  color: var(--ui-text);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.session-detail-modal .message-expand,
+.session-detail-modal .message-branch {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 30px;
+  padding: 0 10px;
+  border-radius: 5px;
+  border-color: var(--ui-border-strong);
+  background: var(--ui-surface);
+  color: var(--ui-accent-strong);
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1;
+  white-space: nowrap;
+  transition: border-color 160ms ease, background-color 160ms ease, color 160ms ease;
+}
+
+.session-detail-modal .message-expand {
+  margin-top: 8px;
+}
+
+.session-detail-modal .message-expand svg {
+  flex: 0 0 auto;
+}
+
+.session-detail-modal .message-expand:hover,
+.session-detail-modal .message-branch:hover {
+  border-color: var(--ui-accent);
+  background: var(--ui-accent-soft);
+  color: var(--ui-accent-strong);
+}
+
+.session-detail-modal .message-expand:active,
+.session-detail-modal .message-branch:active {
+  transform: translateY(1px);
+}
+
+.session-detail-modal .message-expand:focus-visible,
+.session-detail-modal .message-branch:focus-visible {
+  outline: 2px solid var(--ui-accent);
+  outline-offset: 2px;
+}
+
+@media (max-width: 760px) {
+  .session-detail-modal-overlay {
+    padding: 12px;
+  }
+
+  .session-detail-modal {
+    width: calc(100vw - 24px);
+    height: calc(100vh - 24px);
+  }
+
+  .session-detail-modal-body {
+    padding: 14px 12px 18px;
+  }
+}
