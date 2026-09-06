@@ -24,6 +24,7 @@ import type { LucideIcon } from "lucide-react";
 import type { VendorModel } from "../../types";
 import { getProviderIdFromTargetId } from "../../../../shared/target-ids";
 import { useVendorData } from "../vendors/vendor-context";
+import { TextEditingContextMenu } from "./context-menus";
 
 export type ComposerAttachment = {
   id: string;
@@ -63,6 +64,13 @@ type ImagePreview = {
   zoom: number;
 };
 
+type TextContextMenuState = {
+  x: number;
+  y: number;
+  start: number;
+  end: number;
+};
+
 const MAX_IMAGE_SIZE = 10 * 1024 * 1024;
 
 export function ComposerInput({
@@ -91,6 +99,7 @@ export function ComposerInput({
   const [modelsLoading, setModelsLoading] = useState(false);
   const [modelsError, setModelsError] = useState("");
   const [selectedModelId, setSelectedModelId] = useState<string>("");
+  const [textContextMenu, setTextContextMenu] = useState<TextContextMenuState | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const attachMenuRef = useRef<HTMLDivElement | null>(null);
   const dropdownRef = useRef<HTMLDivElement | null>(null);
@@ -273,6 +282,53 @@ export function ComposerInput({
     }
   }
 
+  function handleTextContextMenu(event: React.MouseEvent<HTMLTextAreaElement>) {
+    event.preventDefault();
+    event.stopPropagation();
+    const target = event.currentTarget;
+    setTextContextMenu({
+      x: event.clientX,
+      y: event.clientY,
+      start: target.selectionStart,
+      end: target.selectionEnd
+    });
+  }
+
+  function copyTextSelection() {
+    if (!textContextMenu || textContextMenu.start === textContextMenu.end) return;
+    void window.codexConsole.copyText(text.slice(textContextMenu.start, textContextMenu.end));
+  }
+
+  function cutTextSelection() {
+    if (!textContextMenu || textContextMenu.start === textContextMenu.end) return;
+    const { start, end } = textContextMenu;
+    void window.codexConsole.copyText(text.slice(start, end));
+    onTextChange(`${text.slice(0, start)}${text.slice(end)}`);
+    window.setTimeout(() => {
+      composerRef.current?.focus();
+      composerRef.current?.setSelectionRange(start, start);
+    }, 0);
+  }
+
+  function pasteTextFromClipboard() {
+    if (!textContextMenu) return;
+    const { start, end } = textContextMenu;
+    void window.codexConsole.readText().then((clipboardText) => {
+      if (!clipboardText) return;
+      onTextChange(`${text.slice(0, start)}${clipboardText}${text.slice(end)}`);
+      window.setTimeout(() => {
+        const caret = start + clipboardText.length;
+        composerRef.current?.focus();
+        composerRef.current?.setSelectionRange(caret, caret);
+      }, 0);
+    });
+  }
+
+  function selectAllText() {
+    composerRef.current?.focus();
+    composerRef.current?.select();
+  }
+
   function insertNewline(element: HTMLTextAreaElement) {
     const start = element.selectionStart;
     const end = element.selectionEnd;
@@ -423,6 +479,7 @@ export function ComposerInput({
           onChange={(event) => onTextChange(event.target.value)}
           onKeyDown={handleKeyDown}
           onPaste={handlePaste}
+          onContextMenu={handleTextContextMenu}
         />
         <button
           type="button"
@@ -435,6 +492,22 @@ export function ComposerInput({
           <ArrowUp aria-hidden="true" size={18} strokeWidth={2.4} />
         </button>
       </div>
+
+      {textContextMenu && (
+        <TextEditingContextMenu
+          menu={{
+            x: textContextMenu.x,
+            y: textContextMenu.y,
+            canCopy: textContextMenu.start !== textContextMenu.end,
+            canPaste: Boolean(navigator.clipboard || window.codexConsole.readText)
+          }}
+          onCopy={copyTextSelection}
+          onCut={cutTextSelection}
+          onPaste={pasteTextFromClipboard}
+          onSelectAll={selectAllText}
+          onDismiss={() => setTextContextMenu(null)}
+        />
+      )}
 
       <div className="composer-toolbar">
         <div className="composer-toolbar-left">

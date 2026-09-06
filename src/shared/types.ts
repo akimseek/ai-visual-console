@@ -243,8 +243,34 @@ export type GatewayUsageSummary = GatewayUsage & {
   successCount: number;
   failureCount: number;
   switchedCount: number;
+  retryCount?: number;
+  averageDurationMs?: number;
   periodStart: string;
   periodEnd: string;
+};
+
+export type GatewayUsageDimension = {
+  key: string;
+  label: string;
+  providerId: AiProviderId;
+  requestCount: number;
+  successCount: number;
+  failureCount: number;
+  switchedCount: number;
+  retryCount: number;
+  averageDurationMs: number;
+  inputTokens?: number;
+  outputTokens?: number;
+  cachedInputTokens?: number;
+  reasoningTokens?: number;
+  totalTokens?: number;
+  costUsd?: number;
+};
+
+export type GatewayUsageReport = {
+  summary: GatewayUsageSummary;
+  vendors: GatewayUsageDimension[];
+  models: GatewayUsageDimension[];
 };
 
 // 工作台仅使用安全的失败摘要；诊断明细中的错误文本由主进程截断并清洗后提供。
@@ -269,6 +295,48 @@ export type GatewayFailureDiagnosticsPage = {
   page: number;
   pageSize: number;
 };
+
+export type GatewayLogCleanupScope = "file" | "request" | "both";
+export type GatewayLogCleanupOutcome = "" | "ok" | "client-aborted" | "timeout" | "error";
+export type GatewayLogCleanupFilter = {
+  scope: GatewayLogCleanupScope;
+  vendorId?: string;
+  outcome?: GatewayLogCleanupOutcome;
+  periodStart?: string;
+  periodEnd?: string;
+};
+export type GatewayLogCleanupResult = {
+  deletedFileEntries: number;
+  deletedRequestEntries: number;
+  deletedFiles: number;
+};
+
+export type GatewayLogCleanupEntry = {
+  id: string;
+  source: "file" | "request";
+  createdAt: string;
+  vendorId?: string;
+  providerId?: AiProviderId;
+  outcome?: GatewayLogCleanupOutcome;
+  upstreamStatus?: number;
+  durationMs?: number;
+  errorCode?: string;
+  errorMessage?: string;
+  method?: string;
+  path?: string;
+  event?: string;
+  level?: "info" | "warn" | "error";
+  fileName?: string;
+};
+
+export type GatewayLogCleanupPage = {
+  items: GatewayLogCleanupEntry[];
+  total: number;
+  page: number;
+  pageSize: number;
+};
+
+export type GatewayLogCleanupSelection = Pick<GatewayLogCleanupEntry, "id" | "source">;
 
 export type GatewayFailureOutcomeFilter = "" | "error" | "timeout";
 

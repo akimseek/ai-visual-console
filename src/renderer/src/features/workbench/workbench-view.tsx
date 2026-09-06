@@ -8,6 +8,7 @@ import { formatGatewayFailure, formatGatewayUsageSummary, useWorkbenchUsage } fr
 import type { TabVendorSwitch } from "../vendors/use-tab-vendors";
 import { GatewayFailureDialog } from "./gateway-failure-dialog";
 import { useVendorData } from "../vendors/vendor-context";
+import { GatewayUsageDialog } from "./gateway-usage-dialog";
 
 type StatusText = { label: string; title: string };
 
@@ -37,6 +38,7 @@ export function SidebarWorkbench({
   const { health, loading: healthLoading, error: healthError, lastUpdatedAt: healthUpdatedAt, refresh: refreshHealth } = useWorkbenchHealth();
   const { summary: usageSummary, recentFailures, loading: usageLoading, error: usageError, lastUpdatedAt: usageUpdatedAt, refresh: refreshUsage } = useWorkbenchUsage();
   const [failureDialogOpen, setFailureDialogOpen] = useState(false);
+  const [usageDialogOpen, setUsageDialogOpen] = useState(false);
   const healthByVendorId = new Map(health.map((item) => [item.vendorId, item]));
   const activeVendor = activeVendorId ? vendors.find((vendor) => vendor.id === activeVendorId) : undefined;
   const activeHealth = activeVendorId ? healthByVendorId.get(activeVendorId) || activeVendor?.gatewayHealth : undefined;
@@ -92,7 +94,7 @@ export function SidebarWorkbench({
           <MetricCard icon={Database} label="会话用量" value={tokenUsage.label} valueTitle={tokenUsage.title} detail={`上下文：${contextUsage.label}`} detailTitle={contextUsage.title} numeric />
           {lastVendorSwitch && <VendorSwitchCard vendors={vendors} value={lastVendorSwitch} />}
           {rateLimitWindows.length > 0 && <RateLimitCard windows={rateLimitWindows} />}
-          <GatewayUsageCard summary={usageSummary} />
+          <GatewayUsageCard summary={usageSummary} onOpenDetails={() => setUsageDialogOpen(true)} />
           {recentFailures.length > 0 && <GatewayFailureCard vendors={vendors} failures={recentFailures} onOpenDetails={() => setFailureDialogOpen(true)} />}
         </div>
 
@@ -100,6 +102,7 @@ export function SidebarWorkbench({
         {usageError && <p className="sidebar-workbench-error" role="status">{usageError}</p>}
       </div>
       {failureDialogOpen && <GatewayFailureDialog onClose={() => setFailureDialogOpen(false)} />}
+      {usageDialogOpen && <GatewayUsageDialog onClose={() => setUsageDialogOpen(false)} />}
     </section>
   );
 }
@@ -169,7 +172,7 @@ function VendorSwitchCard({ vendors, value }: { vendors: ApiVendor[]; value: Tab
   return <MetricCard icon={Waypoints} label="最近路由变更" value={formatted.reason} detail={formatted.detail} className="sidebar-workbench-vendor-switch" />;
 }
 
-function GatewayUsageCard({ summary }: { summary: GatewayUsageSummary | null }) {
+function GatewayUsageCard({ summary, onOpenDetails }: { summary: GatewayUsageSummary | null; onOpenDetails: () => void }) {
   const metrics = summary ? formatGatewayUsageSummary(summary) : null;
   return (
     <article className="sidebar-workbench-metric sidebar-workbench-gateway-usage" aria-label="今日 Gateway 用量">
@@ -182,6 +185,10 @@ function GatewayUsageCard({ summary }: { summary: GatewayUsageSummary | null }) 
           <UsageMetric label="故障切换" value={metrics?.switchedCount || "-"} />
           <UsageMetric label="Token / 费用" value={metrics ? `${metrics.totalTokens} / ${metrics.cost}` : "-"} />
         </dl>
+        <button type="button" className="sidebar-workbench-detail-link" onClick={onOpenDetails}>
+          查看用量明细
+          <ChevronRight aria-hidden="true" size={14} strokeWidth={2} />
+        </button>
       </div>
     </article>
   );

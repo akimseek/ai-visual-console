@@ -16,6 +16,7 @@ type GatewayPortOverlayProps = {
   onCircuitDurationChange: (value: string) => void;
   onClose: () => void;
   onSave: () => void;
+  onOpenGatewayLogCleanup: () => void;
 };
 
 /** 网关设置弹窗的展示边界，配置读取和保存动作由现有 Hook 负责。 */
@@ -33,7 +34,8 @@ export function GatewayPortOverlay({
   onCircuitFailureThresholdChange,
   onCircuitDurationChange,
   onClose,
-  onSave
+  onSave,
+  onOpenGatewayLogCleanup
 }: GatewayPortOverlayProps) {
   if (!open) return null;
   return (
@@ -51,6 +53,7 @@ export function GatewayPortOverlay({
       onCircuitDurationChange={onCircuitDurationChange}
       onClose={onClose}
       onSave={onSave}
+      onOpenGatewayLogCleanup={onOpenGatewayLogCleanup}
     />
   );
 }

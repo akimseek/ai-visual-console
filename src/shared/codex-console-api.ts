@@ -19,11 +19,16 @@ import type {
   CompressionPromptInput,
   GatewayFailureDiagnosticsPage,
   GatewayFailureOutcomeFilter,
+  GatewayLogCleanupFilter,
+  GatewayLogCleanupPage,
+  GatewayLogCleanupResult,
+  GatewayLogCleanupSelection,
   GatewayPortStatus,
   GatewayPortUpdateResult,
   GatewayRecentFailure,
   GatewayRequestRecordedEvent,
   GatewayUsageSummary,
+  GatewayUsageReport,
   GatewayVendorHealth,
   GatewayVendorSwitchEvent,
   InstalledSkill,
@@ -72,7 +77,10 @@ export type CodexConsoleApi = {
   refreshVendorBalances: () => Promise<VendorBalanceBatchResult>;
   getGatewayVendorHealth: () => Promise<GatewayVendorHealth[]>;
   resetGatewayVendorHealth: (vendorId?: string) => Promise<void>;
+  queryGatewayLogs: (filter: GatewayLogCleanupFilter, page?: number, pageSize?: number) => Promise<GatewayLogCleanupPage>;
+  deleteGatewayLogEntries: (selections: GatewayLogCleanupSelection[]) => Promise<GatewayLogCleanupResult>;
   getGatewayUsageSummary: (periodStart: string, periodEnd: string) => Promise<GatewayUsageSummary>;
+  getGatewayUsageReport: (periodStart: string, periodEnd: string) => Promise<GatewayUsageReport>;
   getGatewayRecentFailures: () => Promise<GatewayRecentFailure[]>;
   getGatewayFailureDiagnostics: (
     page?: number,
@@ -127,7 +135,6 @@ export type CodexConsoleApi = {
   copyText: (text: string) => Promise<void>;
   readText: () => Promise<string>;
   logPerformance: (label: string, durationMs: number, status?: string) => Promise<void>;
-  exportDiagnostics: () => Promise<{ filePath: string }>;
   onTerminalData: (handler: (terminalId: string, data: string) => void) => () => void;
   onTerminalExit: (handler: (terminalId: string, exitCode: number) => void) => () => void;
   onGatewayVendorSwitched: (handler: (event: GatewayVendorSwitchEvent) => void) => () => void;

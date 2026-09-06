@@ -2,10 +2,15 @@ import type { IpcRenderer } from "electron";
 import type {
   GatewayFailureDiagnosticsPage,
   GatewayFailureOutcomeFilter,
+  GatewayLogCleanupFilter,
+  GatewayLogCleanupPage,
+  GatewayLogCleanupResult,
+  GatewayLogCleanupSelection,
   GatewayPortStatus,
   GatewayPortUpdateResult,
   GatewayRecentFailure,
   GatewayRequestRecordedEvent,
+  GatewayUsageReport,
   GatewayUsageSummary,
   GatewayVendorHealth,
   GatewayVendorSwitchEvent
@@ -32,8 +37,14 @@ export function createGatewayApi(ipc: IpcRenderer) {
     getGatewayVendorHealth: () => invoke<GatewayVendorHealth[]>(ipc, "gateway:get-vendor-health"),
     resetGatewayVendorHealth: (vendorId?: string) =>
       invoke<void>(ipc, "gateway:reset-vendor-health", vendorId),
+    queryGatewayLogs: (filter: GatewayLogCleanupFilter, page?: number, pageSize?: number) =>
+      invoke<GatewayLogCleanupPage>(ipc, "gateway:query-logs", filter, page, pageSize),
+    deleteGatewayLogEntries: (selections: GatewayLogCleanupSelection[]) =>
+      invoke<GatewayLogCleanupResult>(ipc, "gateway:delete-log-entries", selections),
     getGatewayUsageSummary: (periodStart: string, periodEnd: string) =>
       invoke<GatewayUsageSummary>(ipc, "gateway:get-usage-summary", periodStart, periodEnd),
+    getGatewayUsageReport: (periodStart: string, periodEnd: string) =>
+      invoke<GatewayUsageReport>(ipc, "gateway:get-usage-report", periodStart, periodEnd),
     getGatewayRecentFailures: () => invoke<GatewayRecentFailure[]>(ipc, "gateway:get-recent-failures"),
     getGatewayFailureDiagnostics: (
       page?: number,

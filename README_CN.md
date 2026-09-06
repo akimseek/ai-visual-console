@@ -3,7 +3,7 @@
   <h1>AI 可视化控制台</h1>
   <p>将多平台 AI CLI、会话资产、终端环境与本地路由，收束到一个连续的研发工作台。</p>
   <p><strong>Codex · Claude Code · Gemini · Qoder CN</strong></p>
-  <p><a href="README.md">首页</a> · <a href="README_EN.md">English</a></p>
+  <p><a href="README.md">English</a> · 简体中文</p>
 </div>
 
 <p align="center">

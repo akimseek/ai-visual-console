@@ -1,9 +1,11 @@
 import { useEffect, useRef, useState } from "react";
 import type { ChangeEvent, PointerEvent, ReactNode } from "react";
-import { ChevronLeft, ChevronRight, Pencil, Plus, RefreshCw, Trash2, X } from "lucide-react";
+import { Pencil, Plus, RefreshCw, Trash2, X } from "lucide-react";
 import type { AiProviderId, AiTarget, ApiVendor, ApiVendorConfigTemplate, VendorBalanceQueryConfig, VendorModelQueryConfig } from "../../types";
 import { formatDate } from "../../lib/format";
+import { PAGINATION_DEFAULT_PAGE_SIZE } from "../../../../shared/constants";
 import { IconButton } from "../../components/icon-button";
+import { Pagination } from "../../components/pagination";
 import {
   buildVendorDraft,
   renderVendorConfigPreview,
@@ -19,7 +21,7 @@ import {
 
 // 供应商管理弹框：列表/表单两种模式，表单内按厂商展示配置文件预览并写回模板。从 App.tsx 抽出为独立组件。
 // 供应商列表默认每页展示 10 条，避免供应商数量较多时一次性撑高弹框。
-const VENDOR_PAGE_SIZE = 10;
+const VENDOR_PAGE_SIZE = PAGINATION_DEFAULT_PAGE_SIZE;
 export function VendorManagerDialog({
   vendors,
   draft,
@@ -71,6 +73,7 @@ export function VendorManagerDialog({
 }) {
   const [deleteCandidate, setDeleteCandidate] = useState<ApiVendor | null>(null);
   const [currentPage, setCurrentPage] = useState(1);
+  const [pageSize, setPageSize] = useState(VENDOR_PAGE_SIZE);
   const [columnWidths, setColumnWidths] = useState<number[]>(() => calculateVendorColumnWidths([], 0));
   const [modelQueryText, setModelQueryText] = useState("");
   const [balanceQueryText, setBalanceQueryText] = useState("");
@@ -79,7 +82,7 @@ export function VendorManagerDialog({
   const tableRef = useRef<HTMLTableElement | null>(null);
   const resizeRef = useRef<{ index: number; startX: number; startWidths: number[] } | null>(null);
   const manualResizeRef = useRef(false);
-  const totalPages = Math.max(1, Math.ceil(vendors.length / VENDOR_PAGE_SIZE));
+  const totalPages = Math.max(1, Math.ceil(vendors.length / pageSize));
 
   useEffect(() => {
     if (mode === "list") setCurrentPage(1);
@@ -135,8 +138,8 @@ export function VendorManagerDialog({
   const visibleConfigs = visibleVendorConfigs(draft);
   const deleteCandidateExists = deleteCandidate && vendors.some((vendor) => vendor.id === deleteCandidate.id);
   const pagedVendors = vendors.slice(
-    (currentPage - 1) * VENDOR_PAGE_SIZE,
-    currentPage * VENDOR_PAGE_SIZE
+    (currentPage - 1) * pageSize,
+    currentPage * pageSize
   );
 
   // 记录拖拽起点，按像素调整相邻两列，并保留两列的最小/最大约束。
@@ -322,29 +325,17 @@ export function VendorManagerDialog({
               )}
             </div>
             {vendors.length > 0 && (
-              <nav className="vendor-pagination" aria-label="供应商分页">
-                <span>第 {currentPage} / {totalPages} 页，共 {vendors.length} 条</span>
-                <div>
-                  <button
-                    type="button"
-                    className="secondary"
-                    onClick={() => setCurrentPage((page) => Math.max(1, page - 1))}
-                    disabled={currentPage <= 1}
-                  >
-                    <ChevronLeft aria-hidden="true" size={15} strokeWidth={2} />
-                    上一页
-                  </button>
-                  <button
-                    type="button"
-                    className="secondary"
-                    onClick={() => setCurrentPage((page) => Math.min(totalPages, page + 1))}
-                    disabled={currentPage >= totalPages}
-                  >
-                    <ChevronRight aria-hidden="true" size={15} strokeWidth={2} />
-                    下一页
-                  </button>
-                </div>
-              </nav>
+              <Pagination
+                total={vendors.length}
+                page={currentPage}
+                pageSize={pageSize}
+                onPageChange={setCurrentPage}
+                onPageSizeChange={(nextPageSize) => {
+                  setPageSize(nextPageSize);
+                  setCurrentPage(1);
+                }}
+                label="供应商分页"
+              />
             )}
             {deleteCandidateExists && (
               <div className="vendor-confirm-overlay" role="presentation">

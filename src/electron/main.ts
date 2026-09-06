@@ -1,5 +1,4 @@
-import { app, BrowserWindow, ipcMain, Menu, session, shell } from "electron";
-import fs from "node:fs/promises";
+import { app, BrowserWindow, Menu, session, shell } from "electron";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { setSessionCacheRoot, setSessionDatabasePath } from "./providers/codex/codex-store";
@@ -10,14 +9,10 @@ import {
 import {
   setVendorDatabasePath
 } from "./vendors/vendor-manager";
-import { getVendorGatewayPort, stopVendorGateway } from "./gateway/vendor-gateway";
-import { flushGatewayLogs, getRecentGatewayEvents, getRecentGatewayRequests, setGatewayLogPath } from "./gateway/gateway-log";
-import {
-  getTerminalSessionCount,
-  stopAllTerminalSessions
-} from "./terminal/terminal-sessions";
+import { stopVendorGateway } from "./gateway/vendor-gateway";
+import { flushGatewayLogs, setGatewayLogPath } from "./gateway/gateway-log";
+import { stopAllTerminalSessions } from "./terminal/terminal-sessions";
 import { setPerformanceLogPath, writePerformanceLog } from "./core/performance";
-import { getAppDatabaseDiagnostics } from "./core/app-database";
 import { resolveRuntimeStorageRoot } from "./core/application-paths";
 import {
   setApplicationRuntimeRoot,
@@ -201,66 +196,33 @@ app.whenReady().then(() => {
   createWindow();
 });
 
+let shutdownPromise: Promise<void> | null = null;
+let shutdownComplete = false;
+
+async function shutdownApplication() {
+  if (!shutdownPromise) {
+    shutdownPromise = (async () => {
+      await stopAllTerminalSessions();
+      await stopVendorGateway();
+      await flushGatewayLogs().catch(() => undefined);
+    })();
+  }
+  await shutdownPromise;
+}
+
+app.on("before-quit", (event) => {
+  if (shutdownComplete) return;
+  event.preventDefault();
+  void shutdownApplication().then(() => {
+    shutdownComplete = true;
+    app.quit();
+  });
+});
+
 app.on("window-all-closed", () => {
-  stopAllTerminalSessions();
-  void stopVendorGateway();
   if (process.platform !== "darwin") app.quit();
 });
 
 app.on("activate", () => {
   if (BrowserWindow.getAllWindows().length === 0) createWindow();
 });
-
-async function exportDiagnosticsReport() {
-  const dataDir = getApplicationDataDir();
-  const logDir = getLogDir();
-  const databasePath = path.join(dataDir, "app.db");
-  // 先把内存环形缓冲中的网关日志落盘，再读取快照供诊断导出。
-  await flushGatewayLogs().catch(() => undefined);
-  const [database, databaseWal, performanceLog, appDatabase] = await Promise.all([
-    fileSize(databasePath),
-    fileSize(`${databasePath}-wal`),
-    fileSize(path.join(logDir, "performance.log")),
-    getAppDatabaseDiagnostics().catch(() => null)
-  ]);
-  const generatedAt = new Date().toISOString();
-  const payload = {
-    generatedAt,
-    app: {
-      name: app.getName(),
-      version: app.getVersion(),
-      packaged: app.isPackaged,
-      platform: process.platform,
-      arch: process.arch,
-      electron: process.versions.electron,
-      node: process.versions.node
-    },
-    storage: {
-      applicationDataDir: dataDir,
-      databaseBytes: database,
-      databaseWalBytes: databaseWal,
-      performanceLogBytes: performanceLog
-    },
-    database: appDatabase,
-    gateway: {
-      activePort: getVendorGatewayPort(),
-      recentRequests: getRecentGatewayRequests(20),
-      recentEvents: getRecentGatewayEvents(20)
-    },
-    runtime: {
-      activeTerminalSessions: getTerminalSessionCount()
-    },
-    privacy: "未包含 API Key、供应商配置内容、会话正文或终端输出。"
-  };
-  const fileName = `diagnostics-${generatedAt.replace(/[:.]/g, "-")}.json`;
-  const filePath = path.join(logDir, fileName);
-  await fs.mkdir(logDir, { recursive: true });
-  await fs.writeFile(filePath, `${JSON.stringify(payload, null, 2)}\n`, "utf8");
-  return { filePath };
-}
-
-async function fileSize(filePath: string) {
-  return (await fs.stat(filePath).catch(() => null))?.size || 0;
-}
-
-ipcMain.handle("diagnostics:export", () => exportDiagnosticsReport());

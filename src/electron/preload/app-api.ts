@@ -39,7 +39,6 @@ export function createAppApi(ipc: IpcRenderer) {
     deleteWorkspacePreset: (presetId: string) =>
       invoke<{ deleted: boolean }>(ipc, "workspace:delete-preset", presetId),
     logPerformance: (label: string, durationMs: number, status?: string) =>
-      invoke<void>(ipc, "performance:log", label, durationMs, status),
-    exportDiagnostics: () => invoke<{ filePath: string }>(ipc, "diagnostics:export")
+      invoke<void>(ipc, "performance:log", label, durationMs, status)
   };
 }

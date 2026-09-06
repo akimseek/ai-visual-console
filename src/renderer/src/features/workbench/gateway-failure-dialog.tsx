@@ -3,10 +3,12 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import type { ApiVendor, GatewayFailureDiagnostic } from "../../types";
 import { Dialog } from "../../components/dialog";
 import { IconButton } from "../../components/icon-button";
+import { Pagination } from "../../components/pagination";
 import { captureError } from "../../hooks/error-utils";
 import type { GatewayFailureOutcomeFilter } from "../../types";
 import { formatGatewayFailure } from "./use-workbench-usage";
 import { useVendorData } from "../vendors/vendor-context";
+import { PAGINATION_DEFAULT_PAGE_SIZE } from "../../../../shared/constants";
 
 export type FailureDatePreset = "all" | "today" | "7d" | "30d" | "custom";
 
@@ -39,7 +41,7 @@ export function GatewayFailureDialog({ onClose }: { onClose: () => void }) {
   const [datePreset, setDatePreset] = useState<FailureDatePreset>("all");
   const [customFrom, setCustomFrom] = useState("");
   const [customTo, setCustomTo] = useState("");
-  const pageSize = 10;
+  const [pageSize, setPageSize] = useState(PAGINATION_DEFAULT_PAGE_SIZE);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const dateRange = useMemo(() => getGatewayFailureDateRange(datePreset, customFrom, customTo), [datePreset, customFrom, customTo]);
@@ -63,7 +65,7 @@ export function GatewayFailureDialog({ onClose }: { onClose: () => void }) {
     } finally {
       setLoading(false);
     }
-  }, [page, vendorFilter, outcomeFilter, dateRange]);
+  }, [page, pageSize, vendorFilter, outcomeFilter, dateRange]);
 
   function updateVendorFilter(value: string) {
     setVendorFilter(value);
@@ -121,13 +123,19 @@ export function GatewayFailureDialog({ onClose }: { onClose: () => void }) {
           </table>
         </div>
       )}
-      {!loading && !error && total > 0 && <div className="gateway-failure-dialog-pagination">
-        <span>第 {page} / {Math.ceil(total / pageSize)} 页，共 {total} 条</span>
-        <div>
-          <button type="button" onClick={() => setPage((current) => Math.max(1, current - 1))} disabled={page <= 1}>上一页</button>
-          <button type="button" onClick={() => setPage((current) => Math.min(Math.ceil(total / pageSize), current + 1))} disabled={page >= Math.ceil(total / pageSize)}>下一页</button>
-        </div>
-      </div>}
+      {!loading && !error && total > 0 && (
+        <Pagination
+          total={total}
+          page={page}
+          pageSize={pageSize}
+          onPageChange={setPage}
+          onPageSizeChange={(nextPageSize) => {
+            setPageSize(nextPageSize);
+            setPage(1);
+          }}
+          label="Gateway 异常分页"
+        />
+      )}
     </Dialog>
   );
 }

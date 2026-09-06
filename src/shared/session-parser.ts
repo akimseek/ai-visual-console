@@ -302,7 +302,9 @@ function isSyntheticUserBlock(text: string) {
     normalized.startsWith("<environment_context>") ||
     normalized.startsWith("<skill>") ||
     normalized.startsWith("<user_instructions>") ||
-    normalized.startsWith("<developer_instructions>")
+    normalized.startsWith("<developer_instructions>") ||
+    normalized.startsWith("You are `/root`, the primary agent in a team of agents collaborating to fulfill the user's goals.") ||
+    (normalized.includes("<multi_agent_mode>") && normalized.includes("At the start of your turn, you are the active agent."))
   );
 }
 

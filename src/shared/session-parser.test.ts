@@ -87,6 +87,25 @@ describe("parseSessionContent", () => {
     expect(session!.title).toBe("真实问题");
   });
 
+  it("过滤多代理初始化块但保留后续真实对话", () => {
+    const content = jsonl(
+      { type: "session_meta", payload: { id: VALID_ID } },
+      {
+        type: "response_item",
+        payload: {
+          type: "message",
+          role: "developer",
+          content: [{ input_text: "You are `/root`, the primary agent in a team of agents collaborating to fulfill the user's goals.\n\n<multi_agent_mode>" }]
+        }
+      },
+      { type: "event_msg", payload: { type: "user_message", message: "你好" } }
+    );
+    const session = parseSessionContent(FILE, content);
+    expect(session!.messageCount).toBe(1);
+    expect(session!.title).toBe("你好");
+    expect(session!.preview).toEqual([{ role: "user", text: "你好" }]);
+  });
+
   it("折叠连续重复消息", () => {
     const content = jsonl(
       { type: "session_meta", payload: { id: VALID_ID } },

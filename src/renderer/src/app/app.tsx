@@ -53,6 +53,7 @@ import { useAppCommands } from "../hooks/use-app-commands";
 import { ProviderStatusOverlay } from './provider-status-overlay'
 import { CliInstallerOverlay } from './cli-installer-overlay'
 import { GatewayPortOverlay } from './gateway-port-overlay'
+import { GatewayLogCleanupDialog, formatGatewayCleanupResult } from "../features/settings/gateway-log-cleanup-dialog";
 import { SessionOverlays } from './session-overlays'
 import { VendorManagerOverlay } from './vendor-manager-overlay'
 import { CompressionPromptOverlay } from './compression-prompt-overlay'
@@ -70,6 +71,7 @@ export function App() {
   const [usageDetailsOpen, setUsageDetailsOpen] = useState(false);
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
   const [workbenchOpen, setWorkbenchOpen] = useState(false);
+  const [gatewayLogCleanupOpen, setGatewayLogCleanupOpen] = useState(false);
   const { openAppMenu, setOpenAppMenu } = useAppMenuState();
   const usageDetailsRef = useRef<HTMLDivElement | null>(null);
 
@@ -605,15 +607,6 @@ export function App() {
     sessionTabs.handleTerminalExit(tabKey, exitCode);
   }
 
-  async function exportDiagnostics() {
-    try {
-      const result = await window.codexConsole.exportDiagnostics();
-      setNotice(`诊断信息已导出：${result.filePath}`);
-    } catch (diagnosticError: any) {
-      setNotice(diagnosticError?.message || "导出诊断信息失败。", undefined, "error");
-    }
-  }
-
   async function exportActiveSession(format: SessionExportFormat) {
     if (!activeSession || !activeTab) return;
 
@@ -655,8 +648,11 @@ export function App() {
       manageCompressionPrompts: () => void openCompressionManager(),
       openSystemTerminal: openNewSystemTerminal,
       installCli: openCliInstallerDialog,
-      exportDiagnostics: () => void exportDiagnostics(),
       openLogDirectory: () => void executeAppCommand("openLogDir"),
+      openGatewayLogCleanup: () => {
+        setOpenAppMenu("");
+        setGatewayLogCleanupOpen(true);
+      },
       showAbout: () => void executeAppCommand("about")
     }
   });
@@ -927,7 +923,19 @@ export function App() {
         onCircuitDurationChange={gatewayPort.setCircuitDurationDraft}
         onClose={() => gatewayPort.setOpen(false)}
         onSave={() => void gatewayPort.saveGatewayPort()}
+        onOpenGatewayLogCleanup={() => {
+          setGatewayLogCleanupOpen(true);
+        }}
       />
+      {gatewayLogCleanupOpen && (
+        <GatewayLogCleanupDialog
+          vendors={vendors}
+          onClose={() => setGatewayLogCleanupOpen(false)}
+          onDeleted={(result) => {
+            setNotice(formatGatewayCleanupResult(result));
+          }}
+        />
+      )}
       <SkillManagerOverlay
         open={skillManagerOpen}
         skills={skills}

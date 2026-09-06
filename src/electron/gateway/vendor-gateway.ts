@@ -12,11 +12,9 @@ import { logGatewayEvent, recordGatewayRequest } from "./gateway-log";
 import { chooseNextVendor, chooseVendor, hydrateGatewayVendorHealth, isCircuitOpen, recordGatewayVendorFailure, recordGatewayVendorSuccess } from "./gateway-resilience";
 import { recordGatewayRequest as persistGatewayRequest } from "./gateway-request-store";
 import { mergeGatewayUsage, parseGatewayUsage, parseUsageFromChunk } from "./gateway-usage";
+import { GATEWAY_ERROR_MESSAGES, GATEWAY_REQUEST_LIMITS } from "../../shared/constants";
 
-const MAX_REQUEST_BYTES = 32 * 1024 * 1024;
 const ROUTE_PREFIX = "/gateway";
-const UPSTREAM_TIMEOUT_MS = 10 * 60 * 1000;
-const RETRY_BUFFER_BYTES = 2 * 1024 * 1024;
 
 // 拼接某路由在指定 host 上的完整 URL。host 形如 http://127.0.0.1:port 或 WSL 探测到的宿主地址。
 export function buildRouteUrl(host: string, providerId: AiProviderId, routeId: string) {
@@ -215,7 +213,7 @@ function findRoute(pathname: string) {
 async function handleGatewayRequest(request: IncomingMessage, response: ServerResponse) {
   const startedAt = performance.now();
   const controller = new AbortController();
-  const timeoutSignal = AbortSignal.timeout(UPSTREAM_TIMEOUT_MS);
+  const timeoutSignal = AbortSignal.timeout(GATEWAY_REQUEST_LIMITS.upstreamTimeoutMs);
   let bytesIn = 0;
   let bytesOut = 0;
   let outcome: "ok" | "client-aborted" | "timeout" | "error" = "error";
@@ -247,7 +245,7 @@ async function handleGatewayRequest(request: IncomingMessage, response: ServerRe
     const parsed = new URL(request.url || "/", "http://127.0.0.1");
     const route = findRoute(parsed.pathname);
     if (!route) {
-      respondJson(response, 404, { error: "gateway route not found" });
+      respondJson(response, 404, { error: GATEWAY_ERROR_MESSAGES.routeNotFound });
       outcome = "ok";
       return;
     }
@@ -255,7 +253,7 @@ async function handleGatewayRequest(request: IncomingMessage, response: ServerRe
     providerId = route.providerId;
     routeWindow = route.window;
     if (!hasRouteToken(request, route.localToken)) {
-      respondJson(response, 401, { error: "gateway unauthorized" });
+      respondJson(response, 401, { error: GATEWAY_ERROR_MESSAGES.unauthorized });
       outcome = "ok";
       return;
     }
@@ -269,7 +267,7 @@ async function handleGatewayRequest(request: IncomingMessage, response: ServerRe
     const routeVendor = vendors.find((item) => item.id === route.vendorId && item.providerId === route.providerId);
     const vendor = chooseVendor(vendors, route.providerId, route.vendorId);
     if (!vendor || !vendor.apiKey) {
-      respondJson(response, 503, { error: "gateway vendor unavailable" });
+      respondJson(response, 503, { error: GATEWAY_ERROR_MESSAGES.vendorUnavailable });
       outcome = "ok";
       return;
     }
@@ -289,8 +287,8 @@ async function handleGatewayRequest(request: IncomingMessage, response: ServerRe
     const suffix = parsed.pathname.slice(routePrefix(route).length) || "/";
     const declaredLength = Number(request.headers["content-length"] || 0);
     let bufferedBody: Buffer | undefined;
-    if (hasBody && declaredLength > 0 && declaredLength <= RETRY_BUFFER_BYTES) {
-      bufferedBody = await readRequestBody(request, MAX_REQUEST_BYTES, (n) => { bytesIn += n; });
+    if (hasBody && declaredLength > 0 && declaredLength <= GATEWAY_REQUEST_LIMITS.retryBufferBytes) {
+      bufferedBody = await readRequestBody(request, GATEWAY_REQUEST_LIMITS.maxBodyBytes, (n) => { bytesIn += n; });
       try {
         const parsedBody = JSON.parse(bufferedBody.toString("utf8")) as Record<string, unknown>;
         model = typeof parsedBody.model === "string" ? parsedBody.model : undefined;
@@ -331,11 +329,11 @@ async function handleGatewayRequest(request: IncomingMessage, response: ServerRe
       if (!attemptVendor?.apiKey) break;
       const attemptUrl = joinUpstreamUrl(attemptVendor.apiBaseUrl, suffix, parsed.search);
       if (gatewayAddress && attemptUrl.startsWith(gatewayAddress)) {
-        throw new Error("供应商地址不能指向本地 Gateway。");
+        throw new Error(GATEWAY_ERROR_MESSAGES.localGatewayUpstream);
       }
       const attemptHeaders = buildUpstreamHeaders(request, attemptVendor);
       const body = bufferedBody ?? (hasBody
-        ? sizeGuardStream(Readable.toWeb(request) as ReadableStream<Uint8Array>, MAX_REQUEST_BYTES, controller, (n) => { bytesIn += n; })
+        ? sizeGuardStream(Readable.toWeb(request) as ReadableStream<Uint8Array>, GATEWAY_REQUEST_LIMITS.maxBodyBytes, controller, (n) => { bytesIn += n; })
         : undefined);
       try {
         upstream = await fetch(attemptUrl, {
@@ -380,7 +378,7 @@ async function handleGatewayRequest(request: IncomingMessage, response: ServerRe
       }
       break;
     }
-    if (!upstream) throw new Error("没有可用的供应商。");
+    if (!upstream) throw new Error(GATEWAY_ERROR_MESSAGES.noAvailableVendor);
     response.statusCode = upstream.status;
     upstream.headers.forEach((value, key) => {
       if (key === "content-length" || key === "transfer-encoding" || key === "connection") return;
@@ -400,7 +398,7 @@ async function handleGatewayRequest(request: IncomingMessage, response: ServerRe
       Readable.fromWeb(upstream.body as any),
       byteCountingTransform((n, chunk) => {
         bytesOut += n;
-        if (capturedBytes < 512 * 1024) {
+        if (capturedBytes < GATEWAY_REQUEST_LIMITS.responseCaptureBytes) {
           capturedChunks.push(chunk);
           capturedBytes += n;
         }
@@ -429,15 +427,15 @@ async function handleGatewayRequest(request: IncomingMessage, response: ServerRe
     if (error?.name === "TimeoutError") {
       outcome = "timeout";
       errorCode = "GATEWAY_TIMEOUT";
-      errorMessage = "上游响应超时。";
-      if (!response.headersSent) respondJson(response, 504, { error: "上游响应超时。" });
+      errorMessage = GATEWAY_ERROR_MESSAGES.upstreamTimeout;
+      if (!response.headersSent) respondJson(response, 504, { error: GATEWAY_ERROR_MESSAGES.upstreamTimeout });
       else response.destroy();
       return;
     }
     outcome = "error";
     errorCode = getGatewayErrorCode(error);
     errorMessage = getGatewayErrorMessage(error);
-    if (!response.headersSent) respondJson(response, 502, { error: error?.message || "gateway upstream request failed" });
+    if (!response.headersSent) respondJson(response, 502, { error: error?.message || GATEWAY_ERROR_MESSAGES.upstreamRequestFailed });
     else response.destroy();
   } finally {
     response.off("close", onClientClose);
@@ -495,7 +493,7 @@ function getGatewayErrorCode(error: unknown) {
 
 function getGatewayErrorMessage(error: unknown) {
   const message = error instanceof Error ? error.message : String(error);
-  return message.replace(/[\r\n\t]+/g, " ").trim().slice(0, 500) || "Gateway 请求失败。";
+  return message.replace(/[\r\n\t]+/g, " ").trim().slice(0, 500) || GATEWAY_ERROR_MESSAGES.genericFailure;
 }
 
 // 仅从错误响应中提取常见的 message 字段，避免把完整上游响应写入本地日志。

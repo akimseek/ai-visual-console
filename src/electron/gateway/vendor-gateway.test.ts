@@ -23,6 +23,57 @@ afterEach(async () => {
 });
 
 describe("vendor gateway", () => {
+  it("keeps request bodies isolated when routes receive concurrent requests", async () => {
+    const requests: Array<{ authorization: string; body: string }> = [];
+    const upstream = createServer((request, response) => {
+      const chunks: Buffer[] = [];
+      request.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
+      request.on("end", () => {
+        setTimeout(() => {
+          requests.push({
+            authorization: request.headers.authorization || "",
+            body: Buffer.concat(chunks).toString("utf8")
+          });
+          response.writeHead(200, { "content-type": "application/json" });
+          response.end("{\"ok\":true}");
+        }, 10);
+      });
+    });
+    servers.push(upstream);
+    await new Promise<void>((resolve) => upstream.listen(0, "127.0.0.1", () => resolve()));
+    const address = upstream.address();
+    if (!address || typeof address === "string") throw new Error("upstream did not start");
+    const apiBaseUrl = `http://127.0.0.1:${address.port}/v1`;
+    listApiVendorsMock.mockResolvedValue([
+      vendor("codex-route", "key-codex", apiBaseUrl, true, "codex"),
+      vendor("qoder-route", "key-qoder", apiBaseUrl, true, "qoder")
+    ]);
+
+    const codexRoute = await createVendorRoute("codex");
+    const qoderRoute = await createVendorRoute("qoder");
+    if (!codexRoute || !qoderRoute) throw new Error("routes were not created");
+    const [codexResponse, qoderResponse] = await Promise.all([
+      fetch(`${codexRoute.baseUrl}/v1/responses`, {
+        method: "POST",
+        headers: { authorization: `Bearer ${codexRoute.localToken}`, "content-type": "application/json" },
+        body: '{"prompt":"codex-only"}'
+      }),
+      fetch(`${qoderRoute.baseUrl}/v1/chat/completions`, {
+        method: "POST",
+        headers: { authorization: `Bearer ${qoderRoute.localToken}`, "content-type": "application/json" },
+        body: '{"prompt":"qoder-only"}'
+      })
+    ]);
+
+    expect(codexResponse.status).toBe(200);
+    expect(qoderResponse.status).toBe(200);
+    await Promise.all([codexResponse.text(), qoderResponse.text()]);
+    expect(requests).toEqual(expect.arrayContaining([
+      { authorization: "Bearer key-codex", body: '{"prompt":"codex-only"}' },
+      { authorization: "Bearer key-qoder", body: '{"prompt":"qoder-only"}' }
+    ]));
+  });
+
   it("从 JSON 或 SSE 错误响应提取受限的具体错误信息", () => {
     expect(extractGatewayResponseError('{"error":{"message":"模型不存在"}}')).toBe("模型不存在");
     expect(extractGatewayResponseError('data: {"error":{"message":"请求被限流"}}\n\ndata: [DONE]\n\n')).toBe("请求被限流");
@@ -230,10 +281,10 @@ describe("vendor gateway", () => {
   });
 });
 
-function vendor(id: string, apiKey: string, apiBaseUrl: string, enabled: boolean) {
+function vendor(id: string, apiKey: string, apiBaseUrl: string, enabled: boolean, providerId: "codex" | "qoder" = "codex") {
   return {
     id,
-    providerId: "codex" as const,
+    providerId,
     name: id,
     apiKey,
     apiBaseUrl,

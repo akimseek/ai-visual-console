@@ -88,6 +88,6 @@ export function useGatewayPortDialog({ setNotice }: { setNotice: SetNotice }) {
     error,
     busy,
     openGatewayPortDialog,
-    saveGatewayPort
+    saveGatewayPort,
   };
 }

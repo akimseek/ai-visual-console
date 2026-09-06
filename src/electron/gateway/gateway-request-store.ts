@@ -1,5 +1,7 @@
-import type { AiProviderId, GatewayFailureDiagnostic, GatewayFailureDiagnosticsPage, GatewayFailureOutcomeFilter, GatewayRecentFailure, GatewayUsage, GatewayUsageSummary } from "../types";
+import type { AiProviderId, GatewayFailureDiagnostic, GatewayFailureDiagnosticsPage, GatewayFailureOutcomeFilter, GatewayLogCleanupEntry, GatewayLogCleanupFilter, GatewayRecentFailure, GatewayUsage, GatewayUsageReport, GatewayUsageSummary } from "../types";
 import { readAppDatabase, updateAppDatabase } from "../core/app-database";
+import { aggregateGatewayUsage } from "./gateway-usage";
+import { PAGINATION_DEFAULT_PAGE_SIZE, PAGINATION_MAX_PAGE_SIZE } from "../../shared/constants";
 
 export type GatewayRequestRecord = {
   requestId: string;
@@ -90,6 +92,97 @@ export async function recordGatewayRequest(entry: GatewayRequestRecord): Promise
   }
 }
 
+export async function clearGatewayRequestLogs(filter: Omit<GatewayLogCleanupFilter, "scope"> = {}) {
+  await ensureSchema();
+  return updateAppDatabase((db) => {
+    const filters: string[] = [];
+    const params: string[] = [];
+    if (filter.vendorId?.trim()) {
+      filters.push("vendor_id = ?");
+      params.push(filter.vendorId.trim());
+    }
+    if (filter.outcome) {
+      filters.push("outcome = ?");
+      params.push(filter.outcome);
+    }
+    if (filter.periodStart) {
+      filters.push("created_at >= ?");
+      params.push(filter.periodStart);
+    }
+    if (filter.periodEnd) {
+      filters.push("created_at <= ?");
+      params.push(filter.periodEnd);
+    }
+    const where = filters.length > 0 ? ` WHERE ${filters.join(" AND ")}` : "";
+    return { deleted: db.prepare(`DELETE FROM gateway_request_logs${where}`).run(...params).changes };
+  });
+}
+
+export async function getGatewayRequestCleanupEntries(filter: Omit<GatewayLogCleanupFilter, "scope"> = {}): Promise<GatewayLogCleanupEntry[]> {
+  await ensureSchema();
+  return readAppDatabase((db) => {
+    const { where, params } = buildCleanupWhere(filter);
+    const rows = db.prepare(`
+      SELECT request_id, provider_id, vendor_id, method, path, upstream_status,
+        outcome, duration_ms, error_code, error_message, created_at
+      FROM gateway_request_logs
+      WHERE ${where}
+      ORDER BY created_at DESC
+    `).all(...params) as Array<Record<string, unknown>>;
+    return rows.map((row) => ({
+      id: String(row.request_id || ""),
+      source: "request" as const,
+      createdAt: String(row.created_at || ""),
+      vendorId: String(row.vendor_id || ""),
+      providerId: String(row.provider_id || "") as AiProviderId,
+      outcome: toGatewayLogOutcome(row.outcome),
+      upstreamStatus: typeof row.upstream_status === "number" ? row.upstream_status : undefined,
+      durationMs: typeof row.duration_ms === "number" ? row.duration_ms : undefined,
+      errorCode: typeof row.error_code === "string" ? row.error_code : undefined,
+      errorMessage: typeof row.error_message === "string" ? row.error_message : undefined,
+      method: typeof row.method === "string" ? row.method : undefined,
+      path: typeof row.path === "string" ? row.path : undefined
+    }));
+  });
+}
+
+export async function deleteGatewayRequestEntries(requestIds: string[]) {
+  const ids = [...new Set(requestIds.filter((id) => typeof id === "string" && id.trim()))];
+  if (ids.length === 0) return { deleted: 0 };
+  await ensureSchema();
+  return updateAppDatabase((db) => {
+    const placeholders = ids.map(() => "?").join(", ");
+    const result = db.prepare(`DELETE FROM gateway_request_logs WHERE request_id IN (${placeholders})`).run(...ids);
+    return { deleted: result.changes };
+  });
+}
+
+function buildCleanupWhere(filter: Omit<GatewayLogCleanupFilter, "scope">) {
+  const filters: string[] = [];
+  const params: string[] = [];
+  if (filter.vendorId?.trim()) {
+    filters.push("vendor_id = ?");
+    params.push(filter.vendorId.trim());
+  }
+  if (filter.outcome) {
+    filters.push("outcome = ?");
+    params.push(filter.outcome);
+  }
+  if (filter.periodStart) {
+    filters.push("created_at >= ?");
+    params.push(filter.periodStart);
+  }
+  if (filter.periodEnd) {
+    filters.push("created_at <= ?");
+    params.push(filter.periodEnd);
+  }
+  return { where: filters.length > 0 ? filters.join(" AND ") : "1 = 1", params };
+}
+
+function toGatewayLogOutcome(value: unknown) {
+  return value === "ok" || value === "client-aborted" || value === "timeout" || value === "error" ? value : undefined;
+}
+
 export async function getGatewayUsageSummary(periodStart: string, periodEnd: string): Promise<GatewayUsageSummary> {
   await ensureSchema();
   return readAppDatabase((db) => {
@@ -97,7 +190,8 @@ export async function getGatewayUsageSummary(periodStart: string, periodEnd: str
       SELECT COUNT(*) AS request_count,
         SUM(CASE WHEN outcome = 'ok' THEN 1 ELSE 0 END) AS success_count,
         SUM(CASE WHEN outcome <> 'ok' THEN 1 ELSE 0 END) AS failure_count,
-        SUM(switched) AS switched_count
+        SUM(switched) AS switched_count,
+        SUM(retry_count) AS retry_count
       FROM gateway_request_logs WHERE created_at >= ? AND created_at <= ?
     `).get(periodStart, periodEnd) as Record<string, unknown>;
     const usageRows = db.prepare("SELECT usage_json FROM gateway_request_logs WHERE created_at >= ? AND created_at <= ? AND usage_json IS NOT NULL").all(periodStart, periodEnd) as Array<{ usage_json: string }>;
@@ -118,10 +212,47 @@ export async function getGatewayUsageSummary(periodStart: string, periodEnd: str
       successCount: Number(row?.success_count || 0),
       failureCount: Number(row?.failure_count || 0),
       switchedCount: Number(row?.switched_count || 0),
+      retryCount: Number(row?.retry_count || 0),
       ...usage,
       periodStart,
       periodEnd
     };
+  });
+}
+
+export async function getGatewayUsageReport(periodStart: string, periodEnd: string): Promise<GatewayUsageReport> {
+  await ensureSchema();
+  return readAppDatabase((db) => {
+    const filters: string[] = [];
+    const params: string[] = [];
+    if (periodStart) {
+      filters.push("l.created_at >= ?");
+      params.push(periodStart);
+    }
+    if (periodEnd) {
+      filters.push("l.created_at <= ?");
+      params.push(periodEnd);
+    }
+    const whereClause = filters.length > 0 ? `WHERE ${filters.join(" AND ")}` : "";
+    const rows = db.prepare(`
+      SELECT l.vendor_id, COALESCE(v.name, '已删除供应商') AS vendor_name,
+        l.provider_id, l.model, l.outcome, l.duration_ms, l.retry_count, l.switched, l.usage_json
+      FROM gateway_request_logs l
+      LEFT JOIN api_vendors v ON v.id = l.vendor_id
+      ${whereClause}
+      ORDER BY l.created_at DESC
+    `).all(...params) as Array<Record<string, unknown>>;
+    return aggregateGatewayUsage(rows.map((row) => ({
+      vendorId: String(row.vendor_id || ""),
+      vendorName: String(row.vendor_name || "已删除供应商"),
+      providerId: String(row.provider_id || "codex") as AiProviderId,
+      model: typeof row.model === "string" ? row.model : undefined,
+      outcome: row.outcome === "ok" || row.outcome === "client-aborted" || row.outcome === "timeout" ? row.outcome : "error",
+      durationMs: typeof row.duration_ms === "number" ? row.duration_ms : 0,
+      retryCount: typeof row.retry_count === "number" ? row.retry_count : 0,
+      switched: row.switched === 1,
+      usageJson: typeof row.usage_json === "string" ? row.usage_json : null
+    })), periodStart, periodEnd);
   });
 }
 
@@ -135,10 +266,10 @@ export async function getGatewayFailureDiagnostics(): Promise<GatewayFailureDiag
   return listGatewayFailureDiagnostics(3);
 }
 
-export async function getGatewayFailureDiagnosticsPage(page = 1, pageSize = 10, vendorId = "", outcome: GatewayFailureOutcomeFilter = "", periodStart = "", periodEnd = ""): Promise<GatewayFailureDiagnosticsPage> {
+export async function getGatewayFailureDiagnosticsPage(page = 1, pageSize = PAGINATION_DEFAULT_PAGE_SIZE, vendorId = "", outcome: GatewayFailureOutcomeFilter = "", periodStart = "", periodEnd = ""): Promise<GatewayFailureDiagnosticsPage> {
   await ensureSchema();
   const safePage = Math.max(1, Math.floor(page));
-  const safePageSize = Math.min(50, Math.max(1, Math.floor(pageSize)));
+  const safePageSize = Math.min(PAGINATION_MAX_PAGE_SIZE, Math.max(1, Math.floor(pageSize)));
   return readAppDatabase((db) => {
     const filters = ["outcome IN ('error', 'timeout')"];
     const filterParams: string[] = [];

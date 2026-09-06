@@ -63,8 +63,17 @@ export type {
   ,GatewayVendorHealthStatus
   ,GatewayUsage
   ,GatewayUsageSummary
+  ,GatewayUsageDimension
+  ,GatewayUsageReport
   ,GatewayRecentFailure
   ,GatewayFailureDiagnostic
   ,GatewayFailureDiagnosticsPage
   ,GatewayFailureOutcomeFilter
+  ,GatewayLogCleanupScope
+  ,GatewayLogCleanupOutcome
+  ,GatewayLogCleanupFilter
+  ,GatewayLogCleanupResult
+  ,GatewayLogCleanupPage
+  ,GatewayLogCleanupEntry
+  ,GatewayLogCleanupSelection
 } from "../shared/types";

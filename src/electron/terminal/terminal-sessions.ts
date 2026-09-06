@@ -32,6 +32,7 @@ type TerminalSession = {
   outputTimer?: NodeJS.Timeout;
   vendorRouteId?: string;
   resumeKey?: string;
+  exitPromise: Promise<void>;
 };
 
 type TerminalCommand = {
@@ -143,13 +144,19 @@ async function startPtySession(
     env: buildTerminalEnvironment(command.env)
   });
 
+  let resolveExit: () => void = () => undefined;
+  const exitPromise = new Promise<void>((resolve) => {
+    resolveExit = resolve;
+  });
+
   const session: TerminalSession = {
     id: terminalId,
     pty: child,
     window,
     outputChunks: [],
     vendorRouteId,
-    resumeKey
+    resumeKey,
+    exitPromise
   };
   sessions.set(terminalId, session);
   if (resumeKey) {
@@ -161,6 +168,7 @@ async function startPtySession(
     queueTerminalOutput(session, data);
   });
   child.onExit(({ exitCode }) => {
+    resolveExit();
     flushTerminalOutput(session);
     sessions.delete(terminalId);
     if (session.resumeKey) pendingResumeKeys.delete(session.resumeKey);
@@ -313,8 +321,9 @@ function flushTerminalOutput(session: TerminalSession) {
   sendToWindow(session.window, "terminal:data", session.id, data);
 }
 
-export function stopAllTerminalSessions() {
-  for (const session of sessions.values()) {
+export async function stopAllTerminalSessions() {
+  const activeSessions = [...sessions.values()];
+  for (const session of activeSessions) {
     try {
       if (session.outputTimer) clearTimeout(session.outputTimer);
       session.outputTimer = undefined;
@@ -328,6 +337,10 @@ export function stopAllTerminalSessions() {
   sessions.clear();
   pendingResumeKeys.clear();
   activeResumeKeys.clear();
+  await Promise.race([
+    Promise.all(activeSessions.map((session) => session.exitPromise)),
+    new Promise<void>((resolve) => setTimeout(resolve, 3_000))
+  ]);
 }
 
 export function getTerminalSessionCount() {

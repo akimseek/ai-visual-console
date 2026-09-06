@@ -13,7 +13,7 @@ vi.mock("../core/app-database", () => ({
   updateAppDatabase: mocks.updateAppDatabase
 }));
 
-import { getGatewayFailureDiagnosticsPage, getRecentGatewayFailures } from "./gateway-request-store";
+import { clearGatewayRequestLogs, deleteGatewayRequestEntries, getGatewayFailureDiagnosticsPage, getGatewayRequestCleanupEntries, getRecentGatewayFailures } from "./gateway-request-store";
 
 describe("recent gateway failures", () => {
   beforeEach(() => {
@@ -65,5 +65,62 @@ describe("recent gateway failures", () => {
     await getGatewayFailureDiagnosticsPage(1, 10, "", "", "2026-09-01T00:00:00.000Z", "2026-09-05T23:59:59.999Z");
     expect(mocks.prepare).toHaveBeenNthCalledWith(1, expect.stringContaining("created_at >= ?"));
     expect(mocks.prepare).toHaveBeenNthCalledWith(1, expect.stringContaining("created_at <= ?"));
+  });
+
+  it("deletes request records without touching vendor health", async () => {
+    const run = vi.fn(() => ({ changes: 4, lastInsertRowid: 0 }));
+    const database = {
+      exec: vi.fn(),
+      prepare: vi.fn(() => ({ run, all: vi.fn(), get: vi.fn() }))
+    };
+    mocks.updateAppDatabase.mockImplementation(async (updater: (db: typeof database) => unknown) => updater(database));
+
+    const result = await clearGatewayRequestLogs();
+
+    expect(database.exec).toHaveBeenCalledWith(expect.stringContaining("CREATE TABLE IF NOT EXISTS gateway_request_logs"));
+    expect(database.prepare).toHaveBeenCalledWith("DELETE FROM gateway_request_logs");
+    expect(database.prepare).not.toHaveBeenCalledWith(expect.stringContaining("gateway_vendor_health"));
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(result).toEqual({ deleted: 4 });
+  });
+
+  it("builds conditional deletion for vendor, outcome, and time range", async () => {
+    const run = vi.fn(() => ({ changes: 2, lastInsertRowid: 0 }));
+    const prepare = vi.fn(() => ({ run, all: vi.fn(), get: vi.fn() }));
+    const database = { exec: vi.fn(), prepare };
+    mocks.updateAppDatabase.mockImplementation(async (updater: (db: typeof database) => unknown) => updater(database));
+
+    await clearGatewayRequestLogs({
+      vendorId: "vendor-a",
+      outcome: "error",
+      periodStart: "2026-09-01T00:00:00.000Z",
+      periodEnd: "2026-09-06T23:59:59.999Z"
+    });
+
+    expect(prepare).toHaveBeenCalledWith(
+      "DELETE FROM gateway_request_logs WHERE vendor_id = ? AND outcome = ? AND created_at >= ? AND created_at <= ?"
+    );
+    expect(run).toHaveBeenCalledWith(
+      "vendor-a",
+      "error",
+      "2026-09-01T00:00:00.000Z",
+      "2026-09-06T23:59:59.999Z"
+    );
+  });
+
+  it("queries and deletes selected request IDs", async () => {
+    const run = vi.fn(() => ({ changes: 1, lastInsertRowid: 0 }));
+    const prepare = vi.fn((sql: string) => sql.includes("SELECT request_id")
+      ? { all: () => [{ request_id: "request-1", provider_id: "codex", vendor_id: "vendor-a", method: "POST", path: "/v1/responses", outcome: "error", duration_ms: 42, created_at: "2026-09-06T08:00:00.000Z" }] }
+      : { run, all: vi.fn(), get: vi.fn() });
+    const database = { exec: vi.fn(), prepare };
+    mocks.updateAppDatabase.mockImplementation(async (updater: (db: typeof database) => unknown) => updater(database));
+    mocks.readAppDatabase.mockImplementation((reader: (db: typeof database) => unknown) => reader(database));
+
+    const entries = await getGatewayRequestCleanupEntries();
+    expect(entries[0]).toMatchObject({ id: "request-1", source: "request", outcome: "error" });
+    await deleteGatewayRequestEntries(["request-1"]);
+    expect(prepare).toHaveBeenCalledWith("DELETE FROM gateway_request_logs WHERE request_id IN (?)");
+    expect(run).toHaveBeenCalledWith("request-1");
   });
 });

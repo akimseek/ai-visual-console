@@ -1,6 +1,6 @@
 import type { SessionExportFormat } from "../types";
 import type { AppMenuDefinition } from "./app-menu-bar";
-import { Command, Download, FileText, FolderOpen, Info, Landmark, LogOut, Settings, SlidersHorizontal, SquareTerminal, Wrench } from "lucide-react";
+import { Command, Download, FileText, FolderOpen, Info, Landmark, LogOut, Settings, SlidersHorizontal, SquareTerminal, Trash2, Wrench } from "lucide-react";
 
 type AppMenuActions = {
   openCommandPalette: () => void;
@@ -13,8 +13,8 @@ type AppMenuActions = {
   manageCompressionPrompts: () => void;
   openSystemTerminal: () => void;
   installCli: () => void;
-  exportDiagnostics: () => void;
   openLogDirectory: () => void;
+  openGatewayLogCleanup: () => void;
   showAbout: () => void;
 };
 
@@ -78,8 +78,8 @@ export function createAppMenus({
         { separator: true, label: "" },
         { label: "安装 CLI", icon: Wrench, action: actions.installCli },
         { separator: true, label: "" },
-        { label: "导出诊断信息", icon: Download, action: actions.exportDiagnostics },
         { label: "打开日志目录", icon: FolderOpen, action: actions.openLogDirectory },
+        { label: "清理 Gateway 日志", icon: Trash2, action: actions.openGatewayLogCleanup },
         { label: "关于", icon: Info, action: actions.showAbout }
       ]
     }
