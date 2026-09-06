@@ -14,6 +14,7 @@ vi.mock("../core/app-database", () => ({
 import {
   findCachedProviderSession,
   listCachedProviderSessions,
+  loadProviderSessionList,
   loadProviderSessionCache
 } from "./provider-session-cache";
 
@@ -74,6 +75,24 @@ describe("loadProviderSessionCache", () => {
 
     expect(result).toEqual([]);
     expect(cacheStore.get(key)).toEqual({});
+  });
+});
+
+describe("loadProviderSessionList", () => {
+  it("在缓存加载完成后调用统一后处理，并返回后处理结果", async () => {
+    const key = "sessions:qoder:local:active";
+    const file = { filePath: "/sessions/a.jsonl", mtimeMs: 1, size: 1, title: "A" };
+    const decorate = vi.fn(async (sessions: CodexSession[]) =>
+      sessions.map((item) => ({ ...item, title: `decorated:${item.title}` }))
+    );
+
+    await expect(loadProviderSessionList(
+      key,
+      [file],
+      async () => session("a", "A"),
+      decorate
+    )).resolves.toMatchObject([{ id: "a", title: "decorated:A" }]);
+    expect(decorate).toHaveBeenCalledTimes(1);
   });
 });
 

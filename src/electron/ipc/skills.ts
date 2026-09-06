@@ -12,10 +12,11 @@ import {
   setSkillEnabled
 } from "../skills/skills";
 import type { CodexTarget } from "../types";
+import { getProviderIdFromTargetId } from "../../shared/target-ids";
 import { requireString, requireBoolean } from "./validation";
 
 async function requireTargetById(targetId: string) {
-  if (targetId.startsWith("gemini:")) {
+  if (getProviderIdFromTargetId(targetId) === "gemini") {
     throw new Error("当前目标不支持 Codex Skill。");
   }
   const targets = await listTargets("codex");

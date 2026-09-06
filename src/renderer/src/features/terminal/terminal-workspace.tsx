@@ -1,6 +1,6 @@
 import { lazy, Suspense, type MouseEvent, type RefObject, type WheelEvent } from "react";
 import { PanelLeftClose, PanelLeftOpen } from "lucide-react";
-import type { AiSession, ApiVendor } from "../../types";
+import type { AiSession } from "../../types";
 import type { TerminalTab } from "./terminal-tab-state";
 import { TerminalTabs } from "./terminal-tabs";
 
@@ -44,8 +44,7 @@ export function TerminalWorkspace({
   systemTerminalMinimized,
   systemTerminalCreateSignal,
   onCloseSystemTerminal,
-  onToggleSystemTerminalMinimized,
-  vendors
+  onToggleSystemTerminalMinimized
 }: {
   workspaceRef: RefObject<HTMLElement | null>;
   sidebarCollapsed: boolean;
@@ -75,7 +74,6 @@ export function TerminalWorkspace({
   systemTerminalCreateSignal: number;
   onCloseSystemTerminal: () => void;
   onToggleSystemTerminalMinimized: () => void;
-  vendors?: ApiVendor[];
 }) {
   return (
     <section className="terminal-workspace" ref={workspaceRef}>
@@ -128,7 +126,6 @@ export function TerminalWorkspace({
                 onVendorSwitch={(vendorId, reason) => onVendorSwitch(tab.key, vendorId, reason)}
                 onExit={(exitCode) => onTerminalExit(tab.key, exitCode)}
                 onInputModeChange={(state) => onTerminalInputState(tab.key, state)}
-                vendors={vendors}
               />
             ))}
           </Suspense>

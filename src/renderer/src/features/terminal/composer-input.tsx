@@ -21,7 +21,9 @@ import {
   X
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
-import type { ApiVendor, VendorModel } from "../../types";
+import type { VendorModel } from "../../types";
+import { getProviderIdFromTargetId } from "../../../../shared/target-ids";
+import { useVendorData } from "../vendors/vendor-context";
 
 export type ComposerAttachment = {
   id: string;
@@ -52,7 +54,6 @@ type ComposerInputProps = {
   onMouseDown: () => void;
   onModelSelect?: (modelId: string) => void;
   modelSelectionSupported?: boolean;
-  vendors: ApiVendor[];
   targetId: string;
   placeholder?: string;
 };
@@ -77,10 +78,10 @@ export function ComposerInput({
   onMouseDown,
   onModelSelect,
   modelSelectionSupported = true,
-  vendors,
   targetId,
   placeholder = "按 ALT + ENTER 换行"
 }: ComposerInputProps) {
+  const vendors = useVendorData();
   const [attachments, setAttachments] = useState<ComposerAttachment[]>([]);
   const [dragging, setDragging] = useState(false);
   const [attachMenuOpen, setAttachMenuOpen] = useState(false);
@@ -96,12 +97,10 @@ export function ComposerInput({
 
   // 供应商属于具体 CLI 协议，不能从全局列表直接取第一个启用项，
   // 否则 Claude/Gemini 会误用 Codex 供应商的模型接口。
-  const targetProvider = targetId.startsWith("gemini:") ? "gemini"
-    : targetId.startsWith("claude:") ? "claude"
-      : targetId.startsWith("qoder:") ? "qoder" : "codex";
+  const targetProvider = getProviderIdFromTargetId(targetId);
   const providerVendors = vendors.filter((vendor) => vendor.providerId === targetProvider);
   const enabledVendor = providerVendors.find((vendor) => vendor.enabled) || providerVendors[0];
-  const isQoderTarget = targetId.startsWith("qoder:");
+  const isQoderTarget = targetProvider === "qoder";
 
   useEffect(() => {
     if (!isQoderTarget && !enabledVendor) {

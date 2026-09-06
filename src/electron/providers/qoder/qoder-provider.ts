@@ -22,14 +22,13 @@ import { getCachedTargets } from "../../core/settings";
 import {
   findCachedProviderSession,
   listCachedProviderSessions,
-  loadProviderSessionCache
+  loadProviderSessionList
 } from "../provider-session-cache";
 import { runWslShell, wslPathExists } from "../../core/wsl";
-import { getWslDistroFromProviderTarget } from "../../../shared/target-ids";
-import { isInsidePath, isInsidePosixDir, shellQuote } from "../../../shared/wsl-paths";
+import { shellQuote } from "../../../shared/wsl-paths";
 import { pathExists } from "../../core/fs-utils";
 import { clampText, numberField, objectField, safeJsonParse, stringField } from "../../../shared/session-parser";
-import { assertSessionFileInside } from "../session-file-ops";
+import { assertSessionFileInside, isInsideSessionRoot } from "../session-file-ops";
 import {
   listCliTargets,
   probeLocalCliTarget,
@@ -39,6 +38,7 @@ import {
 } from "../provider-common";
 import { createSessionStorage } from "../session-storage";
 import { readSessionWithParser } from "../session-reader";
+import { resolveProviderTargetContext, type ProviderTargetContext } from "../provider-target-context";
 
 const execFileAsync = promisify(execFile);
 const QODER_CONFIG_DIR_NAME = ".qoder-cn";
@@ -46,12 +46,7 @@ const QODER_LIST_PREVIEW_LIMIT = 8;
 const QODER_TRASH_DIR_NAME = ".visual-console-trash";
 const QODER_MODEL_LIST_TIMEOUT_MS = 20_000;
 
-type QoderTargetContext = {
-  targetId: string;
-  kind: "local" | "wsl";
-  distro?: string;
-  configDir: string;
-};
+type QoderTargetContext = ProviderTargetContext;
 
 type QoderSessionFile = {
   filePath: string;
@@ -464,10 +459,12 @@ async function moveQoderSessionInWsl(context: QoderTargetContext, paths: QoderSt
 async function loadQoderSessions(targetId: string, view: SessionView = "active"): Promise<CodexSession[]> {
   const context = await resolveTargetContext(targetId);
   const files = context.kind === "wsl" ? await listWslSessionFiles(context, view) : await listLocalSessionFiles(context, view);
-  const sessions = await loadProviderSessionCache(getCacheKey(targetId, view), files, (file) =>
-    readSession(context, file, { maxMessages: QODER_LIST_PREVIEW_LIMIT })
+  return loadProviderSessionList(
+    getCacheKey(targetId, view),
+    files,
+    (file) => readSession(context, file, { maxMessages: QODER_LIST_PREVIEW_LIMIT }),
+    (sessions) => applySessionMetadataList(targetId, sessions)
   );
-  return applySessionMetadataList(targetId, sessions);
 }
 
 function getCacheKey(targetId: string, view: SessionView) {
@@ -475,23 +472,13 @@ function getCacheKey(targetId: string, view: SessionView) {
 }
 
 async function resolveTargetContext(targetId: string): Promise<QoderTargetContext> {
-  if (targetId === "qoder:local") {
-    return {
-      targetId,
-      kind: "local",
-      configDir: localConfigDir()
-    };
-  }
-  const distro = getWslDistroFromProviderTarget("qoder", targetId);
-  if (distro) {
-    return {
-      targetId,
-      kind: "wsl",
-      distro,
-      configDir: await wslConfigDir(distro)
-    };
-  }
-  throw new Error(`未知 Qoder 目标：${targetId}`);
+  return resolveProviderTargetContext(targetId, {
+    provider: "qoder",
+    localTargetId: "qoder:local",
+    localConfigDir: localConfigDir(),
+    resolveWslConfigDir: wslConfigDir,
+    displayName: "Qoder"
+  });
 }
 
 function localConfigDir() {
@@ -695,13 +682,8 @@ function assertSessionPath(context: QoderTargetContext, filePath: string, view: 
 }
 
 function getSessionViewForPath(context: QoderTargetContext, filePath: string): SessionView {
-  if (context.kind === "wsl") {
-    if (isInsidePosixDir(filePath, getQoderProjectsRoot(context, "active"))) return "active";
-    if (isInsidePosixDir(filePath, getQoderProjectsRoot(context, "trash"))) return "trash";
-  } else {
-    if (isInsidePath(filePath, getQoderProjectsRoot(context, "active"))) return "active";
-    if (isInsidePath(filePath, getQoderProjectsRoot(context, "trash"))) return "trash";
-  }
+  if (isInsideSessionRoot(filePath, getQoderProjectsRoot(context, "active"), context.kind)) return "active";
+  if (isInsideSessionRoot(filePath, getQoderProjectsRoot(context, "trash"), context.kind)) return "trash";
   throw new Error("拒绝操作 Qoder 会话目录之外的文件。");
 }
 

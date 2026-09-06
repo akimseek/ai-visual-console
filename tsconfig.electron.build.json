@@ -1,0 +1,8 @@
+{
+  "extends": "./tsconfig.electron.json",
+  "exclude": [
+    "**/*.test.ts",
+    "src/electron/preload.ts",
+    "src/electron/preload/**/*.ts"
+  ]
+}

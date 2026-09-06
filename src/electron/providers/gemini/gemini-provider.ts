@@ -26,22 +26,18 @@ import {
 import {
   findCachedProviderSession,
   listCachedProviderSessions,
-  loadProviderSessionCache
+  loadProviderSessionList
 } from "../provider-session-cache";
 import { assertSessionFileInside } from "../session-file-ops";
 import { planSessionMutationBatch } from "../session-mutation-base";
 import { createSessionStorage } from "../session-storage";
 import { readSessionWithParser } from "../session-reader";
+import { resolveProviderTargetContext, type ProviderTargetContext } from "../provider-target-context";
 
 const GEMINI_SESSION_PREFIX = "session-";
 const GEMINI_LIST_PREVIEW_LIMIT = 8;
 
-type GeminiTargetContext = {
-  targetId: string;
-  kind: "local" | "wsl";
-  distro?: string;
-  configDir: string;
-};
+type GeminiTargetContext = ProviderTargetContext;
 
 type GeminiSessionFile = {
   filePath: string;
@@ -305,7 +301,7 @@ export async function deleteSession(targetId: string, sessionId: string, ref?: S
     if (context.kind === "wsl") {
       await storage.move(session.filePath, movedTo, "目标位置已存在同名 Gemini 会话文件，无法移动。");
     } else {
-      assertInsideLocal(session.filePath, path.join(context.configDir, "tmp"), "拒绝移动 Gemini tmp 目录之外的文件");
+      assertSessionFileInside(session.filePath, path.join(context.configDir, "tmp"), "local", "拒绝移动 Gemini tmp 目录之外的文件");
       await storage.move(session.filePath, movedTo, "目标位置已存在同名 Gemini 会话文件，无法移动。");
     }
 
@@ -376,7 +372,7 @@ export async function restoreSession(targetId: string, sessionId: string): Promi
     if (context.kind === "wsl") {
       await storage.move(session.filePath, restoredTo, "目标位置已存在同名 Gemini 会话文件，无法恢复。");
     } else {
-      assertInsideLocal(session.filePath, getLocalTrashRoot(context), "拒绝恢复 Gemini 回收站之外的文件");
+      assertSessionFileInside(session.filePath, getLocalTrashRoot(context), "local", "拒绝恢复 Gemini 回收站之外的文件");
       await storage.move(session.filePath, restoredTo, "目标位置已存在同名 Gemini 会话文件，无法恢复。");
     }
 
@@ -391,10 +387,10 @@ export async function purgeSession(targetId: string, sessionId: string, ref?: Se
     const session = await getGeminiSessionForMutation(targetId, context, sessionId, "trash", ref);
 
     if (context.kind === "wsl") {
-      assertInsidePosix(session.filePath, getWslTrashRoot(context), "拒绝删除 Gemini 回收站之外的文件");
+      assertSessionFileInside(session.filePath, getWslTrashRoot(context), "wsl", "拒绝删除 Gemini 回收站之外的文件");
       await storage.remove(session.filePath);
     } else {
-      assertInsideLocal(session.filePath, getLocalTrashRoot(context), "拒绝删除 Gemini 回收站之外的文件");
+      assertSessionFileInside(session.filePath, getLocalTrashRoot(context), "local", "拒绝删除 Gemini 回收站之外的文件");
       await storage.remove(session.filePath);
     }
 
@@ -416,10 +412,12 @@ async function loadGeminiSessions(targetId: string, view: SessionView): Promise<
   const context = await resolveGeminiTargetContext(targetId);
   const files = context.kind === "wsl" ? await listWslSessionFiles(context, view) : await listLocalSessionFiles(context, view);
   const cacheKey = getGeminiCacheKey(targetId, view);
-  const sessions = await loadProviderSessionCache(cacheKey, files, async (file) =>
-    readGeminiSessionLines(context, file, { maxMessages: GEMINI_LIST_PREVIEW_LIMIT })
+  return loadProviderSessionList(
+    cacheKey,
+    files,
+    (file) => readGeminiSessionLines(context, file, { maxMessages: GEMINI_LIST_PREVIEW_LIMIT }),
+    (sessions) => applySessionMetadataList(targetId, sessions)
   );
-  return applySessionMetadataList(targetId, sessions);
 }
 
 async function findGeminiSession(targetId: string, sessionId: string, view: SessionView) {
@@ -462,23 +460,14 @@ async function getGeminiSessionForMutation(
 ) {
   if (!ref?.filePath) return findGeminiSession(targetId, sessionId, view);
   const root = view === "trash" ? getGeminiTrashSessionRoot(context) : getGeminiActiveSessionRoot(context);
-  if (context.kind === "wsl") {
-    assertInsidePosix(ref.filePath, root, "拒绝操作 Gemini 会话目录之外的文件");
-    const content = await createSessionStorage(context).readText(ref.filePath);
-    const session = parseGeminiSessionFile({
-      filePath: ref.filePath,
-      content,
-      projectKey: path.posix.basename(path.posix.dirname(path.posix.dirname(ref.filePath)))
-    });
-    if (!session || session.id !== sessionId) throw new Error(`会话文件与会话编号不匹配：${sessionId}`);
-    return session;
-  }
-  assertInsideLocal(ref.filePath, root, "拒绝操作 Gemini 会话目录之外的文件");
+  assertSessionFileInside(ref.filePath, root, context.kind, "拒绝操作 Gemini 会话目录之外的文件");
   const content = await createSessionStorage(context).readText(ref.filePath);
   const session = parseGeminiSessionFile({
     filePath: ref.filePath,
     content,
-    projectKey: path.basename(path.dirname(path.dirname(ref.filePath)))
+    projectKey: context.kind === "wsl"
+      ? path.posix.basename(path.posix.dirname(path.posix.dirname(ref.filePath)))
+      : path.basename(path.dirname(path.dirname(ref.filePath)))
   });
   if (!session || session.id !== sessionId) throw new Error(`会话文件与会话编号不匹配：${sessionId}`);
   return session;
@@ -486,8 +475,7 @@ async function getGeminiSessionForMutation(
 
 function assertGeminiSessionPath(context: GeminiTargetContext, filePath: string, view: SessionView) {
   const root = view === "trash" ? getGeminiTrashSessionRoot(context) : getGeminiActiveSessionRoot(context);
-  if (context.kind === "wsl") assertInsidePosix(filePath, root, "拒绝操作 Gemini 会话目录之外的文件");
-  else assertInsideLocal(filePath, root, "拒绝操作 Gemini 会话目录之外的文件");
+  assertSessionFileInside(filePath, root, context.kind, "拒绝操作 Gemini 会话目录之外的文件");
 }
 
 async function verifyGeminiSessionId(context: GeminiTargetContext, filePath: string, sessionId: string) {
@@ -505,26 +493,13 @@ async function verifyGeminiSessionId(context: GeminiTargetContext, filePath: str
 }
 
 async function resolveGeminiTargetContext(targetId: string): Promise<GeminiTargetContext> {
-  if (targetId === "gemini:local") {
-    return {
-      targetId,
-      kind: "local",
-      configDir: path.join(os.homedir(), ".gemini")
-    };
-  }
-
-  const distro = getWslDistroFromProviderTarget("gemini", targetId);
-  if (distro) {
-    const home = await wslGetEnv(distro, "HOME");
-    return {
-      targetId,
-      kind: "wsl",
-      distro,
-      configDir: path.posix.join(home, ".gemini")
-    };
-  }
-
-  throw new Error(`未知 Gemini 目标：${targetId}`);
+  return resolveProviderTargetContext(targetId, {
+    provider: "gemini",
+    localTargetId: "gemini:local",
+    localConfigDir: path.join(os.homedir(), ".gemini"),
+    resolveWslConfigDir: async (distro) => path.posix.join(await wslGetEnv(distro, "HOME"), ".gemini"),
+    displayName: "Gemini"
+  });
 }
 
 async function listLocalSessionFiles(context: GeminiTargetContext, view: SessionView): Promise<GeminiSessionFile[]> {
@@ -887,23 +862,23 @@ function getGeminiTrashSessionRoot(context: GeminiTargetContext) {
 
 function buildGeminiTrashPath(context: GeminiTargetContext, source: string) {
   if (context.kind === "wsl") {
-    assertInsidePosix(source, path.posix.join(context.configDir, "tmp"), "拒绝移动 Gemini tmp 目录之外的文件");
+    assertSessionFileInside(source, path.posix.join(context.configDir, "tmp"), "wsl", "拒绝移动 Gemini tmp 目录之外的文件");
     return path.posix.join(getWslTrashRoot(context), path.posix.relative(context.configDir, source));
   }
 
-  assertInsideLocal(source, path.join(context.configDir, "tmp"), "拒绝移动 Gemini tmp 目录之外的文件");
+  assertSessionFileInside(source, path.join(context.configDir, "tmp"), "local", "拒绝移动 Gemini tmp 目录之外的文件");
   return path.join(getLocalTrashRoot(context), path.relative(context.configDir, source));
 }
 
 function buildGeminiRestorePath(context: GeminiTargetContext, source: string) {
   if (context.kind === "wsl") {
     const trashRoot = getWslTrashRoot(context);
-    assertInsidePosix(source, trashRoot, "拒绝恢复 Gemini 回收站之外的文件");
+    assertSessionFileInside(source, trashRoot, "wsl", "拒绝恢复 Gemini 回收站之外的文件");
     return path.posix.join(context.configDir, path.posix.relative(trashRoot, source));
   }
 
   const trashRoot = getLocalTrashRoot(context);
-  assertInsideLocal(source, trashRoot, "拒绝恢复 Gemini 回收站之外的文件");
+  assertSessionFileInside(source, trashRoot, "local", "拒绝恢复 Gemini 回收站之外的文件");
   return path.join(context.configDir, path.relative(trashRoot, source));
 }
 
@@ -1006,14 +981,6 @@ function buildGeminiDuplicateSessionText(sourceText: string, duplicateId: string
   // Gemini 按 lastUpdated 排序；复制时显式更新它，避免刷新后回到源会话的旧位置。
   lines.push(JSON.stringify({ $set: { lastUpdated: now } }));
   return `${lines.join("\n")}\n`;
-}
-
-function assertInsideLocal(filePath: string, root: string, message: string) {
-  assertSessionFileInside(filePath, root, "local", message);
-}
-
-function assertInsidePosix(filePath: string, root: string, message: string) {
-  assertSessionFileInside(filePath, root, "wsl", message);
 }
 
 function isGeminiMetadataRecord(value: Record<string, unknown>) {

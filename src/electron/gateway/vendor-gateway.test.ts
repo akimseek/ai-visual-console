@@ -106,6 +106,37 @@ describe("vendor gateway", () => {
     expect(authorizations).toEqual(["Bearer key-one", "Bearer key-one"]);
   });
 
+  it("并发正常请求仍保持当前供应商粘性", async () => {
+    const authorizations: string[] = [];
+    const upstream = createServer((request, response) => {
+      authorizations.push(request.headers.authorization || "");
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end("{\"ok\":true}");
+    });
+    servers.push(upstream);
+    await new Promise<void>((resolve) => upstream.listen(0, "127.0.0.1", () => resolve()));
+    const address = upstream.address();
+    if (!address || typeof address === "string") throw new Error("upstream did not start");
+    const apiBaseUrl = `http://127.0.0.1:${address.port}/v1`;
+    listApiVendorsMock.mockResolvedValue([
+      vendor("sticky-one", "key-one", apiBaseUrl, true),
+      vendor("sticky-two", "key-two", apiBaseUrl, true)
+    ]);
+
+    const route = await createVendorRoute("codex");
+    if (!route) throw new Error("route was not created");
+    const responses = await Promise.all(Array.from({ length: 20 }, (_, index) => fetch(`${route.baseUrl}/v1/responses`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${route.localToken}`, "content-type": "application/json" },
+      body: JSON.stringify({ prompt: `concurrent-${index}` })
+    })));
+
+    expect(responses.every((response) => response.status === 200)).toBe(true);
+    await Promise.all(responses.map((response) => response.text()));
+    expect(authorizations).toHaveLength(20);
+    expect(authorizations.every((authorization) => authorization === "Bearer key-one")).toBe(true);
+  });
+
   it("失败时按 sort 环形尝试候选供应商且不重复尝试", async () => {
     const authorizations: string[] = [];
     const upstream = createServer((request, response) => {

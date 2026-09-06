@@ -18,6 +18,7 @@ import { listGatewayVendorHealth } from "../gateway/gateway-resilience";
 import { switchTerminalVendor } from "../terminal/terminal-sessions";
 import { invalidateGatewayVendorSnapshot } from "../gateway/vendor-registry";
 import { findTargetForVendor } from "../core/main-helpers";
+import { getProviderIdFromTargetId } from "../../shared/target-ids";
 import {
   requireApiVendorInput,
   requireString,
@@ -101,7 +102,7 @@ export function registerVendorIpcHandlers() {
   ipcMain.handle("vendor:refresh-balances", () => refreshVendorBalances());
   ipcMain.handle("models:list", async (_event, targetId: unknown) => {
     const checkedTargetId = requireString(targetId, "targetId");
-    if (!checkedTargetId.startsWith("qoder:")) throw new Error("当前目标不支持 CLI 模型列表。");
+    if (getProviderIdFromTargetId(checkedTargetId) !== "qoder") throw new Error("当前目标不支持 CLI 模型列表。");
     return listQoderModels(checkedTargetId);
   });
 }

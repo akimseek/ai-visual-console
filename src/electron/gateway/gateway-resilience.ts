@@ -13,6 +13,7 @@ type HealthState = GatewayVendorHealth & {
 const states = new Map<string, HealthState>();
 let schemaPromise: Promise<void> | null = null;
 let hydrated = false;
+let hydrationPromise: Promise<void> | null = null;
 
 type HealthRow = {
   vendor_id: string;
@@ -51,6 +52,15 @@ async function ensureSchema() {
 
 export async function hydrateGatewayVendorHealth() {
   if (hydrated) return;
+  // 首次并发请求共享同一次数据库读取，避免多个请求同时初始化健康状态。
+  if (hydrationPromise) return hydrationPromise;
+  hydrationPromise = loadGatewayVendorHealth().finally(() => {
+    hydrationPromise = null;
+  });
+  return hydrationPromise;
+}
+
+async function loadGatewayVendorHealth() {
   try {
     await ensureSchema();
     const rows = await readAppDatabase((db) => db.prepare("SELECT * FROM gateway_vendor_health").all() as HealthRow[]);

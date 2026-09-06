@@ -24,23 +24,19 @@ import {
 import {
   findCachedProviderSession,
   listCachedProviderSessions,
-  loadProviderSessionCache
+  loadProviderSessionList
 } from "../provider-session-cache";
 import { assertSessionFileInside, relocateSessionPath } from "../session-file-ops";
 import { planSessionMutationBatch } from "../session-mutation-base";
 import { createSessionStorage } from "../session-storage";
 import { readSessionWithParser } from "../session-reader";
+import { resolveProviderTargetContext, type ProviderTargetContext } from "../provider-target-context";
 
 const CLAUDE_DEFAULT_CONTEXT_WINDOW = 200_000;
 const CLAUDE_ONE_MILLION_CONTEXT_WINDOW = 1_000_000;
 const CLAUDE_LIST_PREVIEW_LIMIT = 8;
 
-type ClaudeTargetContext = {
-  targetId: string;
-  kind: "local" | "wsl";
-  distro?: string;
-  configDir: string;
-};
+type ClaudeTargetContext = ProviderTargetContext;
 
 type ClaudeSessionFile = {
   filePath: string;
@@ -359,35 +355,26 @@ async function loadClaudeSessions(targetId: string, view: SessionView): Promise<
     ? await listWslSessionFiles(context, view)
     : await listLocalSessionFiles(context, view);
   const cacheKey = getClaudeCacheKey(targetId, view);
-  const sessions = await loadProviderSessionCache(cacheKey, files, async (file) =>
-    readClaudeSessionLines(context, file, { maxMessages: CLAUDE_LIST_PREVIEW_LIMIT })
+  return loadProviderSessionList(
+    cacheKey,
+    files,
+    (file) => readClaudeSessionLines(context, file, { maxMessages: CLAUDE_LIST_PREVIEW_LIMIT }),
+    async (sessions) => {
+      const contextHints = view === "active" ? await loadClaudeContextHints(context) : new Map<string, ClaudeContextHint>();
+      const parsed = sessions.map((session) => applyClaudeContextHint(session, contextHints.get(session.id)));
+      return applySessionMetadataList(targetId, parsed);
+    }
   );
-  const contextHints = view === "active" ? await loadClaudeContextHints(context) : new Map<string, ClaudeContextHint>();
-  const parsed = sessions.map((session) => applyClaudeContextHint(session, contextHints.get(session.id)));
-  return applySessionMetadataList(targetId, parsed);
 }
 
 async function resolveClaudeTargetContext(targetId: string): Promise<ClaudeTargetContext> {
-  if (targetId === "claude:local") {
-    return {
-      targetId,
-      kind: "local",
-      configDir: path.join(os.homedir(), ".claude")
-    };
-  }
-
-  const distro = getWslDistroFromProviderTarget("claude", targetId);
-  if (distro) {
-    const home = await wslGetEnv(distro, "HOME");
-    return {
-      targetId,
-      kind: "wsl",
-      distro,
-      configDir: path.posix.join(home, ".claude")
-    };
-  }
-
-  throw new Error(`未知 Claude Code 目标：${targetId}`);
+  return resolveProviderTargetContext(targetId, {
+    provider: "claude",
+    localTargetId: "claude:local",
+    localConfigDir: path.join(os.homedir(), ".claude"),
+    resolveWslConfigDir: async (distro) => path.posix.join(await wslGetEnv(distro, "HOME"), ".claude"),
+    displayName: "Claude Code"
+  });
 }
 
 async function findClaudeSession(targetId: string, sessionId: string, view: SessionView) {
@@ -432,8 +419,7 @@ async function getClaudeSessionForMutation(
 
 function assertClaudeSessionPath(context: ClaudeTargetContext, filePath: string, view: SessionView) {
   const root = view === "trash" ? getClaudeTrashProjectsRoot(context) : getClaudeProjectsRoot(context);
-  if (context.kind === "wsl") assertInsidePosix(filePath, root, "拒绝操作 Claude 会话目录之外的文件");
-  else assertInsideLocal(filePath, root, "拒绝操作 Claude 会话目录之外的文件");
+  assertSessionFileInside(filePath, root, context.kind, "拒绝操作 Claude 会话目录之外的文件");
 }
 
 async function verifyClaudeSessionId(context: ClaudeTargetContext, filePath: string, sessionId: string) {
@@ -472,14 +458,6 @@ function buildClaudeRestorePath(context: ClaudeTargetContext, source: string) {
   const trashRoot = getClaudeTrashProjectsRoot(context);
   const projectsRoot = getClaudeProjectsRoot(context);
   return relocateSessionPath(source, trashRoot, projectsRoot, context.kind, "拒绝恢复 Claude 回收站之外的文件");
-}
-
-function assertInsideLocal(filePath: string, root: string, message: string) {
-  assertSessionFileInside(filePath, root, "local", message);
-}
-
-function assertInsidePosix(filePath: string, root: string, message: string) {
-  assertSessionFileInside(filePath, root, "wsl", message);
 }
 
 async function listLocalSessionFiles(context: ClaudeTargetContext, view: SessionView): Promise<ClaudeSessionFile[]> {

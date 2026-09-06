@@ -1,4 +1,4 @@
-import type { CodexConsoleApi } from "./types";
+import type { CodexConsoleApi } from "../../shared/codex-console-api";
 
 declare global {
   interface Window {

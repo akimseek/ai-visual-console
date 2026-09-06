@@ -63,6 +63,18 @@ export async function loadProviderSessionCache<T extends CodexSession, TFile ext
   return sessions.filter((session): session is T => Boolean(session));
 }
 
+// 统一供应商会话列表的缓存加载与后处理顺序；后处理由调用方决定，避免混入供应商元数据规则。
+export async function loadProviderSessionList<T extends CodexSession, TFile extends ProviderSessionFile>(
+  cacheKey: string,
+  files: TFile[],
+  loadSession: (file: TFile) => Promise<T | null>,
+  decorateSessions: (sessions: T[]) => Promise<T[]>,
+  concurrency = 8
+): Promise<T[]> {
+  const sessions = await loadProviderSessionCache(cacheKey, files, loadSession, concurrency);
+  return decorateSessions(sessions);
+}
+
 async function mapLimit<T, R>(items: T[], limit: number, mapper: (item: T) => Promise<R>): Promise<R[]> {
   const results = new Array<R>(items.length);
   let nextIndex = 0;

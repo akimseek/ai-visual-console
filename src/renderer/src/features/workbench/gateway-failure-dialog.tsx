@@ -6,6 +6,7 @@ import { IconButton } from "../../components/icon-button";
 import { captureError } from "../../hooks/error-utils";
 import type { GatewayFailureOutcomeFilter } from "../../types";
 import { formatGatewayFailure } from "./use-workbench-usage";
+import { useVendorData } from "../vendors/vendor-context";
 
 export type FailureDatePreset = "all" | "today" | "7d" | "30d" | "custom";
 
@@ -28,7 +29,8 @@ export function getGatewayFailureDateRange(preset: FailureDatePreset, from: stri
   return { periodStart: start.toISOString(), periodEnd: now.toISOString() };
 }
 
-export function GatewayFailureDialog({ vendors, onClose }: { vendors: ApiVendor[]; onClose: () => void }) {
+export function GatewayFailureDialog({ onClose }: { onClose: () => void }) {
+  const vendors = useVendorData();
   const [items, setItems] = useState<GatewayFailureDiagnostic[]>([]);
   const [page, setPage] = useState(1);
   const [total, setTotal] = useState(0);

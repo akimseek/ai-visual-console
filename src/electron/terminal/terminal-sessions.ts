@@ -11,7 +11,7 @@ import {
   parseCliArgs,
   posixShellQuote as shellQuote
 } from "../../shared/shell-args";
-import { getWslDistroFromProviderTarget, getWslDistroFromTargetId } from "../../shared/target-ids";
+import { getProviderIdFromTargetId, getWslDistroFromProviderTarget, getWslDistroFromTargetId } from "../../shared/target-ids";
 import { wslMountPathToWindowsPath } from "../../shared/wsl-paths";
 import {
   buildRouteUrl,
@@ -56,25 +56,25 @@ const requireFromHere = createRequire(__filename);
 
 const codexTerminalProvider: TerminalProvider = {
   id: "codex",
-  canHandle: (targetId) => !targetId.startsWith("gemini:") && !targetId.startsWith("claude:"),
+  canHandle: (targetId) => getProviderIdFromTargetId(targetId) === "codex",
   buildCommand: buildCodexCommand
 };
 
 const geminiTerminalProvider: TerminalProvider = {
   id: "gemini",
-  canHandle: (targetId) => targetId.startsWith("gemini:"),
+  canHandle: (targetId) => getProviderIdFromTargetId(targetId) === "gemini",
   buildCommand: buildGeminiCommand
 };
 
 const claudeTerminalProvider: TerminalProvider = {
   id: "claude",
-  canHandle: (targetId) => targetId.startsWith("claude:"),
+  canHandle: (targetId) => getProviderIdFromTargetId(targetId) === "claude",
   buildCommand: buildClaudeCommand
 };
 
 const qoderTerminalProvider: TerminalProvider = {
   id: "qoder",
-  canHandle: (targetId) => targetId.startsWith("qoder:"),
+  canHandle: (targetId) => getProviderIdFromTargetId(targetId) === "qoder",
   buildCommand: buildQoderCommand,
   supportsVendorGateway: false
 };

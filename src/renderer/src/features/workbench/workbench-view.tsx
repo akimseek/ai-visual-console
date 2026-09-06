@@ -7,6 +7,7 @@ import { useWorkbenchHealth } from "./use-workbench-health";
 import { formatGatewayFailure, formatGatewayUsageSummary, useWorkbenchUsage } from "./use-workbench-usage";
 import type { TabVendorSwitch } from "../vendors/use-tab-vendors";
 import { GatewayFailureDialog } from "./gateway-failure-dialog";
+import { useVendorData } from "../vendors/vendor-context";
 
 type StatusText = { label: string; title: string };
 
@@ -14,7 +15,6 @@ type StatusText = { label: string; title: string };
 export function SidebarWorkbench({
   provider,
   target,
-  vendors,
   activeVendorId,
   activeVendorName,
   lastVendorSwitch,
@@ -25,7 +25,6 @@ export function SidebarWorkbench({
 }: {
   provider: AiProviderSummary | undefined;
   target: AiTarget | undefined;
-  vendors: ApiVendor[];
   activeVendorId: string | undefined;
   activeVendorName: string;
   lastVendorSwitch: TabVendorSwitch | undefined;
@@ -34,6 +33,7 @@ export function SidebarWorkbench({
   tokenUsage: StatusText;
   contextUsage: StatusText;
 }) {
+  const vendors = useVendorData();
   const { health, loading: healthLoading, error: healthError, lastUpdatedAt: healthUpdatedAt, refresh: refreshHealth } = useWorkbenchHealth();
   const { summary: usageSummary, recentFailures, loading: usageLoading, error: usageError, lastUpdatedAt: usageUpdatedAt, refresh: refreshUsage } = useWorkbenchUsage();
   const [failureDialogOpen, setFailureDialogOpen] = useState(false);
@@ -99,7 +99,7 @@ export function SidebarWorkbench({
         {healthError && <p className="sidebar-workbench-error" role="status">{healthError}</p>}
         {usageError && <p className="sidebar-workbench-error" role="status">{usageError}</p>}
       </div>
-      {failureDialogOpen && <GatewayFailureDialog vendors={vendors} onClose={() => setFailureDialogOpen(false)} />}
+      {failureDialogOpen && <GatewayFailureDialog onClose={() => setFailureDialogOpen(false)} />}
     </section>
   );
 }

@@ -45,17 +45,23 @@ export type AiProvider = {
 // provider 实现模块的公共形状：AiProvider 去掉静态描述字段后的全部会话操作。
 type AiProviderModule = Omit<AiProvider, "id" | "label" | "capabilities">;
 
-function createAiProvider(
-  id: AiProviderId,
-  label: string,
-  capabilities: AiProviderCapabilities,
-  impl: AiProviderModule
-): AiProvider {
-  return { id, label, capabilities, ...impl };
+type ProviderDefinition = {
+  id: AiProviderId;
+  label: string;
+  capabilities: AiProviderCapabilities;
+  module: AiProviderModule;
+};
+
+function createAiProvider({ id, label, capabilities, module }: ProviderDefinition): AiProvider {
+  return { id, label, capabilities, ...module };
 }
 
-const providers: AiProvider[] = [
-  createAiProvider("codex", "Codex", {
+// 新增 Provider 只需要在这里声明静态信息和实现模块，避免注册逻辑分散到多个分支。
+const providerDefinitions = [
+  {
+    id: "codex",
+    label: "Codex",
+    capabilities: {
     skills: true,
     branch: true,
     usage: true,
@@ -66,8 +72,13 @@ const providers: AiProvider[] = [
     sessionSettings: true,
     duplicate: true,
     vendorManagement: true
-  }, codexTargets),
-  createAiProvider("gemini", "Gemini", {
+    },
+    module: codexTargets
+  },
+  {
+    id: "gemini",
+    label: "Gemini",
+    capabilities: {
     skills: false,
     branch: true,
     usage: true,
@@ -78,8 +89,13 @@ const providers: AiProvider[] = [
     sessionSettings: false,
     duplicate: true,
     vendorManagement: true
-  }, geminiProvider),
-  createAiProvider("claude", "Claude Code", {
+    },
+    module: geminiProvider
+  },
+  {
+    id: "claude",
+    label: "Claude Code",
+    capabilities: {
     skills: false,
     branch: true,
     usage: true,
@@ -90,8 +106,13 @@ const providers: AiProvider[] = [
     sessionSettings: false,
     duplicate: true,
     vendorManagement: true
-  }, claudeProvider),
-  createAiProvider("qoder", "Qoder CN", {
+    },
+    module: claudeProvider
+  },
+  {
+    id: "qoder",
+    label: "Qoder CN",
+    capabilities: {
     skills: false,
     branch: false,
     usage: true,
@@ -102,8 +123,12 @@ const providers: AiProvider[] = [
     sessionSettings: false,
     duplicate: false,
     vendorManagement: false
-  }, qoderProvider)
-];
+    },
+    module: qoderProvider
+  }
+] satisfies readonly ProviderDefinition[];
+
+const providers: AiProvider[] = providerDefinitions.map(createAiProvider);
 
 export function listAiProviders() {
   return providers;
@@ -129,83 +154,90 @@ export function getProviderForTarget(targetId: string) {
 
 export async function listCachedTargets(providerId?: AiProviderId) {
   if (providerId) return getProvider(providerId).listCachedTargets();
-  const targets = await Promise.all(providers.map((provider) => provider.listCachedTargets()));
-  return targets.flat();
+  return listAcrossProviders((provider) => provider.listCachedTargets());
 }
 
 export async function listTargets(providerId?: AiProviderId) {
   if (providerId) return getProvider(providerId).listTargets();
-  const targets = await Promise.all(providers.map((provider) => provider.listTargets()));
-  return targets.flat();
+  return listAcrossProviders((provider) => provider.listTargets());
+}
+
+async function listAcrossProviders<T>(operation: (provider: AiProvider) => Promise<T[]>) {
+  const values = await Promise.all(providers.map(operation));
+  return values.flat();
+}
+
+function dispatchToTarget<T>(targetId: string, operation: (provider: AiProvider) => Promise<T>) {
+  return operation(getProviderForTarget(targetId));
 }
 
 export function listCachedSessions(targetId: string, view: SessionView) {
-  return getProviderForTarget(targetId).listCachedSessions(targetId, view);
+  return dispatchToTarget(targetId, (provider) => provider.listCachedSessions(targetId, view));
 }
 
 export function listSessions(targetId: string) {
-  return getProviderForTarget(targetId).listSessions(targetId);
+  return dispatchToTarget(targetId, (provider) => provider.listSessions(targetId));
 }
 
 export function listTrashSessions(targetId: string) {
-  return getProviderForTarget(targetId).listTrashSessions(targetId);
+  return dispatchToTarget(targetId, (provider) => provider.listTrashSessions(targetId));
 }
 
 export function searchSessions(targetId: string, view: SessionView, query: string) {
-  return getProviderForTarget(targetId).searchSessions(targetId, view, query);
+  return dispatchToTarget(targetId, (provider) => provider.searchSessions(targetId, view, query));
 }
 
 export function getSession(targetId: string, sessionId: string, ref?: SessionFileRef) {
-  return getProviderForTarget(targetId).getSession(targetId, sessionId, ref);
+  return dispatchToTarget(targetId, (provider) => provider.getSession(targetId, sessionId, ref));
 }
 
 export function getSessionMessagesPage(targetId: string, sessionId: string, offset: number, limit: number) {
-  return getProviderForTarget(targetId).getSessionMessagesPage(targetId, sessionId, offset, limit);
+  return dispatchToTarget(targetId, (provider) => provider.getSessionMessagesPage(targetId, sessionId, offset, limit));
 }
 
 export function getSessionSummary(targetId: string, sessionId: string) {
-  return getProviderForTarget(targetId).getSessionSummary(targetId, sessionId);
+  return dispatchToTarget(targetId, (provider) => provider.getSessionSummary(targetId, sessionId));
 }
 
 export function listSessionsByParent(targetId: string, parentSessionId: string) {
-  return getProviderForTarget(targetId).listSessionsByParent(targetId, parentSessionId);
+  return dispatchToTarget(targetId, (provider) => provider.listSessionsByParent(targetId, parentSessionId));
 }
 
 export function getSessionFolderPath(targetId: string, sessionId: string) {
-  return getProviderForTarget(targetId).getSessionFolderPath(targetId, sessionId);
+  return dispatchToTarget(targetId, (provider) => provider.getSessionFolderPath(targetId, sessionId));
 }
 
 export function branchSession(targetId: string, sessionId: string, messageIndex: number) {
-  return getProviderForTarget(targetId).branchSession(targetId, sessionId, messageIndex);
+  return dispatchToTarget(targetId, (provider) => provider.branchSession(targetId, sessionId, messageIndex));
 }
 
 export async function duplicateSession(targetId: string, sessionId: string, title = "") {
-  const duplicated = await getProviderForTarget(targetId).duplicateSession(targetId, sessionId);
+  const duplicated = await dispatchToTarget(targetId, (provider) => provider.duplicateSession(targetId, sessionId));
   if (!title.trim()) return duplicated;
   await setSessionCustomTitle(targetId, duplicated.id, title);
   return applySessionMetadata(targetId, duplicated);
 }
 
 export function deleteSession(targetId: string, sessionId: string, ref?: SessionFileRef) {
-  return getProviderForTarget(targetId).deleteSession(targetId, sessionId, ref);
+  return dispatchToTarget(targetId, (provider) => provider.deleteSession(targetId, sessionId, ref));
 }
 
 export function deleteSessions(targetId: string, sessions: SessionMutationRef[]) {
-  return getProviderForTarget(targetId).deleteSessions(targetId, sessions);
+  return dispatchToTarget(targetId, (provider) => provider.deleteSessions(targetId, sessions));
 }
 
 export function restoreSession(targetId: string, sessionId: string) {
-  return getProviderForTarget(targetId).restoreSession(targetId, sessionId);
+  return dispatchToTarget(targetId, (provider) => provider.restoreSession(targetId, sessionId));
 }
 
 export async function purgeSession(targetId: string, sessionId: string, ref?: SessionFileRef) {
-  const result = await getProviderForTarget(targetId).purgeSession(targetId, sessionId, ref);
+  const result = await dispatchToTarget(targetId, (provider) => provider.purgeSession(targetId, sessionId, ref));
   await deleteSessionMetadata(targetId, sessionId).catch(() => undefined);
   return result;
 }
 
 export async function purgeSessions(targetId: string, sessions: SessionMutationRef[]) {
-  const result = await getProviderForTarget(targetId).purgeSessions(targetId, sessions);
+  const result = await dispatchToTarget(targetId, (provider) => provider.purgeSessions(targetId, sessions));
   await Promise.all(result.processed.map((session) => deleteSessionMetadata(targetId, session.id).catch(() => undefined)));
   return result;
 }

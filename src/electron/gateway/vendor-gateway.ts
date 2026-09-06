@@ -261,8 +261,11 @@ async function handleGatewayRequest(request: IncomingMessage, response: ServerRe
     }
 
     // 每次请求读取最新候选池；当前供应商仍可用时保持会话粘性，只有候选池或健康状态使其不可用时才换供应商。
-    const vendors = await getGatewayVendorSnapshot();
-    await hydrateGatewayVendorHealth();
+    // 两项数据彼此独立，首次请求时并行初始化，避免无意义地串行等待快照和健康表。
+    const [vendors] = await Promise.all([
+      getGatewayVendorSnapshot(),
+      hydrateGatewayVendorHealth()
+    ]);
     const routeVendor = vendors.find((item) => item.id === route.vendorId && item.providerId === route.providerId);
     const vendor = chooseVendor(vendors, route.providerId, route.vendorId);
     if (!vendor || !vendor.apiKey) {
@@ -277,6 +280,9 @@ async function handleGatewayRequest(request: IncomingMessage, response: ServerRe
     }
     inputPricePerMillion = vendor.pricing?.inputPerMillionUsd;
     outputPricePerMillion = vendor.pricing?.outputPerMillionUsd;
+
+    // 失败阈值与请求体读取互不依赖，提前开始读取配置，减少请求准备阶段的等待。
+    const failureThresholdPromise = getGatewayFailureThreshold();
 
     // 流式请求体：先按声明值拦截超大请求，再零缓冲透传给上游。
     const hasBody = request.method !== "GET" && request.method !== "HEAD";
@@ -294,7 +300,7 @@ async function handleGatewayRequest(request: IncomingMessage, response: ServerRe
     }
 
     // 只有请求体已缓冲时才能安全重试；阈值表示同一供应商连续失败多少次后才切换。
-    const failureThreshold = await getGatewayFailureThreshold();
+    const failureThreshold = await failureThresholdPromise;
     const candidateCount = vendors.filter((item) => item.providerId === route.providerId && item.enabled && item.apiKey.trim() && item.apiBaseUrl.trim()).length;
     const maxAttempts = bufferedBody && isRetryableMethod(request.method)
       ? Math.max(1, failureThreshold * Math.max(1, candidateCount))

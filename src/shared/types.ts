@@ -318,6 +318,11 @@ export type ApiVendorEnableResult = {
   switchReason?: "terminal-not-found" | "gateway-not-active" | "route-not-found" | "provider-mismatch";
 };
 
+export type VendorRouteSwitchResult = {
+  switched: number;
+  reason?: "terminal-not-found" | "gateway-not-active" | "route-not-found" | "provider-mismatch" | "vendor-not-found" | "vendor-disabled";
+};
+
 export type CompressionPrompt = {
   id: string;
   name: string;

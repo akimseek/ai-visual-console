@@ -26,4 +26,39 @@ describe("session-file-ops", () => {
     expect(isInsideSessionRoot("/tmp/projects-evil/a.jsonl", "/tmp/projects", "wsl")).toBe(false);
     expect(() => assertSessionFileInside("/tmp/projects", "/tmp/projects", "wsl", "越界")).toThrow("越界");
   });
+
+  it("拒绝本机路径通过 .. 逃出会话根目录", () => {
+    expect(isInsideSessionRoot("C:\\work\\projects\\..\\private\\session.jsonl", "C:\\work\\projects", "local")).toBe(false);
+    expect(() => assertSessionFileInside(
+      "C:\\work\\projects\\..\\private\\session.jsonl",
+      "C:\\work\\projects",
+      "local",
+      "越界"
+    )).toThrow("越界");
+  });
+
+  it("允许本机和 WSL 根目录下的正常会话文件", () => {
+    expect(() => assertSessionFileInside(
+      "C:\\work\\projects\\project-a\\session.jsonl",
+      "C:\\work\\projects",
+      "local",
+      "越界"
+    )).not.toThrow();
+    expect(() => assertSessionFileInside(
+      "/home/me/.claude/projects/project-a/session.jsonl",
+      "/home/me/.claude/projects",
+      "wsl",
+      "越界"
+    )).not.toThrow();
+  });
+
+  it("拒绝 WSL 路径通过 .. 逃出会话根目录", () => {
+    expect(isInsideSessionRoot("/home/me/.claude/projects/../private/session.jsonl", "/home/me/.claude/projects", "wsl")).toBe(false);
+    expect(() => assertSessionFileInside(
+      "/home/me/.claude/projects/../private/session.jsonl",
+      "/home/me/.claude/projects",
+      "wsl",
+      "越界"
+    )).toThrow("越界");
+  });
 });

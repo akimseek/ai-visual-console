@@ -7,7 +7,7 @@ import { TerminalSearchBar } from "./terminal-search-bar";
 import { useTerminalSearch } from "./use-terminal-search";
 import { useXtermHost, type XtermKeyHandler } from "./use-xterm-host";
 import { ComposerInput, type ComposerAttachment, type ComposerSubmitPayload } from "./composer-input";
-import type { ApiVendor } from "../../types";
+import { getProviderIdFromTargetId } from "../../../../shared/target-ids";
 
 type EmbeddedTerminalProps = {
   targetId: string;
@@ -25,7 +25,6 @@ type EmbeddedTerminalProps = {
   onVendorSwitch?: (vendorId: string, reason: "manual" | "candidate-pool" | "failure") => void;
   onExit?: (exitCode: number) => void;
   onInputModeChange?: (state: { mode: "composer" | "terminal"; composerVisible: boolean }) => void;
-  vendors?: ApiVendor[];
 };
 
 type PastedContentBlock = {
@@ -54,8 +53,7 @@ export function EmbeddedTerminal({
   onReady,
   onVendorSwitch,
   onExit,
-  onInputModeChange,
-  vendors = []
+  onInputModeChange
 }: EmbeddedTerminalProps) {
   const initialInputMode = sessionId ? "terminal" : "composer";
   const composerRef = useRef<HTMLTextAreaElement | null>(null);
@@ -162,7 +160,7 @@ export function EmbeddedTerminal({
     const expandedText = expandPastedContent(fullText);
     if (!terminalId || !expandedText.trim()) return;
     await writeBracketedPaste(terminalId, expandedText);
-    if (targetId.startsWith("qoder:")) await wait(QODER_PASTE_SUBMIT_DELAY_MS);
+    if (getProviderIdFromTargetId(targetId) === "qoder") await wait(QODER_PASTE_SUBMIT_DELAY_MS);
     if (terminalIdRef.current !== terminalId) return;
     await window.codexConsole.writeTerminal(terminalId, "\r");
     setComposerText("");
@@ -524,7 +522,6 @@ export function EmbeddedTerminal({
             if (inputModeRef.current !== "composer") switchInputMode("composer");
           }}
           onModelSelect={selectComposerModel}
-          vendors={vendors}
           targetId={targetId}
         />
       )}

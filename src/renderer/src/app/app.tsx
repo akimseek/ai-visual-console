@@ -58,6 +58,7 @@ import { VendorManagerOverlay } from './vendor-manager-overlay'
 import { CompressionPromptOverlay } from './compression-prompt-overlay'
 import { SkillManagerOverlay } from './skill-manager-overlay'
 import { SidebarWorkbench } from "../features/workbench/workbench-view";
+import { VendorDataProvider } from "../features/vendors/vendor-context";
 export function App() {
   const workspaceRef = useRef<HTMLElement | null>(null);
   const [error, setError] = useState("");
@@ -119,10 +120,10 @@ export function App() {
     openTabs,
     setOpenTabs,
     activeTabKey,
-    setActiveTabKey,
     terminalIdsByTabKey,
     terminalInputStatesByTabKey,
     activateTerminalTab,
+    selectTerminalTab,
     closeTerminalTabs,
     setTerminalInputState,
     registerTerminalReady,
@@ -668,6 +669,7 @@ export function App() {
         onOpenMenu={setOpenAppMenu}
       />
       <CommandPalette menus={appMenus} open={commandPaletteOpen} onClose={() => setCommandPaletteOpen(false)} />
+    <VendorDataProvider vendors={vendors}>
     <main className={`app-shell ${sidebarCollapsed ? "sidebar-collapsed" : ""}`}>
       <aside className="sidebar" hidden={sidebarCollapsed}>
         <SidebarHeader
@@ -708,7 +710,6 @@ export function App() {
           <SidebarWorkbench
             provider={selectedProvider}
             target={selectedTarget}
-            vendors={vendors}
             activeVendorId={activeVendorId}
             activeVendorName={activeVendorName}
             lastVendorSwitch={activeVendorSwitch}
@@ -732,40 +733,36 @@ export function App() {
       <section className="workspace">
         {error && <div className="error-banner">{error}</div>}
 
-        <TerminalWorkspace
-          workspaceRef={workspaceRef}
-          sidebarCollapsed={sidebarCollapsed}
-          activeTitle={activeTitle}
-          activeSession={activeSessionForSelectedTarget}
-          providerId={providerId}
-          targetId={targetId}
-          onToggleSidebar={() => setSidebarCollapsed((current) => !current)}
-          onOpenDetail={workspaceActions.openSessionDetail}
-          onOpenNewSession={openNewSessionDialog}
-          tabs={openTabs}
-          activeTabKey={activeTabKey}
-          tabsRef={terminalTabsRef}
-          onTabsWheel={workspaceActions.handleTerminalTabsWheel}
-          onSelectTab={(tabKey, sessionId) => {
-            setActiveTabKey(tabKey);
-            setSelectedId(sessionId);
-          }}
-          onTabContextMenu={workspaceActions.openTerminalTabContextMenu}
-          onCloseTab={sessionTabs.closeSessionTab}
-          focusRequest={workspaceFocusRequest}
-          terminalInputStates={terminalInputStatesByTabKey}
-          onTerminalReady={handleTerminalReady}
-          onVendorSwitch={handleVendorSwitch}
-          onTerminalExit={handleTerminalExit}
-          onTerminalInputState={handleTerminalInputState}
-          systemTerminalOpen={systemTerminalOpen}
-          activeCwd={activeCwd}
-          systemTerminalMinimized={systemTerminalMinimized}
-          systemTerminalCreateSignal={systemTerminalCreateSignal}
-          onCloseSystemTerminal={closeSystemTerminal}
-          onToggleSystemTerminalMinimized={toggleSystemTerminalMinimized}
-          vendors={vendors}
-        />
+          <TerminalWorkspace
+            workspaceRef={workspaceRef}
+            sidebarCollapsed={sidebarCollapsed}
+            activeTitle={activeTitle}
+            activeSession={activeSessionForSelectedTarget}
+            providerId={providerId}
+            targetId={targetId}
+            onToggleSidebar={() => setSidebarCollapsed((current) => !current)}
+            onOpenDetail={workspaceActions.openSessionDetail}
+            onOpenNewSession={openNewSessionDialog}
+            tabs={openTabs}
+            activeTabKey={activeTabKey}
+            tabsRef={terminalTabsRef}
+            onTabsWheel={workspaceActions.handleTerminalTabsWheel}
+            onSelectTab={selectTerminalTab}
+            onTabContextMenu={workspaceActions.openTerminalTabContextMenu}
+            onCloseTab={sessionTabs.closeSessionTab}
+            focusRequest={workspaceFocusRequest}
+            terminalInputStates={terminalInputStatesByTabKey}
+            onTerminalReady={handleTerminalReady}
+            onVendorSwitch={handleVendorSwitch}
+            onTerminalExit={handleTerminalExit}
+            onTerminalInputState={handleTerminalInputState}
+            systemTerminalOpen={systemTerminalOpen}
+            activeCwd={activeCwd}
+            systemTerminalMinimized={systemTerminalMinimized}
+            systemTerminalCreateSignal={systemTerminalCreateSignal}
+            onCloseSystemTerminal={closeSystemTerminal}
+            onToggleSystemTerminalMinimized={toggleSystemTerminalMinimized}
+          />
 
         <WorkspaceOverlays
           detailDialogSession={detailDialogSession}
@@ -976,7 +973,8 @@ export function App() {
         }}
         workspaceMessage={workspaceOverlayMessage}
       />
-	    </main>
+      </main>
+      </VendorDataProvider>
     </div>
 	  );
 	}

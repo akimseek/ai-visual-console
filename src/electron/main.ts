@@ -85,19 +85,46 @@ function createWindow() {
   window.webContents.once("did-finish-load", () => {
     void writePerformanceLog("window.did-finish-load", performance.now() - createStartedAt);
   });
+  window.webContents.on("did-fail-load", (_event, errorCode, errorDescription, validatedURL, isMainFrame) => {
+    if (!isMainFrame) return;
+    void writePerformanceLog(
+      "window.did-fail-load",
+      performance.now() - createStartedAt,
+      `${errorCode}:${errorDescription}:${validatedURL}`
+    );
+  });
+  window.webContents.on("render-process-gone", (_event, details) => {
+    void writePerformanceLog(
+      "window.render-process-gone",
+      performance.now() - createStartedAt,
+      `${details.reason}:${details.exitCode}`
+    );
+  });
+  window.webContents.on("console-message", (_event, level, message, line, sourceId) => {
+    if (level < 2) return;
+    void writePerformanceLog("window.console-error", 0, `${message} (${sourceId}:${line})`);
+  });
 
   if (isDev) {
     const loadStartedAt = performance.now();
     void writePerformanceLog("window.loadURL.start", 0);
-    void window.loadURL(process.env.VITE_DEV_SERVER_URL!).then(() => {
-      void writePerformanceLog("window.loadURL.done", performance.now() - loadStartedAt);
-    });
+    void window.loadURL(process.env.VITE_DEV_SERVER_URL!)
+      .then(() => {
+        void writePerformanceLog("window.loadURL.done", performance.now() - loadStartedAt);
+      })
+      .catch((error: unknown) => {
+        void writePerformanceLog("window.loadURL.failed", performance.now() - loadStartedAt, String(error));
+      });
   } else {
     const loadStartedAt = performance.now();
     void writePerformanceLog("window.loadFile.start", 0);
-    void window.loadFile(path.join(__dirname, "../renderer/index.html")).then(() => {
-      void writePerformanceLog("window.loadFile.done", performance.now() - loadStartedAt);
-    });
+    void window.loadFile(path.join(__dirname, "../renderer/index.html"))
+      .then(() => {
+        void writePerformanceLog("window.loadFile.done", performance.now() - loadStartedAt);
+      })
+      .catch((error: unknown) => {
+        void writePerformanceLog("window.loadFile.failed", performance.now() - loadStartedAt, String(error));
+      });
   }
 }
 

@@ -33,6 +33,12 @@ export function useTerminalTabs({ setSelectedId }: { setSelectedId: Dispatch<Set
     setPendingTerminalTabKey(pending ? tab.key : "");
   }
 
+  // 选中标签时同步左侧会话选择，避免页面调用方只更新其中一份状态。
+  function selectTerminalTab(tabKey: string, sessionId: string) {
+    setActiveTabKey(tabKey);
+    setSelectedId(sessionId);
+  }
+
   function closeTerminalTabs(keys: string[]) {
     const keysToClose = new Set(keys);
     if (keysToClose.size === 0) return;
@@ -77,11 +83,11 @@ export function useTerminalTabs({ setSelectedId }: { setSelectedId: Dispatch<Set
     openTabs,
     setOpenTabs,
     activeTabKey,
-    setActiveTabKey,
     terminalIdsByTabKey,
     terminalInputStatesByTabKey,
     resetTerminalTabs,
     activateTerminalTab,
+    selectTerminalTab,
     closeTerminalTabs,
     setTerminalInputState,
     registerTerminalReady,
