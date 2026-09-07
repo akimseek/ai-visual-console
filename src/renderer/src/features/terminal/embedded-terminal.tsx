@@ -7,6 +7,7 @@ import { TerminalSearchBar } from "./terminal-search-bar";
 import { useTerminalSearch } from "./use-terminal-search";
 import { useXtermHost, type XtermKeyHandler } from "./use-xterm-host";
 import { ComposerInput, type ComposerAttachment, type ComposerSubmitPayload } from "./composer-input";
+import { TerminalTextContextMenu } from "./terminal-text-context-menu";
 import { getProviderIdFromTargetId } from "../../../../shared/target-ids";
 
 type EmbeddedTerminalProps = {
@@ -526,20 +527,12 @@ export function EmbeddedTerminal({
         />
       )}
       {xterm.contextMenu && (
-        <div
-          className="terminal-context-menu"
-          style={{ left: `${xterm.contextMenu.x}px`, top: `${xterm.contextMenu.y}px` }}
-          role="menu"
-          onMouseDown={(event) => event.stopPropagation()}
-          onPointerDown={(event) => event.stopPropagation()}
-        >
-          <button type="button" role="menuitem" disabled={!xterm.contextMenu.canCopy} onClick={xterm.copyCurrentSelection}>
-            复制
-          </button>
-          <button type="button" role="menuitem" disabled={!terminalIdRef.current} onClick={showPasteDialogFromClipboard}>
-            粘贴
-          </button>
-        </div>
+        <TerminalTextContextMenu
+          menu={{ ...xterm.contextMenu, canPaste: Boolean(terminalIdRef.current) }}
+          onCopy={xterm.copyCurrentSelection}
+          onPaste={showPasteDialogFromClipboard}
+          onDismiss={() => xterm.setContextMenu(null)}
+        />
       )}
       {pasteDialog && (
         <div className="terminal-paste-overlay" role="presentation">

@@ -253,6 +253,76 @@ textarea:focus-visible {
   outline-offset: 2px;
 }
 
+/* Shared action hierarchy for toolbars, dialog footers and table actions. */
+.ui-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  min-width: 0;
+  height: 34px;
+  padding: 0 12px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: var(--ui-surface);
+  color: var(--ui-text);
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 650;
+  line-height: 1;
+  white-space: nowrap;
+  transition: background-color 160ms ease, border-color 160ms ease, color 160ms ease, transform 160ms ease;
+}
+
+.ui-button svg {
+  flex: 0 0 auto;
+}
+
+.ui-button-primary {
+  border-color: var(--ui-accent);
+  background: var(--ui-accent);
+  color: #ffffff;
+}
+
+.ui-button-primary:hover:not(:disabled) {
+  border-color: var(--ui-accent-strong);
+  background: var(--ui-accent-strong);
+  transform: translateY(-1px);
+}
+
+.ui-button-secondary {
+  border-color: var(--ui-border-strong);
+  background: var(--ui-surface);
+  color: var(--ui-text);
+}
+
+.ui-button-secondary:hover:not(:disabled) {
+  border-color: var(--ui-accent);
+  background: var(--ui-accent-soft);
+  color: var(--ui-accent-strong);
+}
+
+.ui-button-danger {
+  border-color: #d79090;
+  background: #fff6f6;
+  color: #a52d2d;
+}
+
+.ui-button-danger:hover:not(:disabled) {
+  border-color: #c84646;
+  background: #c84646;
+  color: #ffffff;
+}
+
+.ui-button:active:not(:disabled) {
+  transform: translateY(1px) scale(0.98);
+}
+
+.ui-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.52;
+}
+
 .sidebar,
 .detail,
 .app-statusbar {
@@ -682,9 +752,17 @@ textarea:focus-visible {
 }
 
 .sidebar-workbench-heading p {
+  min-width: 0;
+  overflow: hidden;
   margin: 3px 0 0;
   color: var(--ui-muted);
   font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sidebar-workbench-heading > div {
+  min-width: 0;
 }
 
 .sidebar-workbench-refresh {
@@ -708,13 +786,49 @@ textarea:focus-visible {
   min-height: 0;
   overflow: auto;
   border-top: 1px solid var(--ui-border);
+  scrollbar-color: var(--ui-border-strong) transparent;
+  scrollbar-width: thin;
+}
+
+.sidebar-workbench-section {
+  min-width: 0;
+  padding: 12px 12px 0;
+}
+
+.sidebar-workbench-section:last-of-type {
+  padding-bottom: 12px;
+}
+
+.sidebar-workbench-section-heading {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  min-width: 0;
+  margin: 0 2px 8px;
+  color: var(--ui-text);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.sidebar-workbench-section-heading span:last-child {
+  color: var(--ui-muted);
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
+.sidebar-workbench-context-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
 }
 
 .sidebar-workbench-metrics {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: minmax(0, 1fr);
   gap: 8px;
-  padding: 12px;
 }
 
 .sidebar-workbench-metric {
@@ -723,6 +837,7 @@ textarea:focus-visible {
   align-items: start;
   gap: 9px;
   min-width: 0;
+  overflow: hidden;
   min-height: 104px;
   padding: 11px 10px;
   border: 1px solid var(--ui-border);
@@ -743,6 +858,7 @@ textarea:focus-visible {
 .sidebar-workbench-metric > div {
   display: grid;
   min-width: 0;
+  overflow: hidden;
   gap: 4px;
 }
 
@@ -927,32 +1043,6 @@ textarea:focus-visible {
   color: var(--ui-muted);
   font-size: 12px;
   line-height: 1.5;
-}
-
-.gateway-log-cleanup {
-  display: grid;
-  gap: 8px;
-  margin-top: 18px;
-  padding-top: 14px;
-  border-top: 1px solid #e2e7ee;
-}
-
-.gateway-log-cleanup h3 {
-  margin: 0;
-  color: #273142;
-  font-size: 13px;
-}
-
-.gateway-log-cleanup-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-}
-
-.gateway-log-cleanup-actions button {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
 }
 
 .gateway-log-cleanup-dialog {
@@ -1769,10 +1859,15 @@ textarea:focus-visible {
   display: inline-flex;
   align-items: center;
   gap: 5px;
+  min-width: 0;
+  max-width: 100%;
+  flex-wrap: wrap;
   color: var(--ui-muted);
+  line-height: 1.35;
 }
 
 .sidebar-workbench-health-detail {
+  min-width: 0;
   overflow: hidden;
   color: var(--ui-muted);
   text-overflow: ellipsis;
@@ -2763,34 +2858,6 @@ textarea:focus-visible {
   border-radius: 7px;
   background: #111827;
   box-shadow: 0 12px 28px rgba(0, 0, 0, 0.28);
-}
-
-.text-editing-context-menu {
-  min-width: 132px;
-}
-
-.text-editing-context-menu button {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  width: 100%;
-  border: 0;
-  border-radius: 5px;
-  background: transparent;
-  color: #e5e7eb;
-  cursor: pointer;
-  font: inherit;
-  padding: 7px 9px;
-  text-align: left;
-}
-
-.text-editing-context-menu button:hover:not(:disabled) {
-  background: #263449;
-}
-
-.text-editing-context-menu button:disabled {
-  cursor: not-allowed;
-  opacity: 0.45;
 }
 
 .terminal-search {
@@ -6926,6 +6993,135 @@ textarea:focus-visible {
 .session-detail-modal .message-branch:focus-visible {
   outline: 2px solid var(--ui-accent);
   outline-offset: 2px;
+}
+
+/* Explicit module mappings keep legacy selectors from fragmenting the action language. */
+.actions .ui-button {
+  height: 34px;
+  min-width: 76px;
+  border-radius: 6px;
+  font-size: 12px;
+}
+
+.provider-status-dialog footer .ui-button,
+.provider-status-row-actions .ui-button {
+  height: 32px;
+  border-radius: 6px;
+  font-size: 12px;
+}
+
+.provider-status-row-actions .ui-button {
+  height: 28px;
+  padding: 0 9px;
+  font-size: 11px;
+}
+
+.skill-manager-toolbar .ui-button,
+.skill-actions .ui-button {
+  height: 32px;
+  border-radius: 6px;
+  font-size: 12px;
+}
+
+.skill-view-switch .ui-button {
+  border-radius: 0;
+}
+
+.skill-view-switch .ui-button:first-child {
+  border-radius: 6px 0 0 6px;
+}
+
+.skill-view-switch .ui-button:last-child {
+  border-left: 0;
+  border-radius: 0 6px 6px 0;
+}
+
+.skill-view-switch .ui-button.active {
+  border-color: var(--ui-accent);
+  background: var(--ui-accent);
+  color: #ffffff;
+}
+
+.vendor-list-toolbar .ui-button,
+.vendor-manager-dialog footer .ui-button {
+  height: 34px;
+  border-radius: 6px;
+  font-size: 12px;
+}
+
+.vendor-card-actions .ui-button {
+  height: 30px;
+  min-width: 48px;
+  padding: 0 9px;
+  border-radius: 5px;
+  font-size: 12px;
+}
+
+.vendor-provider-picker .ui-button {
+  height: 30px;
+  border-radius: 5px;
+  font-size: 12px;
+}
+
+.vendor-provider-picker .ui-button.active {
+  border-color: var(--ui-accent);
+  background: var(--ui-accent);
+  color: #ffffff;
+}
+
+/* Shared dialogs inherit Vendor Management's compact, quiet close control. */
+.dialog > header .icon-button {
+  flex: 0 0 auto;
+  width: 32px;
+  height: 32px;
+  border-radius: 7px;
+}
+
+/* Legacy dialog selectors remain for layout only; all actions resolve through ui-button. */
+.new-session-dialog footer .ui-button,
+.session-settings-dialog footer .ui-button,
+.session-rename-dialog footer .ui-button,
+.session-duplicate-dialog footer .ui-button,
+.gateway-log-cleanup-dialog .gateway-log-cleanup-query-actions .ui-button,
+.gateway-log-cleanup-dialog > footer .ui-button,
+.cli-installer-toolbar .ui-button,
+.cli-installer-actions .ui-button,
+.cli-installer-dialog footer .ui-button,
+.compression-list-toolbar .ui-button,
+.compression-card-actions .ui-button,
+.compression-manager-dialog footer .ui-button,
+.compression-confirm-dialog .ui-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  border-radius: 6px;
+  font-weight: 650;
+}
+
+.cli-installer-toolbar .ui-button,
+.cli-installer-actions .ui-button,
+.cli-installer-dialog footer .ui-button,
+.compression-list-toolbar .ui-button,
+.compression-manager-dialog footer .ui-button {
+  height: 34px;
+  padding: 0 12px;
+  font-size: 12px;
+}
+
+.compression-card-actions .ui-button,
+.compression-confirm-dialog .ui-button {
+  height: 30px;
+  padding: 0 9px;
+  font-size: 12px;
+}
+
+.gateway-log-cleanup-dialog .gateway-log-cleanup-query-actions .ui-button,
+.gateway-log-cleanup-dialog > footer .ui-button {
+  height: 30px;
+  min-width: 76px;
+  padding: 0 10px;
+  font-size: 12px;
 }
 
 @media (max-width: 760px) {

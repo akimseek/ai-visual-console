@@ -36,10 +36,10 @@ export function NewSessionDialog({
       closeOnOverlay={false}
       footer={
         <>
-          <button type="button" className="secondary" onClick={onClose}>
+          <button type="button" className="ui-button ui-button-secondary" onClick={onClose}>
             取消
           </button>
-          <button type="button" onClick={onConfirm}>
+          <button type="button" className="ui-button ui-button-primary" onClick={onConfirm}>
             {pendingResume ? "继续打开" : "打开"}
           </button>
         </>
@@ -56,7 +56,7 @@ export function NewSessionDialog({
         <div className="directory-field">
           <span>工作目录</span>
           <code title={cwd}>{cwd}</code>
-          <button type="button" onClick={onChooseDirectory}>
+          <button type="button" className="ui-button ui-button-secondary" onClick={onChooseDirectory}>
             设置工作目录
           </button>
         </div>

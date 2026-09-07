@@ -1,5 +1,4 @@
 import { useLayoutEffect, useRef, useState } from "react";
-import { ClipboardPaste, Copy, Scissors, TextSelect } from "lucide-react";
 
 // 右键上下文菜单：会话列表项菜单与终端标签页菜单，从 App.tsx 的内联 JSX 抽出为展示组件。
 
@@ -193,55 +192,6 @@ export function TabContextMenu({
         }}
       >
         关闭所有
-      </button>
-    </div>
-  );
-}
-
-export function TextEditingContextMenu({
-  menu,
-  onCopy,
-  onCut,
-  onPaste,
-  onSelectAll,
-  onDismiss
-}: {
-  menu: { x: number; y: number; canCopy: boolean; canPaste: boolean };
-  onCopy: () => void;
-  onCut: () => void;
-  onPaste: () => void;
-  onSelectAll: () => void;
-  onDismiss: () => void;
-}) {
-  const { menuRef, position } = useViewportMenuPosition(menu.x, menu.y);
-  const run = (action: () => void) => {
-    action();
-    onDismiss();
-  };
-  return (
-    <div
-      ref={menuRef}
-      className="context-menu text-editing-context-menu"
-      style={{ left: `${position.x}px`, top: `${position.y}px` }}
-      role="menu"
-      onMouseDown={(event) => event.stopPropagation()}
-      onPointerDown={(event) => event.stopPropagation()}
-    >
-      <button type="button" role="menuitem" disabled={!menu.canCopy} onClick={() => run(onCopy)}>
-        <Copy aria-hidden="true" size={14} />
-        复制
-      </button>
-      <button type="button" role="menuitem" disabled={!menu.canCopy} onClick={() => run(onCut)}>
-        <Scissors aria-hidden="true" size={14} />
-        剪切
-      </button>
-      <button type="button" role="menuitem" disabled={!menu.canPaste} onClick={() => run(onPaste)}>
-        <ClipboardPaste aria-hidden="true" size={14} />
-        粘贴
-      </button>
-      <button type="button" role="menuitem" onClick={() => run(onSelectAll)}>
-        <TextSelect aria-hidden="true" size={14} />
-        全选
       </button>
     </div>
   );

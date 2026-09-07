@@ -6,6 +6,7 @@ import type { SystemTerminalKind } from "../../types";
 import { getWslDistroFromTargetId } from "../../../../shared/target-ids";
 import { useTerminalSearch } from "./use-terminal-search";
 import { useXtermHost } from "./use-xterm-host";
+import { TerminalTextContextMenu } from "./terminal-text-context-menu";
 
 type SystemTerminalTab = {
   key: string;
@@ -371,19 +372,12 @@ function SystemTerminalPane({ tab, active, hidden }: { tab: SystemTerminalTab; a
         />
       )}
       {xterm.contextMenu && !hidden && (
-        <div
-          className="terminal-context-menu"
-          style={{ left: `${xterm.contextMenu.x}px`, top: `${xterm.contextMenu.y}px` }}
-          role="menu"
-          onMouseDown={(event) => event.stopPropagation()}
-        >
-          <button type="button" role="menuitem" disabled={!xterm.contextMenu.canCopy} onClick={xterm.copyCurrentSelection}>
-            复制
-          </button>
-          <button type="button" role="menuitem" disabled={!xterm.terminalIdRef.current} onClick={() => void xterm.pasteClipboardText()}>
-            粘贴
-          </button>
-        </div>
+        <TerminalTextContextMenu
+          menu={{ ...xterm.contextMenu, canPaste: Boolean(xterm.terminalIdRef.current) }}
+          onCopy={xterm.copyCurrentSelection}
+          onPaste={() => void xterm.pasteClipboardText()}
+          onDismiss={() => xterm.setContextMenu(null)}
+        />
       )}
     </div>
   );

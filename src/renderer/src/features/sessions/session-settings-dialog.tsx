@@ -27,13 +27,10 @@ export function SessionSettingsDialog({
       closeOnOverlay={false}
       footer={
         <>
-          <button type="button" className="secondary" onClick={onRestore} disabled={disabled}>
+          <button type="button" className="ui-button ui-button-secondary" onClick={onRestore} disabled={disabled}>
             恢复自动探测
           </button>
-          <button type="button" className="secondary" onClick={onClose}>
-            取消
-          </button>
-          <button type="button" onClick={onSave} disabled={disabled}>
+          <button type="button" className="ui-button ui-button-primary" onClick={onSave} disabled={disabled}>
             保存
           </button>
         </>

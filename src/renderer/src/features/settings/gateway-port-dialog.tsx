@@ -14,8 +14,7 @@ export function GatewayPortDialog({
   onCircuitFailureThresholdChange,
   onCircuitDurationChange,
   onClose,
-  onSave,
-  onOpenGatewayLogCleanup
+  onSave
 }: {
   draft: string;
   failureThresholdDraft: string;
@@ -30,7 +29,6 @@ export function GatewayPortDialog({
   onCircuitDurationChange: (value: string) => void;
   onClose: () => void;
   onSave: () => void;
-  onOpenGatewayLogCleanup: () => void;
 }) {
   return (
     <Dialog
@@ -40,8 +38,8 @@ export function GatewayPortDialog({
       busy={busy}
       footer={
         <>
-          <button type="button" className="secondary" onClick={onClose} disabled={busy}>取消</button>
-          <button type="button" onClick={onSave} disabled={busy}>{busy ? "保存中..." : "保存"}</button>
+          <button type="button" className="ui-button ui-button-secondary" onClick={onClose} disabled={busy}>取消</button>
+          <button type="button" className="ui-button ui-button-primary" onClick={onSave} disabled={busy}>{busy ? "保存中..." : "保存"}</button>
         </>
       }
     >
@@ -101,13 +99,6 @@ export function GatewayPortDialog({
           配置端口 {status.configuredPort} 被占用，Gateway 已回退到 {status.activePort}；新建终端将使用回退端口。
         </p>
       )}
-      <section className="gateway-log-cleanup">
-        <h3>Gateway 日志清理</h3>
-        <p className="dialog-hint">可按范围、供应商、结果类型和时间范围选择性清理。</p>
-        <div className="gateway-log-cleanup-actions">
-          <button type="button" className="secondary" onClick={onOpenGatewayLogCleanup} disabled={busy}>按条件清理 Gateway 日志</button>
-        </div>
-      </section>
       {error && <p className="dialog-error">{error}</p>}
     </Dialog>
   );

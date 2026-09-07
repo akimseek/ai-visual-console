@@ -24,7 +24,7 @@ import type { LucideIcon } from "lucide-react";
 import type { VendorModel } from "../../types";
 import { getProviderIdFromTargetId } from "../../../../shared/target-ids";
 import { useVendorData } from "../vendors/vendor-context";
-import { TextEditingContextMenu } from "./context-menus";
+import { TerminalTextContextMenu } from "./terminal-text-context-menu";
 
 export type ComposerAttachment = {
   id: string;
@@ -299,17 +299,6 @@ export function ComposerInput({
     void window.codexConsole.copyText(text.slice(textContextMenu.start, textContextMenu.end));
   }
 
-  function cutTextSelection() {
-    if (!textContextMenu || textContextMenu.start === textContextMenu.end) return;
-    const { start, end } = textContextMenu;
-    void window.codexConsole.copyText(text.slice(start, end));
-    onTextChange(`${text.slice(0, start)}${text.slice(end)}`);
-    window.setTimeout(() => {
-      composerRef.current?.focus();
-      composerRef.current?.setSelectionRange(start, start);
-    }, 0);
-  }
-
   function pasteTextFromClipboard() {
     if (!textContextMenu) return;
     const { start, end } = textContextMenu;
@@ -322,11 +311,6 @@ export function ComposerInput({
         composerRef.current?.setSelectionRange(caret, caret);
       }, 0);
     });
-  }
-
-  function selectAllText() {
-    composerRef.current?.focus();
-    composerRef.current?.select();
   }
 
   function insertNewline(element: HTMLTextAreaElement) {
@@ -494,7 +478,7 @@ export function ComposerInput({
       </div>
 
       {textContextMenu && (
-        <TextEditingContextMenu
+        <TerminalTextContextMenu
           menu={{
             x: textContextMenu.x,
             y: textContextMenu.y,
@@ -502,9 +486,7 @@ export function ComposerInput({
             canPaste: Boolean(navigator.clipboard || window.codexConsole.readText)
           }}
           onCopy={copyTextSelection}
-          onCut={cutTextSelection}
           onPaste={pasteTextFromClipboard}
-          onSelectAll={selectAllText}
           onDismiss={() => setTextContextMenu(null)}
         />
       )}

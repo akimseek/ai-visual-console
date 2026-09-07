@@ -63,10 +63,10 @@ export function CompressionPromptManagerDialog({
       busy={Boolean(busy)}
       footer={mode === "form" ? (
         <>
-          <button type="button" className="secondary" onClick={onBack} disabled={Boolean(busy)}>
+          <button type="button" className="ui-button ui-button-secondary" onClick={onBack} disabled={Boolean(busy)}>
             取消
           </button>
-          <button type="button" onClick={onSave} disabled={Boolean(busy)}>
+          <button type="button" className="ui-button ui-button-primary" onClick={onSave} disabled={Boolean(busy)}>
             保存
           </button>
         </>
@@ -80,7 +80,7 @@ export function CompressionPromptManagerDialog({
               <strong>压缩提示</strong>
               <span>{prompts.length} 个</span>
             </div>
-            <button type="button" onClick={onNew} disabled={Boolean(busy)}>
+            <button type="button" className="ui-button ui-button-primary" onClick={onNew} disabled={Boolean(busy)}>
               新增提示
             </button>
           </div>
@@ -97,13 +97,13 @@ export function CompressionPromptManagerDialog({
                 </div>
                 <span>{formatRelative(prompt.updatedAt)}</span>
                 <div className="compression-card-actions">
-                  <button type="button" onClick={() => void onGenerate(prompt)} disabled={Boolean(busy)}>
+                  <button type="button" className="ui-button ui-button-secondary" onClick={() => void onGenerate(prompt)} disabled={Boolean(busy)}>
                     生成
                   </button>
-                  <button type="button" onClick={() => onEdit(prompt)} disabled={Boolean(busy)}>
+                  <button type="button" className="ui-button ui-button-secondary" onClick={() => onEdit(prompt)} disabled={Boolean(busy)}>
                     编辑
                   </button>
-                  <button type="button" className="danger" onClick={() => setDeleteCandidate(prompt)} disabled={Boolean(busy)}>
+                  <button type="button" className="ui-button ui-button-danger" onClick={() => setDeleteCandidate(prompt)} disabled={Boolean(busy)}>
                     删除
                   </button>
                 </div>
@@ -143,12 +143,12 @@ export function CompressionPromptManagerDialog({
             <h3 id="compression-delete-title">删除压缩提示？</h3>
             <p>{deleteCandidate.name}</p>
             <div>
-              <button type="button" className="secondary" onClick={() => setDeleteCandidate(null)}>
+              <button type="button" className="ui-button ui-button-secondary" onClick={() => setDeleteCandidate(null)}>
                 取消
               </button>
               <button
                 type="button"
-                className="danger"
+                className="ui-button ui-button-danger"
                 onClick={() => {
                   onDelete(deleteCandidate.id);
                   setDeleteCandidate(null);

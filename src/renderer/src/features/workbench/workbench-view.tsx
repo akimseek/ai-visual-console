@@ -87,16 +87,30 @@ export function SidebarWorkbench({
       </header>
 
       <div className="sidebar-workbench-scroll-area">
-        <div className="sidebar-workbench-metrics">
-          <MetricCard icon={Server} label="运行目标" value={provider?.label || "未选择平台"} detail={target?.label || "请选择一个目标"} />
-          <MetricCard icon={Activity} label="当前供应商" value={activeVendorName || "尚未建立路由"} detail={<HealthState health={activeHealth} />} />
-          <MetricCard icon={MessagesSquare} label="当前会话" value={session?.title || "未打开会话"} detail={session ? `模型：${model.label}` : "打开会话后显示模型信息"} />
-          <MetricCard icon={Database} label="会话用量" value={tokenUsage.label} valueTitle={tokenUsage.title} detail={`上下文：${contextUsage.label}`} detailTitle={contextUsage.title} numeric />
-          {lastVendorSwitch && <VendorSwitchCard vendors={vendors} value={lastVendorSwitch} />}
-          {rateLimitWindows.length > 0 && <RateLimitCard windows={rateLimitWindows} />}
-          <GatewayUsageCard summary={usageSummary} onOpenDetails={() => setUsageDialogOpen(true)} />
-          {recentFailures.length > 0 && <GatewayFailureCard vendors={vendors} failures={recentFailures} onOpenDetails={() => setFailureDialogOpen(true)} />}
-        </div>
+        <section className="sidebar-workbench-section" aria-labelledby="workbench-context-heading">
+          <div className="sidebar-workbench-section-heading">
+            <span id="workbench-context-heading">运行上下文</span>
+            <span>当前状态</span>
+          </div>
+          <div className="sidebar-workbench-context-grid">
+            <MetricCard icon={Server} label="运行目标" value={provider?.label || "未选择平台"} detail={target?.label || "请选择一个目标"} />
+            <MetricCard icon={Activity} label="当前供应商" value={activeVendorName || "尚未建立路由"} detail={<HealthState health={activeHealth} />} />
+            <MetricCard icon={MessagesSquare} label="当前会话" value={session?.title || "未打开会话"} detail={session ? `模型：${model.label}` : "打开会话后显示模型信息"} />
+            <MetricCard icon={Database} label="会话用量" value={tokenUsage.label} valueTitle={tokenUsage.title} detail={`上下文：${contextUsage.label}`} detailTitle={contextUsage.title} numeric />
+          </div>
+        </section>
+        <section className="sidebar-workbench-section" aria-labelledby="workbench-monitor-heading">
+          <div className="sidebar-workbench-section-heading">
+            <span id="workbench-monitor-heading">运行监控</span>
+            <span>Gateway</span>
+          </div>
+          <div className="sidebar-workbench-metrics">
+            {lastVendorSwitch && <VendorSwitchCard vendors={vendors} value={lastVendorSwitch} />}
+            {rateLimitWindows.length > 0 && <RateLimitCard windows={rateLimitWindows} />}
+            <GatewayUsageCard summary={usageSummary} onOpenDetails={() => setUsageDialogOpen(true)} />
+            {recentFailures.length > 0 && <GatewayFailureCard vendors={vendors} failures={recentFailures} onOpenDetails={() => setFailureDialogOpen(true)} />}
+          </div>
+        </section>
 
         {healthError && <p className="sidebar-workbench-error" role="status">{healthError}</p>}
         {usageError && <p className="sidebar-workbench-error" role="status">{usageError}</p>}

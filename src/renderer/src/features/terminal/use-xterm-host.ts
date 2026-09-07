@@ -48,28 +48,6 @@ export function useXtermHost(options: UseXtermHostOptions = {}) {
   // 右键菜单状态
   const [contextMenu, setContextMenu] = useState<ContextMenuState>(null);
 
-  useEffect(() => {
-    if (!contextMenu) return;
-    // 终端右键菜单由 Hook 统一管理：菜单外点击、滚动或 Escape 都应立即关闭。
-    const closeOnOutsidePointer = (event: PointerEvent) => {
-      const target = event.target as Element | null;
-      if (target?.closest(".terminal-context-menu")) return;
-      setContextMenu(null);
-    };
-    const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setContextMenu(null);
-    };
-    const closeOnScroll = () => setContextMenu(null);
-    document.addEventListener("pointerdown", closeOnOutsidePointer);
-    document.addEventListener("scroll", closeOnScroll, true);
-    document.addEventListener("keydown", closeOnEscape);
-    return () => {
-      document.removeEventListener("pointerdown", closeOnOutsidePointer);
-      document.removeEventListener("scroll", closeOnScroll, true);
-      document.removeEventListener("keydown", closeOnEscape);
-    };
-  }, [contextMenu]);
-
   // 用 ref 持有外部回调，避免 mountTerminal 的 useCallback 因它们而每渲染重建
   const customKeyHandlerRef = useRef(customKeyHandler);
   customKeyHandlerRef.current = customKeyHandler;

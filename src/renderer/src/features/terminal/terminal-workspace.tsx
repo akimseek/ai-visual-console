@@ -92,8 +92,8 @@ export function TerminalWorkspace({
           </div>
         </div>
         <div className="actions">
-          {activeSession && <button className="secondary" onClick={() => onOpenDetail(activeSession)}>详情</button>}
-          {providerId && targetId && <button onClick={onOpenNewSession}>新会话</button>}
+          {activeSession && <button className="ui-button ui-button-secondary" onClick={() => onOpenDetail(activeSession)}>详情</button>}
+          {providerId && targetId && <button className="ui-button ui-button-primary" onClick={onOpenNewSession}>新会话</button>}
         </div>
       </section>
       <TerminalTabs

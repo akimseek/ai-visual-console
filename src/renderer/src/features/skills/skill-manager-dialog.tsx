@@ -46,7 +46,7 @@ export function SkillManagerDialog({
           <div className="skill-view-switch" role="tablist" aria-label="Skill 视图">
             <button
               type="button"
-              className={skillView === "active" ? "active" : ""}
+              className={`ui-button ui-button-secondary ${skillView === "active" ? "active" : ""}`}
               onClick={() => onSwitchView("active")}
               disabled={skillsLoading}
             >
@@ -54,17 +54,17 @@ export function SkillManagerDialog({
             </button>
             <button
               type="button"
-              className={skillView === "trash" ? "active" : ""}
+              className={`ui-button ui-button-secondary ${skillView === "trash" ? "active" : ""}`}
               onClick={() => onSwitchView("trash")}
               disabled={skillsLoading}
             >
               回收站
             </button>
           </div>
-          <button type="button" className="secondary" onClick={onRefresh} disabled={skillsLoading}>
+          <button type="button" className="ui-button ui-button-secondary" onClick={onRefresh} disabled={skillsLoading}>
             刷新
           </button>
-          <button type="button" onClick={onImport} disabled={skillsLoading || skillView !== "active"}>
+          <button type="button" className="ui-button ui-button-primary" onClick={onImport} disabled={skillsLoading || skillView !== "active"}>
             导入 skill
           </button>
         </div>
@@ -84,22 +84,22 @@ export function SkillManagerDialog({
             <div className="skill-actions">
               {skillView === "active" ? (
                 <>
-                  <button type="button" className="secondary" onClick={() => void window.codexConsole.openSkillFolder(targetId, skillSourceName(skill))}>
+                  <button type="button" className="ui-button ui-button-secondary" onClick={() => void window.codexConsole.openSkillFolder(targetId, skillSourceName(skill))}>
                     打开目录
                   </button>
-                  <button type="button" className="secondary" onClick={() => onToggle(skill)}>
+                  <button type="button" className="ui-button ui-button-secondary" onClick={() => onToggle(skill)}>
                     {skill.enabled ? "禁用" : "启用"}
                   </button>
-                  <button type="button" className="danger" onClick={() => onDelete(skill)}>
+                  <button type="button" className="ui-button ui-button-danger" onClick={() => onDelete(skill)}>
                     移除
                   </button>
                 </>
               ) : (
                 <>
-                  <button type="button" className="secondary" onClick={() => onRestore(skill)}>
+                  <button type="button" className="ui-button ui-button-secondary" onClick={() => onRestore(skill)}>
                     恢复
                   </button>
-                  <button type="button" className="danger" onClick={() => onPurge(skill)}>
+                  <button type="button" className="ui-button ui-button-danger" onClick={() => onPurge(skill)}>
                     彻底删除
                   </button>
                 </>

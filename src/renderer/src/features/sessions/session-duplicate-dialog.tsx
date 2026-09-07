@@ -26,10 +26,10 @@ export function SessionDuplicateDialog({
       busy={busy}
       footer={
         <>
-          <button type="button" className="secondary" onClick={onClose} disabled={busy}>
+          <button type="button" className="ui-button ui-button-secondary" onClick={onClose} disabled={busy}>
             取消
           </button>
-          <button type="submit" form="session-duplicate-form" disabled={busy}>
+          <button type="submit" className="ui-button ui-button-primary" form="session-duplicate-form" disabled={busy}>
             复制
           </button>
         </>

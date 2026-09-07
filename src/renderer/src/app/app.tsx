@@ -923,9 +923,6 @@ export function App() {
         onCircuitDurationChange={gatewayPort.setCircuitDurationDraft}
         onClose={() => gatewayPort.setOpen(false)}
         onSave={() => void gatewayPort.saveGatewayPort()}
-        onOpenGatewayLogCleanup={() => {
-          setGatewayLogCleanupOpen(true);
-        }}
       />
       {gatewayLogCleanupOpen && (
         <GatewayLogCleanupDialog

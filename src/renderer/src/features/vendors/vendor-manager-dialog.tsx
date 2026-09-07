@@ -220,11 +220,11 @@ export function VendorManagerDialog({
                 <span>{vendors.length} 个</span>
               </div>
               <div className="vendor-list-toolbar-actions">
-                <button type="button" onClick={() => { setCurrentPage(1); onNew(); }} disabled={Boolean(busy)}>
+                <button type="button" className="ui-button ui-button-primary" onClick={() => { setCurrentPage(1); onNew(); }} disabled={Boolean(busy)}>
                   <Plus aria-hidden="true" size={15} strokeWidth={2} />
                   新增供应商
                 </button>
-                <button type="button" onClick={onRefreshAllBalances} disabled={Boolean(busy) || vendors.length === 0}>
+                <button type="button" className="ui-button ui-button-primary" onClick={onRefreshAllBalances} disabled={Boolean(busy) || vendors.length === 0}>
                   <RefreshCw aria-hidden="true" size={15} strokeWidth={2} className={refreshingAllBalances ? "is-spinning" : undefined} />
                   刷新全部余额
                 </button>
@@ -308,11 +308,11 @@ export function VendorManagerDialog({
                         </VendorTableCell>
                         <td className="vendor-actions-cell">
                           <div className="vendor-card-actions">
-                            <button type="button" onClick={() => onEdit(vendor)} disabled={Boolean(busy)}>
+                            <button type="button" className="ui-button ui-button-secondary" onClick={() => onEdit(vendor)} disabled={Boolean(busy)}>
                               <Pencil aria-hidden="true" size={14} strokeWidth={2} />
                               编辑
                             </button>
-                            <button type="button" className="danger" onClick={() => setDeleteCandidate(vendor)} disabled={Boolean(busy)}>
+                            <button type="button" className="ui-button ui-button-danger" onClick={() => setDeleteCandidate(vendor)} disabled={Boolean(busy)}>
                               <Trash2 aria-hidden="true" size={14} strokeWidth={2} />
                               删除
                             </button>
@@ -343,12 +343,12 @@ export function VendorManagerDialog({
                   <h3>删除供应商</h3>
                   <p>确认删除供应商「{deleteCandidate.name}」？此操作不会还原已写入的 CLI 配置。</p>
                   <div>
-                    <button type="button" className="secondary" onClick={() => setDeleteCandidate(null)} disabled={Boolean(busy)}>
+                    <button type="button" className="ui-button ui-button-secondary" onClick={() => setDeleteCandidate(null)} disabled={Boolean(busy)}>
                       取消
                     </button>
                     <button
                       type="button"
-                      className="danger"
+                      className="ui-button ui-button-danger"
                       onClick={() => {
                         const vendorId = deleteCandidate.id;
                         setDeleteCandidate(null);
@@ -377,7 +377,7 @@ export function VendorManagerDialog({
                   <button
                     key={nextProviderId}
                     type="button"
-                    className={draft.providerId === nextProviderId ? "active" : ""}
+                    className={`ui-button ui-button-secondary ${draft.providerId === nextProviderId ? "active" : ""}`}
                     onClick={() => onProviderChange(nextProviderId)}
                   >
                     {providerLabel(nextProviderId)}
@@ -517,10 +517,10 @@ export function VendorManagerDialog({
         )}
         {mode === "form" && (
           <footer>
-            <button type="button" className="secondary" onClick={onBack} disabled={Boolean(busy)}>
+            <button type="button" className="ui-button ui-button-secondary" onClick={onBack} disabled={Boolean(busy)}>
               返回
             </button>
-            <button type="button" onClick={saveForm} disabled={Boolean(busy) || Boolean(queryConfigErrors.model || queryConfigErrors.balance)}>
+            <button type="button" className="ui-button ui-button-primary" onClick={saveForm} disabled={Boolean(busy) || Boolean(queryConfigErrors.model || queryConfigErrors.balance)}>
               保存
             </button>
           </footer>

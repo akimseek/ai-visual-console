@@ -42,7 +42,7 @@ export function CliInstallerDialog({
       closeOnOverlay={false}
       busy={Boolean(busy)}
       footer={
-        <button type="button" className="secondary" onClick={onClose} disabled={Boolean(busy)}>
+        <button type="button" className="ui-button ui-button-secondary" onClick={onClose} disabled={Boolean(busy)}>
           关闭
         </button>
       }
@@ -61,7 +61,7 @@ export function CliInstallerDialog({
             <option value={22}>22 LTS 兼容</option>
           </select>
         </label>
-        <button type="button" className="secondary" onClick={() => void onRefresh()} disabled={Boolean(busy) || environmentLoading}>
+        <button type="button" className="ui-button ui-button-secondary" onClick={() => void onRefresh()} disabled={Boolean(busy) || environmentLoading}>
           {environmentLoading ? "检测中..." : "重新检测"}
         </button>
       </div>
@@ -95,6 +95,7 @@ export function CliInstallerDialog({
               <div className="cli-installer-actions">
                 <button
                   type="button"
+                  className="ui-button ui-button-primary"
                   disabled={disabled || environmentLoading || !canInstall}
                   title={blockedByNvm ? "请先安装 nvm 后重新检测" : undefined}
                   onClick={() => void onInstall(installer.providerId)}

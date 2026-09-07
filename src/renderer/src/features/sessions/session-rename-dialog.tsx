@@ -28,14 +28,14 @@ export function SessionRenameDialog({
       busy={busy}
       footer={
         <>
-          <button type="button" className="secondary" onClick={onRestore} disabled={busy || !session.metadata?.customTitle}>
+          <button type="button" className="ui-button ui-button-secondary" onClick={onRestore} disabled={busy || !session.metadata?.customTitle}>
             恢复自动标题
           </button>
           <span />
-          <button type="button" className="secondary" onClick={onClose} disabled={busy}>
+          <button type="button" className="ui-button ui-button-secondary" onClick={onClose} disabled={busy}>
             取消
           </button>
-          <button type="submit" form="session-rename-form" disabled={busy || !value.trim()}>
+          <button type="submit" className="ui-button ui-button-primary" form="session-rename-form" disabled={busy || !value.trim()}>
             保存
           </button>
         </>

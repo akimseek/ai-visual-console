@@ -92,13 +92,13 @@ export function ProviderStatusDialog({
       closeOnOverlay={false}
       footer={
         <>
-          <button type="button" className="secondary" onClick={onClose}>
+          <button type="button" className="ui-button ui-button-secondary" onClick={onClose}>
             关闭
           </button>
-          <button type="button" className="secondary" onClick={onRescan} disabled={!provider}>
+          <button type="button" className="ui-button ui-button-secondary" onClick={onRescan} disabled={!provider}>
             重新探测目标
           </button>
-          <button type="button" onClick={onRefresh} disabled={!provider}>
+          <button type="button" className="ui-button ui-button-primary" onClick={onRefresh} disabled={!provider}>
             刷新
           </button>
         </>
@@ -159,10 +159,10 @@ function ProviderStatusSection({
                 if (!row.openable || !path) return null;
                 return (
                 <span className="provider-status-row-actions">
-                  <button type="button" disabled={!row.openable} onClick={() => onOpenPath?.(targetId, path)}>
+                  <button type="button" className="ui-button ui-button-secondary" disabled={!row.openable} onClick={() => onOpenPath?.(targetId, path)}>
                     打开
                   </button>
-                  <button type="button" onClick={() => onCopyPath?.(path)}>
+                  <button type="button" className="ui-button ui-button-secondary" onClick={() => onCopyPath?.(path)}>
                     复制
                   </button>
                 </span>
