@@ -17,10 +17,19 @@ export function useProviderTargets({ setError, logPerformance }: UseProviderTarg
   const [targets, setTargets] = useState<AiTarget[]>([]);
   const [targetId, setTargetId] = useState("");
   const providerIdRef = useRef<AiProviderId | "">("");
+  const pendingTargetIdRef = useRef("");
 
   const applyTargets = useCallback((items: AiTarget[]) => {
     setTargets(items);
-    setTargetId((current) => items.find((target) => target.id === current)?.id || items[0]?.id || "");
+    setTargetId((current) => {
+      const pendingTargetId = pendingTargetIdRef.current;
+      const nextTargetId = items.find((target) => target.id === pendingTargetId)?.id
+        || items.find((target) => target.id === current)?.id
+        || items[0]?.id
+        || "";
+      if (nextTargetId && nextTargetId === pendingTargetId) pendingTargetIdRef.current = "";
+      return nextTargetId;
+    });
   }, []);
 
   const loadTargets = useCallback(async (nextProviderId: AiProviderId, _options: LoadTargetOptions = {}) => {
@@ -81,9 +90,17 @@ export function useProviderTargets({ setError, logPerformance }: UseProviderTarg
 
   useEffect(() => {
     providerIdRef.current = providerId;
-    applyTargets([]);
+    if (!pendingTargetIdRef.current) applyTargets([]);
     if (providerId) void loadInitialTargets(providerId);
   }, [applyTargets, loadInitialTargets, providerId]);
+
+  const selectKnownTarget = useCallback((target: AiTarget) => {
+    pendingTargetIdRef.current = target.id;
+    providerIdRef.current = target.provider;
+    setProviderId(target.provider);
+    setTargets([target]);
+    setTargetId(target.id);
+  }, []);
 
   return {
     providers,
@@ -92,6 +109,7 @@ export function useProviderTargets({ setError, logPerformance }: UseProviderTarg
     targets,
     targetId,
     setTargetId,
-    loadTargets
+    loadTargets,
+    selectKnownTarget
   };
 }

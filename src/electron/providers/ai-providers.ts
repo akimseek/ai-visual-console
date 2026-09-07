@@ -4,6 +4,8 @@ import type {
   AiProviderSummary,
   AiSession,
   AiTarget,
+  SessionQuickAccess,
+  SessionQuickAccessItem,
   SessionBatchMutationResult,
   SessionFileRef,
   SessionMessagePage,
@@ -14,7 +16,14 @@ import * as geminiProvider from "./gemini/gemini-provider";
 import * as claudeProvider from "./claude/claude-provider";
 import * as qoderProvider from "./qoder/qoder-provider";
 import { getProviderIdFromTargetId } from "../../shared/target-ids";
-import { applySessionMetadata, deleteSessionMetadata, setSessionCustomTitle } from "./session-metadata";
+import {
+  applySessionMetadata,
+  deleteSessionMetadata,
+  listSessionQuickMetadata,
+  markSessionOpened,
+  setSessionCustomTitle,
+  setSessionFavorite
+} from "./session-metadata";
 
 export type SessionView = "active" | "trash";
 
@@ -160,6 +169,71 @@ export async function listCachedTargets(providerId?: AiProviderId) {
 export async function listTargets(providerId?: AiProviderId) {
   if (providerId) return getProvider(providerId).listTargets();
   return listAcrossProviders((provider) => provider.listTargets());
+}
+
+const MAX_QUICK_ACCESS_FAVORITES = 12;
+const MAX_QUICK_ACCESS_RECENT = 8;
+
+export async function listSessionQuickAccess(): Promise<SessionQuickAccess> {
+  const entries = await listSessionQuickMetadata();
+  const candidates = entries.filter((entry) => entry.metadata.favorite || entry.metadata.lastOpenedAt);
+  if (candidates.length === 0) return { favorites: [], recent: [] };
+
+  const targets = await listCachedTargets();
+  const targetsById = new Map(targets.map((target) => [target.id, target]));
+  const candidatesByTarget = new Map<string, typeof candidates>();
+  for (const candidate of candidates) {
+    if (!targetsById.has(candidate.targetId)) continue;
+    const group = candidatesByTarget.get(candidate.targetId) || [];
+    group.push(candidate);
+    candidatesByTarget.set(candidate.targetId, group);
+  }
+
+  const groups = await Promise.all([...candidatesByTarget.entries()].map(async ([targetId, targetCandidates]) => {
+    const sessions = await listCachedSessions(targetId, "active").catch(() => [] as AiSession[]);
+    const sessionsById = new Map(sessions.map((session) => [session.id, session]));
+    const target = targetsById.get(targetId)!;
+    return targetCandidates.flatMap((candidate): SessionQuickAccessItem[] => {
+      const session = sessionsById.get(candidate.sessionId);
+      return session ? [{
+        target,
+        session,
+        favorite: candidate.metadata.favorite === true,
+        lastOpenedAt: candidate.metadata.lastOpenedAt
+      }] : [];
+    });
+  }));
+
+  const items = groups.flat();
+  const favorites = items
+    .filter((item) => item.favorite)
+    .sort(compareQuickAccessItems)
+    .slice(0, MAX_QUICK_ACCESS_FAVORITES);
+  const favoriteKeys = new Set(favorites.map(quickAccessKey));
+  const recent = items
+    .filter((item) => item.lastOpenedAt && !favoriteKeys.has(quickAccessKey(item)))
+    .sort(compareQuickAccessItems)
+    .slice(0, MAX_QUICK_ACCESS_RECENT);
+  return { favorites, recent };
+}
+
+export function setSessionFavoriteForTarget(targetId: string, sessionId: string, favorite: boolean) {
+  return setSessionFavorite(targetId, sessionId, favorite);
+}
+
+export function markSessionOpenedForTarget(targetId: string, sessionId: string) {
+  return markSessionOpened(targetId, sessionId);
+}
+
+function compareQuickAccessItems(left: SessionQuickAccessItem, right: SessionQuickAccessItem) {
+  return Date.parse(right.lastOpenedAt || right.session.updatedAt || right.session.createdAt || "")
+    - Date.parse(left.lastOpenedAt || left.session.updatedAt || left.session.createdAt || "")
+    || left.target.label.localeCompare(right.target.label)
+    || left.session.title.localeCompare(right.session.title);
+}
+
+function quickAccessKey(item: SessionQuickAccessItem) {
+  return `${item.target.id}:${item.session.id}`;
 }
 
 async function listAcrossProviders<T>(operation: (provider: AiProvider) => Promise<T[]>) {

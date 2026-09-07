@@ -40,6 +40,7 @@ import type {
   SessionFileRef,
   SessionMessagePage,
   SessionMetadata,
+  SessionQuickAccess,
   SessionMutationRef,
   SystemTerminalStartRequest,
   TerminalStartRequest,
@@ -104,6 +105,9 @@ export type CodexConsoleApi = {
   getSessionMessagesPage: (targetId: string, sessionId: string, offset: number, limit: number) => Promise<SessionMessagePage>;
   getSessionSummary: (targetId: string, sessionId: string) => Promise<AiSession>;
   setSessionCustomTitle: (targetId: string, sessionId: string, title: string) => Promise<SessionMetadata>;
+  listSessionQuickAccess: () => Promise<SessionQuickAccess>;
+  setSessionFavorite: (targetId: string, sessionId: string, favorite: boolean) => Promise<SessionMetadata>;
+  markSessionOpened: (targetId: string, sessionId: string) => Promise<SessionMetadata>;
   listSessionChildren: (targetId: string, parentSessionId: string) => Promise<AiSession[]>;
   exportSession: (targetId: string, sessionId: string, format: SessionExportFormat) => Promise<SessionExportResult | null>;
   branchSession: (params: SessionBranchParams) => Promise<AiSession>;

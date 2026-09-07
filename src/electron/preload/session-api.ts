@@ -7,6 +7,7 @@ import type {
   SessionFileRef,
   SessionMessagePage,
   SessionMetadata,
+  SessionQuickAccess,
   SessionMutationRef
 } from "../types";
 import { invoke } from "./ipc-bridge";
@@ -28,6 +29,11 @@ export function createSessionApi(ipc: IpcRenderer) {
       invoke<AiSession>(ipc, "codex:get-session-summary", targetId, sessionId),
     setSessionCustomTitle: (targetId: string, sessionId: string, title: string) =>
       invoke<SessionMetadata>(ipc, "codex:set-session-custom-title", targetId, sessionId, title),
+    listSessionQuickAccess: () => invoke<SessionQuickAccess>(ipc, "codex:list-session-quick-access"),
+    setSessionFavorite: (targetId: string, sessionId: string, favorite: boolean) =>
+      invoke<SessionMetadata>(ipc, "codex:set-session-favorite", targetId, sessionId, favorite),
+    markSessionOpened: (targetId: string, sessionId: string) =>
+      invoke<SessionMetadata>(ipc, "codex:mark-session-opened", targetId, sessionId),
     listSessionChildren: (targetId: string, parentSessionId: string) =>
       invoke<AiSession[]>(ipc, "codex:list-session-children", targetId, parentSessionId),
     exportSession: (targetId: string, sessionId: string, format: SessionExportFormat) =>

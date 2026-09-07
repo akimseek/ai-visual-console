@@ -68,6 +68,12 @@ type SessionMetadataIdRow = {
   session_id: string;
 };
 
+export type SessionMetadataEntry = {
+  targetId: string;
+  sessionId: string;
+  metadata: SessionMetadata;
+};
+
 export type SessionMessageIndexEntry = {
   targetId: string;
   sessionId: string;
@@ -180,6 +186,19 @@ export async function readSessionMetadataMap(targetId: string): Promise<Record<s
     "SELECT session_id, metadata_json FROM session_metadata WHERE target_id = ?"
   ).all(targetId) as SessionMetadataRow[];
   return Object.fromEntries(rows.map((row) => [row.session_id, parseMetadata(row.metadata_json)]));
+}
+
+export async function listSessionMetadataEntries(): Promise<SessionMetadataEntry[]> {
+  if (!databasePath) return [];
+  const db = await getDatabase();
+  const rows = db.prepare(
+    "SELECT target_id, session_id, metadata_json FROM session_metadata"
+  ).all() as Array<{ target_id: string; session_id: string; metadata_json: string }>;
+  return rows.map((row) => ({
+    targetId: row.target_id,
+    sessionId: row.session_id,
+    metadata: parseMetadata(row.metadata_json)
+  }));
 }
 
 export async function readSessionIdsByParent(targetId: string, parentSessionId: string): Promise<string[] | null> {

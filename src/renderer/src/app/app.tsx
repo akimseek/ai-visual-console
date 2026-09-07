@@ -60,6 +60,12 @@ import { CompressionPromptOverlay } from './compression-prompt-overlay'
 import { SkillManagerOverlay } from './skill-manager-overlay'
 import { SidebarWorkbench } from "../features/workbench/workbench-view";
 import { VendorDataProvider } from "../features/vendors/vendor-context";
+import { GlobalSessionSearchPanel } from "../features/sessions/global-session-search-panel";
+import { useGlobalSessionSearch } from "../features/sessions/use-global-session-search";
+import type { GlobalSessionSearchResult } from "../features/sessions/global-session-search";
+import { useSessionQuickAccess } from "../features/sessions/use-session-quick-access";
+import { SessionQuickAccessPanel } from "../features/sessions/session-quick-access-panel";
+import type { SessionQuickAccessItem } from "../types";
 export function App() {
   const workspaceRef = useRef<HTMLElement | null>(null);
   const [error, setError] = useState("");
@@ -71,11 +77,13 @@ export function App() {
   const [usageDetailsOpen, setUsageDetailsOpen] = useState(false);
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
   const [workbenchOpen, setWorkbenchOpen] = useState(false);
+  const [favoriteOpen, setFavoriteOpen] = useState(false);
   const [gatewayLogCleanupOpen, setGatewayLogCleanupOpen] = useState(false);
   const { openAppMenu, setOpenAppMenu } = useAppMenuState();
   const usageDetailsRef = useRef<HTMLDivElement | null>(null);
 
   const { notice, setNotice } = useAppNotice();
+  const sessionQuickAccess = useSessionQuickAccess();
   const executeAppCommand = useAppCommands(setError);
 
   const gatewayPort = useGatewayPortDialog({ setNotice });
@@ -100,7 +108,8 @@ export function App() {
     targets,
     targetId,
     setTargetId,
-    loadTargets
+    loadTargets,
+    selectKnownTarget
   } = useProviderTargets({ setError, logPerformance });
 
   const {
@@ -175,6 +184,15 @@ export function App() {
   // 传给已 memo 的 SessionList 的稳定回调：身份恒定，避免父级重渲染时让 memo 失效；
   // 内部仍调用最新的处理函数实现（这些 function 声明已提升，可在此引用）。
   const handleToggleBatchSelection = useStableCallback(toggleBatchSelection);
+  const handleOpenQuickAccess = useStableCallback((item: SessionQuickAccessItem) => {
+    void openQuickAccessSession(item);
+  });
+  const handleToggleFavorite = useStableCallback(async (session: AiSession) => {
+    if (!targetId) return;
+    const metadata = await window.codexConsole.setSessionFavorite(targetId, session.id, !session.metadata?.favorite);
+    sessionCacheOperations.applyCustomTitle(targetId, session.id, metadata);
+    await sessionQuickAccess.refresh();
+  });
 
   const selectedProvider = providers.find((provider) => provider.id === providerId);
   const capabilities = selectedProvider?.capabilities;
@@ -302,7 +320,8 @@ export function App() {
     setView,
     setDetailDialogSession,
     setError,
-    setNotice
+    setNotice,
+    onSessionOpened: sessionQuickAccess.refresh
   });
   const {
     newSessionDialogOpen,
@@ -323,8 +342,9 @@ export function App() {
     defaultCwd: DEFAULT_NEW_SESSION_CWD,
     selectedTarget,
     onCreate: ({ cwd, title, prompt, cliArgs }) => sessionTabs.openNewSessionTab(targetId, cwd, title, prompt, cliArgs),
-    onResume: (session, cwd) => sessionTabs.openResumeSessionWithDirectory(session, cwd)
+    onResume: (session, cwd, target) => sessionTabs.openResumeSessionWithDirectory(session, cwd, target)
   });
+  const globalSessionSearch = useGlobalSessionSearch(selectedTarget);
   const activeTerminalInputState = activeTab ? terminalInputStatesByTabKey[activeTab.key] : null;
   const canToggleTerminalInput = Boolean(activeTab && activeTerminalInputState?.composerVisible);
 
@@ -607,6 +627,25 @@ export function App() {
     sessionTabs.handleTerminalExit(tabKey, exitCode);
   }
 
+  async function openGlobalSearchResult(result: GlobalSessionSearchResult) {
+    if (!result.target.available) return;
+    setWorkbenchOpen(false);
+    setView("active");
+    selectKnownTarget(result.target);
+    globalSessionSearch.close();
+    await sessionTabs.openSessionTabForTarget(result.session, result.target, openResumeWithDirectory);
+    window.setTimeout(() => setSelectedId(result.session.id), 0);
+  }
+
+  async function openQuickAccessSession(item: SessionQuickAccessItem) {
+    if (!item.target.available) return;
+    setWorkbenchOpen(false);
+    setView("active");
+    selectKnownTarget(item.target);
+    await sessionTabs.openSessionTabForTarget(item.session, item.target, openResumeWithDirectory);
+    window.setTimeout(() => setSelectedId(item.session.id), 0);
+  }
+
   async function exportActiveSession(format: SessionExportFormat) {
     if (!activeSession || !activeTab) return;
 
@@ -681,11 +720,30 @@ export function App() {
 
         <SidebarControls
           workbenchOpen={workbenchOpen}
-          onOpenWorkbench={() => setWorkbenchOpen(true)}
+          globalSearchOpen={globalSessionSearch.open}
+          onOpenWorkbench={() => {
+            globalSessionSearch.close();
+            setFavoriteOpen(false);
+            setWorkbenchOpen(true);
+          }}
+          onOpenGlobalSearch={() => {
+            setWorkbenchOpen(false);
+            setFavoriteOpen(false);
+            globalSessionSearch.openSearch();
+          }}
+          favoriteOpen={favoriteOpen}
+          onOpenFavorites={() => {
+            globalSessionSearch.close();
+            setWorkbenchOpen(false);
+            setFavoriteOpen(true);
+            workspaceActions.switchView("active");
+          }}
           view={view}
           supportsTrash={supportsTrash}
           onSwitchView={(nextView) => {
+            globalSessionSearch.close();
             setWorkbenchOpen(false);
+            setFavoriteOpen(false);
             workspaceActions.switchView(nextView);
           }}
           query={query}
@@ -714,7 +772,30 @@ export function App() {
             tokenUsage={statusTokenUsage}
             contextUsage={statusContextUsage}
           />
-        ) : <SessionList
+        ) : favoriteOpen ? <div className="session-quick-access-view">
+          <SessionQuickAccessPanel
+            favorites={sessionQuickAccess.favorites}
+            recent={sessionQuickAccess.recent}
+            onOpen={handleOpenQuickAccess}
+            emptyMessage="收藏夹为空。"
+          />
+        </div> : globalSessionSearch.open ? <GlobalSessionSearchPanel
+          query={globalSessionSearch.query}
+          onQueryChange={globalSessionSearch.setQuery}
+          providerFilter={globalSessionSearch.providerFilter}
+          onProviderFilterChange={globalSessionSearch.setProviderFilter}
+          targetFilter={globalSessionSearch.targetFilter}
+          onTargetFilterChange={globalSessionSearch.setTargetFilter}
+          searchContent={globalSessionSearch.searchContent}
+          onSearchContentChange={globalSessionSearch.setSearchContent}
+          targets={globalSessionSearch.targets}
+          results={globalSessionSearch.results}
+          summaryLoading={globalSessionSearch.summaryLoading}
+          contentLoading={globalSessionSearch.contentLoading}
+          message={globalSessionSearch.message}
+          onBack={globalSessionSearch.close}
+          onOpen={(result) => void openGlobalSearchResult(result)}
+        /> : <SessionList
           sessions={filtered}
           loading={sessionLoading || searchLoading}
           emptyMessage={searchQuery ? "未找到匹配会话。" : view === "trash" ? "回收站为空。" : "未找到会话。"}
@@ -723,6 +804,7 @@ export function App() {
           selectedBatchIds={selectedBatchIds}
           onContextMenu={handleSessionContextMenu}
           onToggleBatch={handleToggleBatchSelection}
+          onToggleFavorite={handleToggleFavorite}
           onOpen={handleOpenSessionTab}
         />}
       </aside>

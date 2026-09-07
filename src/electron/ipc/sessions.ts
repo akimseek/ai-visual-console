@@ -12,12 +12,15 @@ import {
   listCachedTargets,
   listSessions,
   listSessionsByParent,
+  listSessionQuickAccess,
+  markSessionOpenedForTarget,
   listTargets,
   listTrashSessions,
   purgeSession,
   purgeSessions,
   restoreSession,
   searchSessions,
+  setSessionFavoriteForTarget,
   setWslCodexHome
 } from "../providers/ai-providers";
 import { exportSessionToFile } from "../providers/session-export";
@@ -32,6 +35,7 @@ import {
   requirePositiveInteger,
   requireNonNegativeInteger,
   requireCustomTitle,
+  requireBoolean,
   requireExportFormat,
   requireSessionMutationRefs
 } from "./validation";
@@ -111,6 +115,17 @@ export function registerSessionIpcHandlers() {
       requireString(sessionId, "sessionId"),
       requireCustomTitle(title)
     )
+  );
+  ipcMain.handle("codex:list-session-quick-access", () => listSessionQuickAccess());
+  ipcMain.handle("codex:set-session-favorite", (_event, targetId: unknown, sessionId: unknown, favorite: unknown) =>
+    setSessionFavoriteForTarget(
+      requireString(targetId, "targetId"),
+      requireString(sessionId, "sessionId"),
+      requireBoolean(favorite, "favorite")
+    )
+  );
+  ipcMain.handle("codex:mark-session-opened", (_event, targetId: unknown, sessionId: unknown) =>
+    markSessionOpenedForTarget(requireString(targetId, "targetId"), requireString(sessionId, "sessionId"))
   );
   ipcMain.handle("codex:list-session-children", (_event, targetId: unknown, parentSessionId: unknown) =>
     listSessionsByParent(requireString(targetId, "targetId"), requireString(parentSessionId, "parentSessionId"))

@@ -33,6 +33,7 @@ export function useSessionTabs(options: {
   setDetailDialogSession: Dispatch<SetStateAction<AiSession | null>>;
   setError: Dispatch<SetStateAction<string>>;
   setNotice: SetNotice;
+  onSessionOpened?: () => void;
 }) {
   const {
     targetId,
@@ -51,7 +52,8 @@ export function useSessionTabs(options: {
     setView,
     setDetailDialogSession,
     setError,
-    setNotice
+    setNotice,
+    onSessionOpened
   } = options;
 
   // 新会话编号只用于生成标签键和默认标题，用 ref 即可，无需触发重渲染。
@@ -59,31 +61,46 @@ export function useSessionTabs(options: {
 
   // 工作目录已失效的历史会话需要换目录恢复，弹框由 App 侧的 useNewSessionDialog 提供，
   // 通过参数注入以避免 Hook 之间的循环依赖。
-  async function openSessionTabWithCwdCheck(session: AiSession, openResumeWithDirectory: (session: AiSession, cwd: string) => void) {
+  async function openSessionTabForTarget(
+    session: AiSession,
+    target: AiTarget,
+    openResumeWithDirectory: (session: AiSession, cwd: string, target?: AiTarget) => void
+  ) {
     setSelectedId(session.id);
     const sessionCwd = session.cwd?.trim();
     if (sessionCwd) {
-      const exists = await window.codexConsole.pathExists({ targetId, path: sessionCwd }).catch(() => false);
+      const exists = await window.codexConsole.pathExists({ targetId: target.id, path: sessionCwd }).catch(() => false);
       if (!exists) {
-        openResumeWithDirectory(session, sessionCwd);
+        openResumeWithDirectory(session, sessionCwd, target);
         return;
       }
     }
 
-    const key = tabKey(targetId, session.id);
-    const requiresSessionCwd = selectedTarget?.provider === "qoder";
+    const key = tabKey(target.id, session.id);
+    const requiresSessionCwd = target.provider === "qoder";
     activateTerminalTab({
       key,
-      targetId,
+      targetId: target.id,
       session,
       title: historyTabTitle(session),
       // Qoder 按项目目录定位 --resume 的历史文件，恢复时必须保留原始工作目录。
       cwd: requiresSessionCwd ? sessionCwd : undefined,
-      codexHome: selectedTarget?.codexHome,
+      codexHome: target.codexHome,
       useCodexCwdFlag: requiresSessionCwd
     });
+    void window.codexConsole.markSessionOpened(target.id, session.id)
+      .then(() => onSessionOpened?.())
+      .catch(() => undefined);
     setError("");
     setNotice("");
+  }
+
+  async function openSessionTabWithCwdCheck(
+    session: AiSession,
+    openResumeWithDirectory: (session: AiSession, cwd: string, target?: AiTarget) => void
+  ) {
+    if (!selectedTarget) return;
+    return openSessionTabForTarget(session, selectedTarget, openResumeWithDirectory);
   }
 
   function openNewSessionTab(
@@ -120,17 +137,21 @@ export function useSessionTabs(options: {
     setNotice("");
   }
 
-  function openResumeSessionWithDirectory(session: AiSession, cwd: string) {
-    const key = tabKey(targetId, session.id);
+  function openResumeSessionWithDirectory(session: AiSession, cwd: string, target = selectedTarget) {
+    if (!target) return;
+    const key = tabKey(target.id, session.id);
     activateTerminalTab({
       key,
-      targetId,
+      targetId: target.id,
       session,
       title: historyTabTitle(session),
       cwd,
-      codexHome: selectedTarget?.codexHome,
+      codexHome: target.codexHome,
       useCodexCwdFlag: true
     });
+    void window.codexConsole.markSessionOpened(target.id, session.id)
+      .then(() => onSessionOpened?.())
+      .catch(() => undefined);
     setError("");
     setNotice("");
   }
@@ -185,6 +206,7 @@ export function useSessionTabs(options: {
 
   return {
     openSessionTabWithCwdCheck,
+    openSessionTabForTarget,
     openNewSessionTab,
     openResumeSessionWithDirectory,
     openDerivedSession,

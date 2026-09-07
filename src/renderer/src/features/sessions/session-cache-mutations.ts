@@ -6,7 +6,7 @@ export function applySessionCustomTitle(
   metadata: AiSession["metadata"]
 ) {
   const sourceTitle = session.sourceTitle || session.title;
-  const hasMetadata = Boolean(metadata?.customTitle || metadata?.branch);
+  const hasMetadata = Boolean(metadata?.customTitle || metadata?.branch || metadata?.favorite || metadata?.lastOpenedAt);
   return {
     ...session,
     title: metadata?.customTitle || sourceTitle,

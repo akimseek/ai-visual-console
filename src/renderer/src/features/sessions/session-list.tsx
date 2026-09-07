@@ -1,7 +1,9 @@
 import { memo, useMemo } from "react";
 import type { MouseEvent } from "react";
+import { Star } from "lucide-react";
 import type { AiSession } from "../../types";
 import { formatRelative } from "../../lib/format";
+import { IconButton } from "../../components/icon-button";
 
 // 侧栏会话列表：复选框批量选择 + 打开会话 + 右键菜单。从 App.tsx 的内联 JSX 抽出为展示组件。
 // 用 memo 包裹：列表数据未变（如流式 usage 更新触发的父级重渲染）时跳过整列表重渲染，
@@ -15,6 +17,7 @@ export const SessionList = memo(function SessionList({
   selectedBatchIds,
   onContextMenu,
   onToggleBatch,
+  onToggleFavorite,
   onOpen
 }: {
   sessions: AiSession[];
@@ -25,6 +28,7 @@ export const SessionList = memo(function SessionList({
   selectedBatchIds: string[];
   onContextMenu: (event: MouseEvent<HTMLElement>, session: AiSession) => void;
   onToggleBatch: (id: string) => void;
+  onToggleFavorite: (session: AiSession) => void;
   onOpen: (session: AiSession) => void;
 }) {
   // 用 Set 做选中判定，避免每行 includes() 造成的 O(n²)。
@@ -56,6 +60,15 @@ export const SessionList = memo(function SessionList({
               <span className="session-title">{session.title}</span>
             </span>
           </button>
+          <IconButton
+            className={`session-favorite ${session.metadata?.favorite ? "active" : ""}`}
+            icon={Star}
+            label={session.metadata?.favorite ? "取消收藏会话" : "收藏会话"}
+            onClick={(event) => {
+              event.stopPropagation();
+              onToggleFavorite(session);
+            }}
+          />
         </div>
       ))}
     </section>

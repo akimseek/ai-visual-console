@@ -76,6 +76,8 @@ export type SessionMetadata = {
   updatedAt?: string;
   customTitle?: string;
   branch?: SessionBranchMetadata;
+  favorite?: boolean;
+  lastOpenedAt?: string;
 };
 
 export type SessionBranchMetadata = {
@@ -486,6 +488,18 @@ export type AiMessage = CodexMessage;
 export type AiSession = CodexSession;
 export type AiSessionFile = CodexSessionFile;
 export type AiTarget = CodexTarget;
+
+export type SessionQuickAccessItem = {
+  target: AiTarget;
+  session: AiSession;
+  favorite: boolean;
+  lastOpenedAt?: string;
+};
+
+export type SessionQuickAccess = {
+  favorites: SessionQuickAccessItem[];
+  recent: SessionQuickAccessItem[];
+};
 
 // 会话详情按页读取原始 JSONL 时使用；offset 是过滤后可见消息的绝对序号。
 // 仅首屏可传 -1，请求末尾 limit 条消息并返回其实际绝对偏移。

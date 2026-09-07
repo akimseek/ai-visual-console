@@ -1,11 +1,15 @@
-import { LayoutDashboard, MessagesSquare } from "lucide-react";
+import { LayoutDashboard, MessagesSquare, Search } from "lucide-react";
 
 type SessionView = "active" | "trash";
 
 // 侧栏控件区：会话视图切换、全文搜索框、批量操作工具条。从 App.tsx 的内联 JSX 抽出为展示组件。
 export function SidebarControls({
   workbenchOpen,
+  globalSearchOpen,
+  favoriteOpen,
   onOpenWorkbench,
+  onOpenGlobalSearch,
+  onOpenFavorites,
   view,
   supportsTrash,
   onSwitchView,
@@ -23,7 +27,11 @@ export function SidebarControls({
   onDeleteBatch
 }: {
   workbenchOpen: boolean;
+  globalSearchOpen: boolean;
+  favoriteOpen: boolean;
   onOpenWorkbench: () => void;
+  onOpenGlobalSearch: () => void;
+  onOpenFavorites: () => void;
   view: SessionView;
   supportsTrash: boolean;
   onSwitchView: (view: SessionView) => void;
@@ -53,24 +61,37 @@ export function SidebarControls({
         </button>
       </nav>
 
-      {!workbenchOpen && <>
-      <div className="view-switch" role="tablist" aria-label="会话视图">
-        <button className={view === "active" ? "active" : ""} onClick={() => onSwitchView("active")}>
+      {!workbenchOpen && !globalSearchOpen && <>
+      <div className="view-switch has-trash" role="tablist" aria-label="会话视图">
+        <button className={!favoriteOpen && view === "active" ? "active" : ""} onClick={() => onSwitchView("active")}>
           当前会话
         </button>
-        {supportsTrash && (
-          <button className={view === "trash" ? "active" : ""} onClick={() => onSwitchView("trash")}>
-            回收站
-          </button>
-        )}
+        <button className={favoriteOpen ? "active" : ""} onClick={onOpenFavorites}>
+          收藏夹
+        </button>
+        <button
+          className={!favoriteOpen && view === "trash" ? "active" : ""}
+          disabled={!supportsTrash}
+          title={supportsTrash ? "查看回收站" : "请选择支持回收站的平台"}
+          onClick={() => onSwitchView("trash")}
+        >
+          回收站
+        </button>
       </div>
 
-      <input
-        className="search"
-        value={query}
-        onChange={(event) => onQueryChange(event.target.value)}
-        placeholder={view === "trash" ? "搜索回收站会话全文" : "搜索会话全文、工作目录、模型"}
-      />
+      {!favoriteOpen && <>
+      <div className="session-search-row">
+        <input
+          className="search"
+          value={query}
+          onChange={(event) => onQueryChange(event.target.value)}
+          placeholder="搜索当前平台会话"
+        />
+        <button type="button" className="global-session-search-trigger" onClick={onOpenGlobalSearch}>
+          <Search aria-hidden="true" size={15} strokeWidth={2} />
+          全部会话
+        </button>
+      </div>
       {searchActive && (
         <div className="search-status" aria-live="polite">
           {searchLoading ? "正在全文搜索..." : `全文搜索结果 ${resultCount} 个`}
@@ -100,6 +121,7 @@ export function SidebarControls({
           )}
         </div>
       )}
+      </>}
       </>}
     </>
   );

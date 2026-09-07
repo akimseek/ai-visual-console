@@ -4,6 +4,7 @@ import {
   deleteSessionMetadataRecord,
   hasAppDatabase,
   importSessionMetadata,
+  listSessionMetadataEntries,
   readSessionIdsByParent,
   readSessionMetadata,
   readSessionMetadataMap,
@@ -80,6 +81,40 @@ export async function setSessionCustomTitle(
   return next;
 }
 
+export async function setSessionFavorite(
+  targetId: string,
+  sessionId: string,
+  favorite: boolean
+): Promise<SessionMetadata> {
+  await ensureLegacyMetadataMigrated();
+  const current = await readSessionMetadata(targetId, sessionId);
+  const next = normalizeMetadata({
+    ...current,
+    favorite,
+    updatedAt: new Date().toISOString()
+  });
+  if (isEmptyMetadata(next)) {
+    await deleteSessionMetadataRecord(targetId, sessionId);
+    return next;
+  }
+  await saveSessionMetadata(targetId, sessionId, next);
+  return next;
+}
+
+export async function markSessionOpened(targetId: string, sessionId: string): Promise<SessionMetadata> {
+  await ensureLegacyMetadataMigrated();
+  const current = await readSessionMetadata(targetId, sessionId);
+  const now = new Date().toISOString();
+  const next = normalizeMetadata({ ...current, lastOpenedAt: now, updatedAt: now });
+  await saveSessionMetadata(targetId, sessionId, next);
+  return next;
+}
+
+export async function listSessionQuickMetadata() {
+  await ensureLegacyMetadataMigrated();
+  return listSessionMetadataEntries();
+}
+
 export async function deleteSessionMetadata(targetId: string, sessionId: string) {
   await ensureLegacyMetadataMigrated();
   await deleteSessionMetadataRecord(targetId, sessionId);
@@ -101,6 +136,8 @@ function normalizeMetadata(metadata: SessionMetadata): SessionMetadata {
   return {
     customTitle: normalizeCustomTitle(metadata.customTitle),
     branch: normalizeBranch(metadata.branch),
+    favorite: metadata.favorite === true || undefined,
+    lastOpenedAt: normalizeTimestamp(metadata.lastOpenedAt),
     updatedAt: metadata.updatedAt
   };
 }
@@ -123,8 +160,12 @@ function normalizeBranch(branch?: SessionBranchMetadata): SessionBranchMetadata 
   };
 }
 
+function normalizeTimestamp(value?: string) {
+  return typeof value === "string" && value.trim() ? value : undefined;
+}
+
 function isEmptyMetadata(metadata: SessionMetadata) {
-  return !metadata.customTitle && !metadata.branch;
+  return !metadata.customTitle && !metadata.branch && !metadata.favorite && !metadata.lastOpenedAt;
 }
 
 async function readLegacyStore(): Promise<MetadataStore> {

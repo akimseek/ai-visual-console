@@ -39,6 +39,8 @@ export type {
   SessionExportFormat,
   SessionExportResult,
   SessionMetadata,
+  SessionQuickAccess,
+  SessionQuickAccessItem,
   SessionMessagePage,
   OpenPathRequest,
   TokenUsage,
