@@ -79,6 +79,7 @@ export function App() {
   const [workbenchOpen, setWorkbenchOpen] = useState(false);
   const [favoriteOpen, setFavoriteOpen] = useState(false);
   const [gatewayLogCleanupOpen, setGatewayLogCleanupOpen] = useState(false);
+  const terminalTabSyncSignatureRef = useRef("");
   const { openAppMenu, setOpenAppMenu } = useAppMenuState();
   const usageDetailsRef = useRef<HTMLDivElement | null>(null);
 
@@ -109,7 +110,7 @@ export function App() {
     targetId,
     setTargetId,
     loadTargets,
-    selectKnownTarget
+    syncTerminalTabTarget
   } = useProviderTargets({ setError, logPerformance });
 
   const {
@@ -268,6 +269,8 @@ export function App() {
     setSelectedSessionDetails,
     selectedSessionLoading,
     setSelectedSessionLoading,
+    detailLoadError,
+    retryDetailMessages,
     branchPanel,
     detailHasMore,
     detailLoadingMore,
@@ -545,6 +548,42 @@ export function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [supportsTrash, view]);
 
+  // 标签是跨平台会话的唯一运行上下文来源。切换时只同步 React 内存状态，
+  // 不复用 selectKnownTarget，避免触发缓存读取、CLI/WSL 探测或会话文件扫描。
+  useEffect(() => {
+    if (!activeTab) {
+      terminalTabSyncSignatureRef.current = "";
+      return;
+    }
+
+    const signature = [
+      activeTab.key,
+      activeTab.target.id,
+      activeTab.session?.id || "",
+      activeTab.session?.updatedAt || "",
+      view
+    ].join(":");
+    if (terminalTabSyncSignatureRef.current === signature) return;
+    terminalTabSyncSignatureRef.current = signature;
+
+    syncTerminalTabTarget(activeTab.target);
+    if (activeTab.session) {
+      sessionCacheOperations.updateCachedSessions(activeTab.target.id, "active", (current) =>
+        mergeSession(current, activeTab.session as AiSession)
+      );
+    }
+    // 对尚未在本窗口加载过的目标，仅展示当前标签的会话快照（或空的新会话）。
+    // 标记当前视图和活动会话视图已加载，阻止 useSessionListState 自动读取持久化缓存。
+    setLoadedViews((current) => {
+      const activeKey = sessionCacheKey(activeTab.target.id, "active");
+      const currentKey = sessionCacheKey(activeTab.target.id, view);
+      if (current[activeKey] && current[currentKey]) return current;
+      return { ...current, [activeKey]: true, [currentKey]: true };
+    });
+  // 目标同步必须由活动标签变化单独驱动，不能受缓存写入后的重渲染重复触发。
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeTab?.key, activeTab?.target.id, activeTab?.session?.id, activeTab?.session?.updatedAt, view]);
+
   useEffect(() => {
     if (!usageDetailsOpen) return;
 
@@ -570,7 +609,8 @@ export function App() {
 
   useEffect(() => {
     if (!targetId) return;
-    setSelectedId("");
+    const activeSessionForTarget = activeTab?.targetId === targetId ? activeTab.session : null;
+    setSelectedId(activeSessionForTarget?.id || "");
     resetSessionDetails();
     // 目标切换只清理当前列表和详情状态；已打开终端保留其标签快照继续运行。
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -631,7 +671,6 @@ export function App() {
     if (!result.target.available) return;
     setWorkbenchOpen(false);
     setView("active");
-    selectKnownTarget(result.target);
     globalSessionSearch.close();
     await sessionTabs.openSessionTabForTarget(result.session, result.target, openResumeWithDirectory);
     window.setTimeout(() => setSelectedId(result.session.id), 0);
@@ -641,7 +680,6 @@ export function App() {
     if (!item.target.available) return;
     setWorkbenchOpen(false);
     setView("active");
-    selectKnownTarget(item.target);
     await sessionTabs.openSessionTabForTarget(item.session, item.target, openResumeWithDirectory);
     window.setTimeout(() => setSelectedId(item.session.id), 0);
   }
@@ -846,11 +884,13 @@ export function App() {
           detailDialogSession={detailDialogSession}
           selectedSessionDetails={selectedSessionDetails}
           selectedSessionLoading={selectedSessionLoading}
+          detailLoadError={detailLoadError}
           branchPanel={branchPanel}
           detailHasMore={detailHasMore}
           detailLoadingMore={detailLoadingMore}
           supportsBranch={supportsBranch}
           onLoadMore={loadMoreDetailMessages}
+          onRetryDetail={retryDetailMessages}
           onCloseDetail={() => setDetailDialogSession(null)}
           onOpenSession={workspaceActions.openSessionDetail}
           onBranchFromTurn={(session, turn) => void branchFromTurn(session, turn)}

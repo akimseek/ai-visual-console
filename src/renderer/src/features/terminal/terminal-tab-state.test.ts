@@ -1,23 +1,31 @@
 import { describe, expect, it } from "vitest";
 import { omitTerminalTabRecords, removeTerminalTabs, type TerminalTab, upsertTerminalTab } from "./terminal-tab-state";
 
+const target = { id: "codex:local", provider: "codex", label: "本地", kind: "local", available: true } as const;
+
 const tabs: TerminalTab[] = [
-  { key: "a", targetId: "codex:local", title: "A" },
-  { key: "b", targetId: "codex:local", title: "B" },
-  { key: "c", targetId: "codex:local", title: "C" }
+  { key: "a", targetId: "codex:local", target, title: "A" },
+  { key: "b", targetId: "codex:local", target, title: "B" },
+  { key: "c", targetId: "codex:local", target, title: "C" }
 ];
 
 describe("terminal tab state", () => {
   it("打开已有标签时保留位置并使用最新会话快照", () => {
-    const next = upsertTerminalTab(tabs, { key: "b", targetId: "codex:local", title: "B2" });
+    const next = upsertTerminalTab(tabs, { key: "b", targetId: "codex:local", target, title: "B2" });
     expect(next.map((tab) => tab.key)).toEqual(["a", "b", "c"]);
     expect(next[1].title).toBe("B2");
-    expect(upsertTerminalTab(tabs, { key: "d", targetId: "codex:local", title: "D" }).map((tab) => tab.key)).toEqual([
+    expect(upsertTerminalTab(tabs, { key: "d", targetId: "codex:local", target, title: "D" }).map((tab) => tab.key)).toEqual([
       "a",
       "b",
       "c",
       "d"
     ]);
+  });
+
+  it("为跨平台标签保留独立的目标快照", () => {
+    const wslTarget = { id: "gemini:wsl:Ubuntu", provider: "gemini", label: "Ubuntu", kind: "wsl", distro: "Ubuntu", available: true } as const;
+    const next = upsertTerminalTab(tabs, { key: "wsl", targetId: wslTarget.id, target: wslTarget, title: "WSL" });
+    expect(next.at(-1)?.target).toEqual(wslTarget);
   });
 
   it("关闭标签时保留顺序并选择相邻回退标签", () => {

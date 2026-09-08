@@ -34,21 +34,25 @@ export function sanitizeWslDistro(distro: string) {
   return distro.replace(/[^a-zA-Z0-9._-]/g, "_");
 }
 
-// 解析 `find ... -printf '%p\t%T@\t%s\n'` 的输出为会话文件列表，丢弃残缺/非法行。
+// 解析 `find ... -printf '%p\t%T@\t%C@\t%s\n'` 的输出为会话文件列表，丢弃残缺/非法行。
 export function parseWslSessionFileList(stdout: string): CodexSessionFile[] {
   return stdout
     .split(/\r?\n/)
     .map((line) => line.trim())
     .filter(Boolean)
     .map((line) => {
-      const [filePath, mtime, size] = line.split("\t");
+      const [filePath, mtime, third, fourth] = line.split("\t");
+      const hasChangeTime = typeof fourth === "string";
+      const changed = hasChangeTime ? third : mtime;
+      const size = hasChangeTime ? fourth : third;
       return {
         filePath,
         mtimeMs: Number(mtime) * 1000,
+        changeMs: Number(changed) * 1000,
         size: Number(size)
       };
     })
-    .filter((file) => file.filePath && Number.isFinite(file.mtimeMs) && Number.isFinite(file.size));
+    .filter((file) => file.filePath && Number.isFinite(file.mtimeMs) && Number.isFinite(file.changeMs) && Number.isFinite(file.size));
 }
 
 // wsl.exe 的输出可能是 UTF-16LE 或 UTF-8，按去除 NUL 后的有效长度择优解码。

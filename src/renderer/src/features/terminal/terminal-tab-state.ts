@@ -1,8 +1,11 @@
-import type { AiSession } from "../../types";
+import type { AiSession, AiTarget } from "../../types";
 
 export type TerminalTab = {
   key: string;
   targetId: string;
+  // 标签必须持有创建时的目标快照。切换标签时不能依赖当前左侧目标列表，
+  // 否则跨平台标签在目标列表刷新后无法准确还原其运行上下文。
+  target: AiTarget;
   session?: AiSession;
   title: string;
   cwd?: string;

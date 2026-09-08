@@ -26,6 +26,7 @@ type SqliteModule = {
 export type SessionCacheEntry = {
   filePath: string;
   mtimeMs: number;
+  changeMs?: number;
   size: number;
   session: CodexSession;
 };
@@ -33,6 +34,7 @@ export type SessionCacheEntry = {
 type SessionCacheRow = {
   file_path: string;
   mtime_ms: number;
+  change_ms?: number;
   size: number;
   session_json: string;
 };
@@ -79,6 +81,7 @@ export type SessionMessageIndexEntry = {
   sessionId: string;
   filePath: string;
   mtimeMs: number;
+  changeMs?: number;
   size: number;
   anchors: Array<{ messageOffset: number; lineNumber: number }>;
   messageCount: number;
@@ -129,7 +132,7 @@ export function setSessionDatabasePath(filePath: string) {
 export async function readSessionCache(cacheKey: string): Promise<Record<string, SessionCacheEntry>> {
   const db = await getDatabase();
   const rows = db.prepare(
-    "SELECT file_path, mtime_ms, size, session_json FROM session_cache WHERE cache_key = ?"
+    "SELECT file_path, mtime_ms, change_ms, size, session_json FROM session_cache WHERE cache_key = ?"
   ).all(cacheKey) as SessionCacheRow[];
   const entries: Record<string, SessionCacheEntry> = {};
   for (const row of rows) {
@@ -137,6 +140,7 @@ export async function readSessionCache(cacheKey: string): Promise<Record<string,
       entries[row.file_path] = {
         filePath: row.file_path,
         mtimeMs: row.mtime_ms,
+        changeMs: row.change_ms,
         size: row.size,
         session: JSON.parse(row.session_json) as CodexSession
       };
@@ -151,14 +155,14 @@ export async function replaceSessionCache(cacheKey: string, entries: Record<stri
   await updateDatabase((db) => {
     db.prepare("DELETE FROM session_cache WHERE cache_key = ?").run(cacheKey);
     const insert = db.prepare(`
-      INSERT INTO session_cache (cache_key, file_path, mtime_ms, size, session_json, cached_at)
-      VALUES (?, ?, ?, ?, ?, ?)
+      INSERT INTO session_cache (cache_key, file_path, mtime_ms, change_ms, size, session_json, cached_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
     `);
     const cachedAt = new Date().toISOString();
     for (const entry of Object.values(entries)) {
       const sessionJson = JSON.stringify(entry.session);
       if (Buffer.byteLength(sessionJson, "utf8") > MAX_SESSION_CACHE_ENTRY_BYTES) continue;
-      insert.run(cacheKey, entry.filePath, entry.mtimeMs, entry.size, sessionJson, cachedAt);
+      insert.run(cacheKey, entry.filePath, entry.mtimeMs, entry.changeMs || 0, entry.size, sessionJson, cachedAt);
     }
     pruneSessionCache(db);
   });
@@ -237,37 +241,38 @@ export async function saveSessionMessageIndex(entry: SessionMessageIndexEntry) {
   await updateDatabase((db) => {
     db.prepare(`
       DELETE FROM session_message_index
-      WHERE target_id = ? AND session_id = ? AND (file_path <> ? OR mtime_ms <> ? OR size <> ?)
-    `).run(entry.targetId, entry.sessionId, entry.filePath, entry.mtimeMs, entry.size);
+      WHERE target_id = ? AND session_id = ? AND (file_path <> ? OR mtime_ms <> ? OR change_ms <> ? OR size <> ?)
+    `).run(entry.targetId, entry.sessionId, entry.filePath, entry.mtimeMs, entry.changeMs || 0, entry.size);
     const insert = db.prepare(`
       INSERT INTO session_message_index
-        (target_id, session_id, file_path, mtime_ms, size, message_offset, line_number, message_count, indexed_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        (target_id, session_id, file_path, mtime_ms, change_ms, size, message_offset, line_number, message_count, indexed_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(target_id, session_id, file_path, mtime_ms, size, message_offset) DO UPDATE SET
         line_number = excluded.line_number,
+        change_ms = excluded.change_ms,
         message_count = excluded.message_count,
         indexed_at = excluded.indexed_at
     `);
     const indexedAt = new Date().toISOString();
     for (const anchor of entry.anchors) {
-      insert.run(entry.targetId, entry.sessionId, entry.filePath, entry.mtimeMs, entry.size, anchor.messageOffset, anchor.lineNumber, entry.messageCount, indexedAt);
+      insert.run(entry.targetId, entry.sessionId, entry.filePath, entry.mtimeMs, entry.changeMs || 0, entry.size, anchor.messageOffset, anchor.lineNumber, entry.messageCount, indexedAt);
     }
   });
 }
 
 export async function readSessionMessageIndex(
-  entry: Pick<SessionMessageIndexEntry, "targetId" | "sessionId" | "filePath" | "mtimeMs" | "size">,
+  entry: Pick<SessionMessageIndexEntry, "targetId" | "sessionId" | "filePath" | "mtimeMs" | "changeMs" | "size">,
   offset: number
 ): Promise<SessionMessageAnchor | null> {
   const db = await getDatabase();
   const row = db.prepare(`
     SELECT message_offset, line_number, message_count
     FROM session_message_index
-    WHERE target_id = ? AND session_id = ? AND file_path = ? AND mtime_ms = ? AND size = ?
+    WHERE target_id = ? AND session_id = ? AND file_path = ? AND mtime_ms = ? AND change_ms = ? AND size = ?
       AND message_offset <= ?
     ORDER BY message_offset DESC
     LIMIT 1
-  `).get(entry.targetId, entry.sessionId, entry.filePath, entry.mtimeMs, entry.size, offset) as SessionMessageIndexRow | undefined;
+  `).get(entry.targetId, entry.sessionId, entry.filePath, entry.mtimeMs, entry.changeMs || 0, entry.size, offset) as SessionMessageIndexRow | undefined;
   return row ? {
     messageOffset: row.message_offset,
     lineNumber: row.line_number,
@@ -407,6 +412,7 @@ async function getDatabase() {
       cache_key TEXT NOT NULL,
       file_path TEXT NOT NULL,
       mtime_ms REAL NOT NULL,
+      change_ms REAL NOT NULL DEFAULT 0,
       size INTEGER NOT NULL,
       session_json TEXT NOT NULL,
       cached_at TEXT NOT NULL DEFAULT '',
@@ -432,6 +438,7 @@ async function getDatabase() {
       session_id TEXT NOT NULL,
       file_path TEXT NOT NULL,
       mtime_ms REAL NOT NULL,
+      change_ms REAL NOT NULL DEFAULT 0,
       size INTEGER NOT NULL,
       message_offset INTEGER NOT NULL,
       line_number INTEGER NOT NULL DEFAULT 1,
@@ -473,11 +480,23 @@ async function getDatabase() {
     // 已存在的数据库已完成迁移。
   }
   try {
+    database.exec("ALTER TABLE session_cache ADD COLUMN change_ms REAL NOT NULL DEFAULT 0");
+    database.exec("DELETE FROM session_cache");
+  } catch {
+    // 旧缓存缺少内容变更标识，首次升级后强制重建。
+  }
+  try {
     database.exec("ALTER TABLE session_message_index ADD COLUMN line_number INTEGER NOT NULL DEFAULT 1");
     // 旧索引未记录原始行号，不能用于新的随机定位语义。
     database.exec("DELETE FROM session_message_index");
   } catch {
     // 已存在的数据库已完成迁移。
+  }
+  try {
+    database.exec("ALTER TABLE session_message_index ADD COLUMN change_ms REAL NOT NULL DEFAULT 0");
+    database.exec("DELETE FROM session_message_index");
+  } catch {
+    // 旧分页索引缺少内容变更标识，首次升级后强制重建。
   }
   return database;
 }

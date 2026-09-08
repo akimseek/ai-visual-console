@@ -11,8 +11,8 @@ const route = {
 
 describe("Codex Gateway command", () => {
   it("通过命令行覆盖路由 provider，不创建专用 CODEX_HOME", () => {
-    expect(buildCodexInvocation(["resume", "session-id"], route))
-      .toBe("codex '-c' 'model_provider=\"akim_gateway\"' '-c' 'model_providers.akim_gateway.name=\"akim_gateway\"' '-c' 'model_providers.akim_gateway.wire_api=\"responses\"' '-c' 'model_providers.akim_gateway.requires_openai_auth=true' '-c' 'model_providers.akim_gateway.env_key=\"OPENAI_API_KEY\"' '-c' 'model_providers.akim_gateway.base_url=\"http://127.0.0.1:1234/gateway/codex/route-id\"' 'resume' 'session-id'");
+    expect(buildCodexInvocation(["resume", "--all", "session-id"], route))
+      .toBe("codex '-c' 'model_provider=\"akim_gateway\"' '-c' 'model_providers.akim_gateway.name=\"akim_gateway\"' '-c' 'model_providers.akim_gateway.wire_api=\"responses\"' '-c' 'model_providers.akim_gateway.requires_openai_auth=true' '-c' 'model_providers.akim_gateway.env_key=\"OPENAI_API_KEY\"' '-c' 'model_providers.akim_gateway.base_url=\"http://127.0.0.1:1234/gateway/codex/route-id\"' 'resume' '--all' 'session-id'");
   });
 
   it("路由环境覆盖继承的 Codex 凭证，避免发送旧 bearer token", () => {

@@ -7,6 +7,7 @@ const sqliteMock = vi.hoisted(() => {
     cache_key: string;
     file_path: string;
     mtime_ms: number;
+    change_ms: number;
     size: number;
     session_json: string;
     cached_at: string;
@@ -27,10 +28,10 @@ const sqliteMock = vi.hoisted(() => {
     constructor(private state: State, private source: string) {}
     all(...params: unknown[]) {
       const sql = normalize(this.source);
-      if (sql.startsWith("SELECT file_path, mtime_ms, size, session_json FROM session_cache")) {
+      if (sql.startsWith("SELECT file_path, mtime_ms, change_ms, size, session_json FROM session_cache")) {
         return this.state.cache
           .filter((row) => row.cache_key === params[0])
-          .map(({ file_path, mtime_ms, size, session_json }) => ({ file_path, mtime_ms, size, session_json }));
+          .map(({ file_path, mtime_ms, change_ms, size, session_json }) => ({ file_path, mtime_ms, change_ms, size, session_json }));
       }
       if (sql.startsWith("SELECT rowid, LENGTH(session_json) AS payload_bytes FROM session_cache")) {
         return [...this.state.cache]
@@ -63,9 +64,10 @@ const sqliteMock = vi.hoisted(() => {
           cache_key: String(params[0]),
           file_path: String(params[1]),
           mtime_ms: Number(params[2]),
-          size: Number(params[3]),
-          session_json: String(params[4]),
-          cached_at: String(params[5])
+          change_ms: Number(params[3]),
+          size: Number(params[4]),
+          session_json: String(params[5]),
+          cached_at: String(params[6])
         });
       } else if (sql === "DELETE FROM session_cache WHERE rowid = ?") {
         this.state.cache = this.state.cache.filter((row) => row.rowid !== params[0]);

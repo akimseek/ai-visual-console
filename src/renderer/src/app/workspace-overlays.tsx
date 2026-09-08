@@ -21,11 +21,13 @@ type WorkspaceOverlaysProps = {
   detailDialogSession: AiSession | null;
   selectedSessionDetails: AiSession | null;
   selectedSessionLoading: boolean;
+  detailLoadError: string;
   branchPanel: BranchPanelState | null;
   detailHasMore: boolean;
   detailLoadingMore: boolean;
   supportsBranch: boolean;
   onLoadMore: () => Promise<void>;
+  onRetryDetail: () => void;
   onCloseDetail: () => void;
   onOpenSession: (session: AiSession) => void;
   onBranchFromTurn: (session: AiSession, turn: ConversationTurn) => void;
@@ -52,11 +54,13 @@ export function WorkspaceOverlays({
   detailDialogSession,
   selectedSessionDetails,
   selectedSessionLoading,
+  detailLoadError,
   branchPanel,
   detailHasMore,
   detailLoadingMore,
   supportsBranch,
   onLoadMore,
+  onRetryDetail,
   onCloseDetail,
   onOpenSession,
   onBranchFromTurn,
@@ -84,10 +88,12 @@ export function WorkspaceOverlays({
           session={detailDialogSession}
           selectedSessionDetails={selectedSessionDetails}
           loading={selectedSessionLoading}
+          loadError={detailLoadError}
           branchPanel={branchPanel}
           hasMore={detailHasMore}
           loadingMore={detailLoadingMore}
           onLoadMore={onLoadMore}
+          onRetry={onRetryDetail}
           supportsBranch={supportsBranch}
           onClose={onCloseDetail}
           onOpenSession={onOpenSession}

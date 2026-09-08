@@ -75,6 +75,9 @@ let targetsCache: { at: number; targets: CodexTarget[] } | null = null;
 let targetsInFlight: Promise<CodexTarget[]> | null = null;
 const TARGETS_CACHE_TTL_MS = 30_000;
 const MAX_WSL_SESSION_READ_BYTES = 32 * 1024 * 1024;
+const WSL_DETAIL_READ_TIMEOUT_MIN_MS = 60_000;
+const WSL_DETAIL_READ_TIMEOUT_MAX_MS = 5 * 60_000;
+const WSL_DETAIL_READ_TIMEOUT_PER_MIB_MS = 2_000;
 // 截断消息之后的控制记录只为 codex resume 保留一轮上下文；无限保留会让分支逼近整文件大小，
 // 分支自身超过 WSL 读取上限后反而无法再打开。
 const MAX_BRANCH_TAIL_BYTES = 8 * 1024 * 1024;
@@ -209,15 +212,16 @@ export async function getSessionMessagesPage(targetId: string, sessionId: string
     let previous: AiMessage | null = null;
     let hasMore = false;
     const fileMtimeMs = session.fileMtimeMs || Date.parse(session.updatedAt || "") || 0;
+    const fileChangeMs = session.fileChangeMs || fileMtimeMs;
     const fileSize = session.fileSize || 0;
-    const anchor = !latest && hasAppDatabase() ? await readSessionMessageIndex({ targetId, sessionId, filePath: session.filePath, mtimeMs: fileMtimeMs, size: fileSize }, pageOffset) : null;
+    const anchor = !latest && hasAppDatabase() ? await readSessionMessageIndex({ targetId, sessionId, filePath: session.filePath, mtimeMs: fileMtimeMs, changeMs: fileChangeMs, size: fileSize }, pageOffset) : null;
     const anchors: Array<{ messageOffset: number; lineNumber: number }> = [];
     let visibleIndex = anchor?.messageOffset || 0;
     const push = (line: string, lineNumber: number) => {
       const item = safeJsonParse<SessionLine>(line);
       const message = item ? extractMessage(item) : null;
       if (!item || !message || !shouldKeepMessage(message)) return true;
-      const next = { ...message, timestamp: item.timestamp };
+      const next = { ...message, timestamp: item.timestamp, sourceLine: lineNumber };
       if (previous?.role === next.role && previous.text === next.text) return true;
       previous = next;
       if (!latest && visibleIndex >= pageOffset + limit) {
@@ -236,12 +240,15 @@ export async function getSessionMessagesPage(targetId: string, sessionId: string
       return true;
     };
     const startLine = latest ? 1 : anchor?.lineNumber || 1;
-    await storage.readLines(session.filePath, push, startLine);
+    await storage.readLines(session.filePath, push, startLine, target.kind === "wsl" ? {
+      timeoutMs: resolveWslDetailReadTimeout(fileSize)
+    } : undefined);
     if (hasAppDatabase()) await saveSessionMessageIndex({
       targetId,
       sessionId,
       filePath: session.filePath,
       mtimeMs: fileMtimeMs,
+      changeMs: fileChangeMs,
       size: fileSize,
       anchors,
       messageCount: Math.max(session.messageCount, anchor?.messageCount || 0, hasMore ? 0 : visibleIndex)
@@ -321,20 +328,15 @@ export async function getSessionFolderPath(targetId: string, sessionId: string) 
   return target.kind === "local" ? path.dirname(source) : path.posix.dirname(source);
 }
 
-export async function branchSession(targetId: string, sessionId: string, messageIndex: number) {
+export async function branchSession(targetId: string, sessionId: string, messageLine: number) {
   return measure(`sessions.branch.${targetId}`, async () => {
-    if (messageIndex <= 0) {
+    if (messageLine <= 0) {
       throw new Error("请选择至少一条前置上下文后再创建分支。");
     }
 
     const session = await getSessionSummary(targetId, sessionId);
     // 轻量会话摘要只读取文件首段，messageCount 可能是不完整的；分支偏移由详情页传入，
     // 写入器会流式扫描原始 JSONL 并在绝对消息位置截断。
-    const keepCount = messageIndex;
-    if (keepCount <= 0) {
-      throw new Error("当前会话没有可保留的上下文。");
-    }
-
     const target = await resolveTarget(targetId);
     const effectiveTarget =
       target.kind === "wsl" && !target.codexHome
@@ -342,7 +344,7 @@ export async function branchSession(targetId: string, sessionId: string, message
         : target;
     const branchId = crypto.randomUUID();
     const branchPath = buildBranchSessionPath(effectiveTarget, session.filePath, branchId);
-    await writeBranchSession(effectiveTarget, session, keepCount, branchId, branchPath);
+    await writeBranchSession(effectiveTarget, session, messageLine, branchId, branchPath);
 
     const branch = effectiveTarget.kind === "local"
       ? await loadLocalSession(branchPath)
@@ -350,7 +352,7 @@ export async function branchSession(targetId: string, sessionId: string, message
     branch.metadata = await setSessionBranchMetadata(effectiveTarget.id, branch.id, {
       parentTargetId: targetId,
       parentSessionId: session.id,
-      parentMessageIndex: keepCount,
+      parentMessageLine: messageLine,
       createdBy: "branch"
     });
     await appendHistoryEntry(effectiveTarget, branch);
@@ -630,7 +632,7 @@ type SessionLineWriter = {
 async function writeBranchSession(
   target: CodexTarget,
   session: CodexSession,
-  keepCount: number,
+  messageLine: number,
   branchId: string,
   branchPath: string
 ) {
@@ -639,13 +641,11 @@ async function writeBranchSession(
     : await createWslSessionLineWriter(target.distro!, branchPath);
   const metaTimestamp = new Date().toISOString();
   let rewrittenMeta = false;
-  let uniqueMessages = 0;
-  let currentMessageKey = "";
-  let cutoffKey = "";
+  let selectedMessageWritten = false;
   let tailBytes = 0;
   let complete = false;
 
-  const writeLine = async (rawLine: string): Promise<boolean> => {
+  const writeLine = async (rawLine: string, lineNumber: number): Promise<boolean> => {
     if (complete) return false;
     if (!rawLine.trim()) return true;
     const item = safeJsonParse<SessionLine>(rawLine);
@@ -654,43 +654,38 @@ async function writeBranchSession(
     if (item.type === "session_meta") {
       if (rewrittenMeta) return true;
       rewrittenMeta = true;
+      const payload: Record<string, unknown> = {
+        ...(item.payload || {}),
+        id: branchId,
+        session_id: branchId,
+        timestamp: metaTimestamp,
+        cwd: session.cwd,
+        model: session.model,
+        cli_version: session.cliVersion
+      };
+      // 新版 Codex 会将带 paginated 标记的 rollout 视作已导入，忽略其中的截断历史。
+      // 首次打开分支时由 CLI 迁移该 rollout 并建立对应的分页历史。
+      delete payload.history_mode;
       await writer.write(JSON.stringify({
         timestamp: metaTimestamp,
         type: "session_meta",
-        payload: {
-          ...(item.payload || {}),
-          id: branchId,
-          session_id: branchId,
-          timestamp: metaTimestamp,
-          cwd: session.cwd,
-          model: session.model,
-          cli_version: session.cliVersion
-        }
+        payload
       }));
       return true;
     }
 
     const message = extractMessage(item);
-    const messageKey = message && shouldKeepMessage(message) ? `${message.role}\u0000${message.text}` : "";
+    const isVisibleMessage = Boolean(message && shouldKeepMessage(message));
     // 到达截断消息后，仍需保留该轮消息之后的 turn_context、事件和完成标记。
     // Codex resume 依赖这些控制记录；不能在遇到第一条非 message JSONL 时提前结束。
     // 只有下一条可见消息开始时才真正截断，避免把后续对话复制进分支。
-    if (cutoffKey && messageKey && messageKey !== cutoffKey) {
+    if (selectedMessageWritten && isVisibleMessage) {
       complete = true;
       return false;
     }
-    if (messageKey && messageKey !== currentMessageKey) {
-      uniqueMessages += 1;
-      currentMessageKey = messageKey;
-      if (uniqueMessages > keepCount) {
-        complete = true;
-        return false;
-      }
-      if (uniqueMessages === keepCount) cutoffKey = messageKey;
-    }
     // 截断消息之后的尾部记录按字节封顶：真实一轮的控制记录远小于该值，
     // 超限说明源会话尾部是事件风暴，继续复制只会得到打不开的巨型分支。
-    if (cutoffKey && messageKey !== cutoffKey) {
+    if (selectedMessageWritten && !isVisibleMessage) {
       tailBytes += Buffer.byteLength(rawLine, "utf8") + 1;
       if (tailBytes > MAX_BRANCH_TAIL_BYTES) {
         complete = true;
@@ -699,25 +694,31 @@ async function writeBranchSession(
     }
     // Codex 以 payload.thread_id 归属恢复记录；分支必须将父线程标识改为新线程，
     // 否则虽然 JSONL 中保留了历史消息，恢复时仍会被 CLI 过滤掉。
-    if (item.payload?.thread_id === session.id) {
-      await writer.write(JSON.stringify({
-        ...item,
-        payload: { ...item.payload, thread_id: branchId }
-      }));
-      return true;
+    await writer.write(JSON.stringify(rewriteBranchRecord(item, session.id, branchId)));
+    if (lineNumber === messageLine) {
+      if (!isVisibleMessage) throw new Error("分支位置不是可见会话消息。");
+      selectedMessageWritten = true;
     }
-    await writer.write(rawLine);
     return true;
   };
 
   try {
     await createSessionStorage(target).readLines(session.filePath, writeLine);
     if (!rewrittenMeta) throw new Error("创建分支失败：缺少 session_meta 记录。");
+    if (!selectedMessageWritten) throw new Error("分支位置已失效，请重新打开会话详情后再试。");
     await writer.close();
   } catch (error) {
     await writer.abort();
     throw error;
   }
+}
+
+function rewriteBranchRecord(item: SessionLine, parentSessionId: string, branchId: string): SessionLine {
+  const payload = { ...(item.payload || {}) };
+  for (const key of ["thread_id", "session_id"] as const) {
+    if (payload[key] === parentSessionId) payload[key] = branchId;
+  }
+  return { ...item, payload };
 }
 
 async function createLocalSessionLineWriter(filePath: string): Promise<SessionLineWriter> {
@@ -982,7 +983,7 @@ async function wslListSessionFiles(distro: string, codexHome: string): Promise<C
   if (!codexHome) return [];
   const root = `${codexHome}/sessions`;
   if (!(await wslPathExists(distro, root))) return [];
-  const { stdout } = await wslRun(distro, "find", [root, "-type", "f", "-name", "rollout-*.jsonl", "-printf", "%p\t%T@\t%s\n"]);
+  const { stdout } = await wslRun(distro, "find", [root, "-type", "f", "-name", "rollout-*.jsonl", "-printf", "%p\t%T@\t%C@\t%s\n"]);
   return parseWslSessionFileList(stdout);
 }
 
@@ -990,7 +991,7 @@ async function wslListTrashSessionFiles(distro: string, codexHome: string): Prom
   if (!codexHome) return [];
   const root = `${codexHome}/.visual-console-trash/sessions`;
   if (!(await wslPathExists(distro, root))) return [];
-  const { stdout } = await wslRun(distro, "find", [root, "-type", "f", "-name", "rollout-*.jsonl", "-printf", "%p\t%T@\t%s\n"]);
+  const { stdout } = await wslRun(distro, "find", [root, "-type", "f", "-name", "rollout-*.jsonl", "-printf", "%p\t%T@\t%C@\t%s\n"]);
   return parseWslSessionFileList(stdout);
 }
 
@@ -1079,6 +1080,14 @@ async function resolveWslInputPath(distro: string, input: string) {
   }
   if (input.startsWith("/")) return input;
   throw new Error("请输入 WSL 内的绝对路径，或使用 ~/.codex。");
+}
+
+function resolveWslDetailReadTimeout(fileSize: number) {
+  const sizeMiB = Math.ceil(Math.max(0, fileSize) / (1024 * 1024));
+  return Math.min(
+    WSL_DETAIL_READ_TIMEOUT_MAX_MS,
+    Math.max(WSL_DETAIL_READ_TIMEOUT_MIN_MS, sizeMiB * WSL_DETAIL_READ_TIMEOUT_PER_MIB_MS)
+  );
 }
 
 async function wslRealpath(distro: string, filePath: string) {

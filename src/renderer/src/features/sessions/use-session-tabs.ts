@@ -81,6 +81,7 @@ export function useSessionTabs(options: {
     activateTerminalTab({
       key,
       targetId: target.id,
+      target,
       session,
       title: historyTabTitle(session),
       // Qoder 按项目目录定位 --resume 的历史文件，恢复时必须保留原始工作目录。
@@ -114,6 +115,7 @@ export function useSessionTabs(options: {
     const index = newSessionIndexRef.current;
     const key = `new:${nextTargetId}:${Date.now()}:${index}`;
     const nextTarget = targets.find((target) => target.id === nextTargetId);
+    if (!nextTarget) return;
     const usesDefaultCwd = cwd === DEFAULT_NEW_SESSION_CWD;
     const displayTitle = customTitle.trim() || (index === 1 ? "新会话" : `新会话 ${index}`);
     newSessionIndexRef.current = index + 1;
@@ -121,6 +123,7 @@ export function useSessionTabs(options: {
       {
         key,
         targetId: nextTargetId,
+        target: nextTarget,
         title: displayTitle,
         cwd: usesDefaultCwd ? undefined : cwd,
         codexHome: nextTarget?.codexHome,
@@ -143,6 +146,7 @@ export function useSessionTabs(options: {
     activateTerminalTab({
       key,
       targetId: target.id,
+      target,
       session,
       title: historyTabTitle(session),
       cwd,
@@ -157,12 +161,14 @@ export function useSessionTabs(options: {
   }
 
   function openDerivedSession(session: AiSession) {
+    if (!selectedTarget) return;
     const key = tabKey(targetId, session.id);
     setView("active");
     setDetailDialogSession(null);
     activateTerminalTab({
       key,
       targetId,
+      target: selectedTarget,
       session,
       title: historyTabTitle(session),
       codexHome: selectedTarget?.codexHome

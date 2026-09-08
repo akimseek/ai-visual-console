@@ -39,7 +39,7 @@ export function createSessionApi(ipc: IpcRenderer) {
     exportSession: (targetId: string, sessionId: string, format: SessionExportFormat) =>
       invoke<SessionExportResult | null>(ipc, "codex:export-session", targetId, sessionId, format),
     branchSession: (params: SessionBranchParams) =>
-      invoke<AiSession>(ipc, "codex:branch-session", params.targetId, params.sessionId, params.messageIndex),
+      invoke<AiSession>(ipc, "codex:branch-session", params.targetId, params.sessionId, params.messageLine),
     duplicateSession: (targetId: string, sessionId: string, title: string) =>
       invoke<AiSession>(ipc, "codex:duplicate-session", targetId, sessionId, title),
     deleteSession: (targetId: string, sessionId: string, ref?: SessionFileRef) =>

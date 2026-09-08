@@ -3,7 +3,15 @@ import { findNewSessionCandidates } from "./new-session-finalizer";
 import type { AiSession } from "../../types";
 import type { TerminalTab } from "../terminal/terminal-tab-state";
 
-const tab: TerminalTab = { key: "new", targetId: "codex:local", title: "新会话", cwd: "/work", knownSessionIds: ["old"], createdAt: 20_000 };
+const tab: TerminalTab = {
+  key: "new",
+  targetId: "codex:local",
+  target: { id: "codex:local", provider: "codex", label: "本地", kind: "local", available: true },
+  title: "新会话",
+  cwd: "/work",
+  knownSessionIds: ["old"],
+  createdAt: 20_000
+};
 const session = (id: string, updatedAt: string, cwd = "/work") => ({ id, title: id, cwd, updatedAt } as AiSession);
 
 describe("new session finalizer", () => {

@@ -11,6 +11,12 @@ type UseProviderTargetsOptions = {
   logPerformance: (label: string, durationMs: number, status?: string) => Promise<void>;
 };
 
+export function mergeKnownTarget(items: AiTarget[], target: AiTarget) {
+  const index = items.findIndex((item) => item.id === target.id);
+  if (index === -1) return [...items, target];
+  return items.map((item) => (item.id === target.id ? target : item));
+}
+
 export function useProviderTargets({ setError, logPerformance }: UseProviderTargetsOptions) {
   const [providers, setProviders] = useState<AiProviderSummary[]>([]);
   const [providerId, setProviderId] = useState<AiProviderId | "">("");
@@ -18,8 +24,11 @@ export function useProviderTargets({ setError, logPerformance }: UseProviderTarg
   const [targetId, setTargetId] = useState("");
   const providerIdRef = useRef<AiProviderId | "">("");
   const pendingTargetIdRef = useRef("");
+  const targetsByProviderRef = useRef<Partial<Record<AiProviderId, AiTarget[]>>>({});
+  const skipInitialLoadForProviderRef = useRef<AiProviderId | "">("");
 
-  const applyTargets = useCallback((items: AiTarget[]) => {
+  const applyTargets = useCallback((items: AiTarget[], nextProviderId = providerIdRef.current) => {
+    if (nextProviderId) targetsByProviderRef.current[nextProviderId] = items;
     setTargets(items);
     setTargetId((current) => {
       const pendingTargetId = pendingTargetIdRef.current;
@@ -38,7 +47,7 @@ export function useProviderTargets({ setError, logPerformance }: UseProviderTarg
     try {
       const items = await window.codexConsole.listTargets(nextProviderId);
       if (providerIdRef.current !== nextProviderId) return;
-      applyTargets(items);
+      applyTargets(items, nextProviderId);
       void logPerformance(`targets.fresh.loaded.${nextProviderId}`, performance.now() - startedAt);
     } catch (loadError) {
       void logPerformance(`targets.fresh.loaded.${nextProviderId}`, performance.now() - startedAt, "error");
@@ -59,7 +68,7 @@ export function useProviderTargets({ setError, logPerformance }: UseProviderTarg
       if (cachedTargets.length > 0) {
         if (providerIdRef.current !== nextProviderId) return;
         hasCachedTargets = true;
-        applyTargets(cachedTargets);
+        applyTargets(cachedTargets, nextProviderId);
       }
     } catch (error) {
       captureError(error, `loadCachedTargets:${nextProviderId}`);
@@ -90,6 +99,10 @@ export function useProviderTargets({ setError, logPerformance }: UseProviderTarg
 
   useEffect(() => {
     providerIdRef.current = providerId;
+    if (skipInitialLoadForProviderRef.current === providerId) {
+      skipInitialLoadForProviderRef.current = "";
+      return;
+    }
     if (!pendingTargetIdRef.current) applyTargets([]);
     if (providerId) void loadInitialTargets(providerId);
   }, [applyTargets, loadInitialTargets, providerId]);
@@ -102,6 +115,20 @@ export function useProviderTargets({ setError, logPerformance }: UseProviderTarg
     setTargetId(target.id);
   }, []);
 
+  // 终端标签切换只能使用标签已有的目标快照。此路径刻意不读取缓存、
+  // 不探测 CLI/WSL，也不安排延迟刷新；显式刷新仍走 loadTargets。
+  const syncTerminalTabTarget = useCallback((target: AiTarget) => {
+    const providerChanged = providerIdRef.current !== target.provider;
+    const nextTargets = mergeKnownTarget(targetsByProviderRef.current[target.provider] || [], target);
+    targetsByProviderRef.current[target.provider] = nextTargets;
+    pendingTargetIdRef.current = "";
+    if (providerChanged) skipInitialLoadForProviderRef.current = target.provider;
+    providerIdRef.current = target.provider;
+    setProviderId(target.provider);
+    setTargets(nextTargets);
+    setTargetId(target.id);
+  }, []);
+
   return {
     providers,
     providerId,
@@ -110,6 +137,7 @@ export function useProviderTargets({ setError, logPerformance }: UseProviderTarg
     targetId,
     setTargetId,
     loadTargets,
-    selectKnownTarget
+    selectKnownTarget,
+    syncTerminalTabTarget
   };
 }

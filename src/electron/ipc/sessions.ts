@@ -142,11 +142,11 @@ export function registerSessionIpcHandlers() {
   });
   ipcMain.handle(
     "codex:branch-session",
-    (_event, targetId: unknown, sessionId: unknown, messageIndex: unknown) =>
+    (_event, targetId: unknown, sessionId: unknown, messageLine: unknown) =>
       branchSession(
         requireString(targetId, "targetId"),
         requireString(sessionId, "sessionId"),
-        requireNonNegativeInteger(messageIndex, "messageIndex")
+        requireNonNegativeInteger(messageLine, "messageLine")
       )
   );
   ipcMain.handle("codex:duplicate-session", (_event, targetId: unknown, sessionId: unknown, title: unknown) =>

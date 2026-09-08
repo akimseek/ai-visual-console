@@ -45,6 +45,7 @@ export function BranchPanel({
             <code>{shortSessionId(branch!.parentSessionId || "")}</code>
           )}
           {typeof branch?.parentMessageIndex === "number" && <small>消息 {branch.parentMessageIndex}</small>}
+          {typeof branch?.parentMessageLine === "number" && <small>JSONL 行 {branch.parentMessageLine}</small>}
         </div>
       )}
       {(children.length > 0 || loading) && (

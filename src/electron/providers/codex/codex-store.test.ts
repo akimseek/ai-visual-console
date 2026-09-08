@@ -6,6 +6,7 @@ import {
   deleteSession,
   deleteSessions,
   getCachePath,
+  listSessionsFromFiles,
   purgeSession,
   readSessionFileLines,
   removeSessionsFromCache,
@@ -94,7 +95,7 @@ describe("deleteSessions 批量路径", () => {
     const cachePath = getCachePath();
     await fs.mkdir(path.dirname(cachePath), { recursive: true });
     await fs.writeFile(cachePath, JSON.stringify({
-      version: 5,
+      version: 6,
       sessions: {
         "/a.jsonl": { mtimeMs: 1, size: 1, session: {} },
         "/b.jsonl": { mtimeMs: 1, size: 1, session: {} },
@@ -106,6 +107,29 @@ describe("deleteSessions 批量路径", () => {
 
     const cache = JSON.parse(await fs.readFile(cachePath, "utf8")) as { sessions: Record<string, unknown> };
     expect(Object.keys(cache.sessions)).toEqual(["/keep.jsonl"]);
+  });
+});
+
+describe("轻量会话缓存", () => {
+  it("文件路径、mtime 和大小相同但变更时间变化时重新解析", async () => {
+    const cachePath = getCachePath();
+    const file = { filePath: "/sessions/rollout-cache.jsonl", mtimeMs: 1, changeMs: 1, size: 1024 };
+    const first = JSON.stringify({ type: "session_meta", payload: { id: SESSION_ID } });
+    const second = `${first}\n${JSON.stringify({ type: "event_msg", payload: { type: "user_message", message: "new-content" } })}`;
+    let content = first;
+    const readListFile = async () => content;
+
+    await listSessionsFromFiles([file], { readFile: readListFile, readListFile, cachePath, writeCache: true, lightweight: true });
+    content = second;
+    const refreshed = await listSessionsFromFiles([{ ...file, changeMs: 2 }], {
+      readFile: readListFile,
+      readListFile,
+      cachePath,
+      writeCache: true,
+      lightweight: true
+    });
+
+    expect(refreshed[0]?.title).toBe("new-content");
   });
 });
 

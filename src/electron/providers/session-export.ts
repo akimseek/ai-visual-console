@@ -52,6 +52,9 @@ function formatMarkdown(session: CodexSession) {
     if (typeof metadata.branch.parentMessageIndex === "number") {
       lines.push(`- 来源消息位置：${metadata.branch.parentMessageIndex}`);
     }
+    if (typeof metadata.branch.parentMessageLine === "number") {
+      lines.push(`- 来源 JSONL 行：${metadata.branch.parentMessageLine}`);
+    }
   }
 
   lines.push("", "## 对话", "");
@@ -76,7 +79,8 @@ function formatHtml(session: CodexSession) {
     ["Token", formatTokenUsage(session)],
     ["上下文", formatContextUsage(session)],
     ["来源会话", metadata?.branch?.parentSessionId || "-"],
-    ["来源消息位置", metadata?.branch?.parentMessageIndex?.toString() || "-"]
+    ["来源消息位置", metadata?.branch?.parentMessageIndex?.toString() || "-"],
+    ["来源 JSONL 行", metadata?.branch?.parentMessageLine?.toString() || "-"]
   ];
 
   return `<!doctype html>

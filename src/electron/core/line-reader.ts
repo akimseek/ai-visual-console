@@ -23,7 +23,7 @@ export async function readLocalLines(filePath: string, onLine: LineHandler, star
   }
 }
 
-export async function readWslLines(distro: string, filePath: string, onLine: LineHandler, startLine = 1) {
+export async function readWslLines(distro: string, filePath: string, onLine: LineHandler, startLine = 1, timeoutMs?: number) {
   const wslExe = await getWslExe();
   if (!wslExe) throw new Error("未找到 wsl.exe。");
 
@@ -47,7 +47,7 @@ export async function readWslLines(distro: string, filePath: string, onLine: Lin
   });
   const clearTimer = attachSpawnTimeout(child, (error) => {
     timeoutError = error;
-  }, `读取 ${filePath}`);
+  }, `读取 ${filePath}`, timeoutMs);
   child.stderr.on("data", (chunk: Buffer) => stderr.push(chunk));
   let lineNumber = startLine - 1;
 

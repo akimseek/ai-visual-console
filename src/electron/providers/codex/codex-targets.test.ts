@@ -11,7 +11,7 @@ vi.mock("../session-metadata", () => ({
   setSessionBranchMetadata: async () => ({})
 }));
 
-import { branchSession, getSession } from "./codex-targets";
+import { branchSession, getSession, getSessionMessagesPage } from "./codex-targets";
 
 const SESSION_ID = "11111111-2222-3333-4444-555555555555";
 let workDir = "";
@@ -36,7 +36,7 @@ describe("branchSession", () => {
     const meta = JSON.stringify({
       timestamp: "2026-06-15T14:33:16.000Z",
       type: "session_meta",
-      payload: { id: SESSION_ID, session_id: SESSION_ID, timestamp: "2026-06-15T14:33:16.000Z", cwd: "/workspace", model: "gpt-5" }
+      payload: { id: SESSION_ID, session_id: SESSION_ID, timestamp: "2026-06-15T14:33:16.000Z", cwd: "/workspace", model: "gpt-5", history_mode: "paginated" }
     });
     const user = JSON.stringify({
       timestamp: "2026-06-15T14:33:17.000Z",
@@ -53,6 +53,11 @@ describe("branchSession", () => {
       type: "turn_context",
       payload: { thread_id: SESSION_ID, model: "gpt-5", model_provider: "openai", effort: "high" }
     });
+    const sessionControl = JSON.stringify({
+      timestamp: "2026-06-15T14:33:18.200Z",
+      type: "event_msg",
+      payload: { session_id: SESSION_ID, type: "turn_completed" }
+    });
     const followUp = JSON.stringify({
       timestamp: "2026-06-15T14:33:19.000Z",
       type: "response_item",
@@ -62,14 +67,14 @@ describe("branchSession", () => {
     const padding = `${JSON.stringify({ type: "event_msg", payload: { type: "token_count", info: {}, pad: "x".repeat(700 * 1024) } })}\n`;
 
     await fs.mkdir(sessionsDir, { recursive: true });
-    await fs.writeFile(source, `${meta}\n${user}\n${assistant}\n${turnContext}\n`, "utf8");
+    await fs.writeFile(source, `${meta}\n${user}\n${assistant}\n${turnContext}\n${sessionControl}\n`, "utf8");
     await fs.appendFile(source, padding);
     await fs.appendFile(source, `${followUp}\n`, "utf8");
     for (let index = 0; index < 48; index += 1) await fs.appendFile(source, trailing, "utf8");
     expect((await fs.stat(source)).size).toBeGreaterThan(32 * 1024 * 1024);
 
     // 列表摘要只读取文件首段，故其 messageCount 可能小于此处的绝对偏移。
-    const branch = await branchSession("local", SESSION_ID, 3);
+    const branch = await branchSession("local", SESSION_ID, 7);
     const branchText = await fs.readFile(branch.filePath, "utf8");
     const parsed = parseSessionContent(branch.filePath, branchText);
 
@@ -86,7 +91,39 @@ describe("branchSession", () => {
       .map((item) => item.payload?.thread_id)
       .filter((threadId): threadId is string => Boolean(threadId));
     expect(branchThreadIds).toEqual([branch.id, branch.id, branch.id, branch.id]);
+    expect(branchText).not.toContain(`"session_id":"${SESSION_ID}"`);
+    expect(branchText).not.toContain('"history_mode":"paginated"');
     expect((await fs.stat(branch.filePath)).size).toBeLessThan(32 * 1024 * 1024);
+  });
+});
+
+describe("getSessionMessagesPage", () => {
+  it("首屏返回最新消息，并可按绝对偏移向前读取", async () => {
+    const sessionsDir = path.join(codexHome, "sessions", "2026", "06", "16");
+    const source = path.join(sessionsDir, `rollout-2026-06-16T10-00-00-${SESSION_ID}.jsonl`);
+    const records = [
+      { type: "session_meta", payload: { id: SESSION_ID, cwd: "/workspace" } },
+      ...Array.from({ length: 150 }, (_, index) => ({
+        type: "response_item",
+        payload: {
+          type: "message",
+          role: index % 2 === 0 ? "user" : "assistant",
+          content: [{ type: "input_text", text: `message-${index}` }]
+        }
+      }))
+    ];
+    await fs.mkdir(sessionsDir, { recursive: true });
+    await fs.writeFile(source, `${records.map((record) => JSON.stringify(record)).join("\n")}\n`, "utf8");
+
+    const latest = await getSessionMessagesPage("local", SESSION_ID, -1, 100);
+    expect(latest).toMatchObject({ offset: 50, hasMore: true });
+    expect(latest.messages).toHaveLength(100);
+    expect(latest.messages.slice(0, 2)).toMatchObject([{ text: "message-50", sourceLine: 52 }, { text: "message-51", sourceLine: 53 }]);
+
+    const earlier = await getSessionMessagesPage("local", SESSION_ID, 0, 50);
+    expect(earlier).toMatchObject({ offset: 0, hasMore: true });
+    expect(earlier.messages).toHaveLength(50);
+    expect(earlier.messages.slice(0, 2)).toMatchObject([{ text: "message-0" }, { text: "message-1" }]);
   });
 });
 

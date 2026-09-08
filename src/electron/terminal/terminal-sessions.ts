@@ -383,8 +383,11 @@ async function buildCodexCommand(params: TerminalStartParams & { vendorRoute?: V
   const distro = getWslDistroFromProviderTarget("codex", params.targetId);
   if (distro) {
     const codexInvocation = buildCodexInvocation(extraArgs, route);
+    const resumeInvocation = params.sessionId
+      ? buildCodexInvocation(["resume", "--all", params.sessionId], route)
+      : "";
     const command = params.sessionId
-      ? `${params.cwd ? `cd ${shellQuote(params.cwd)} && ` : ""}exec ${buildCodexInvocation(["resume", params.sessionId], route)}`
+      ? `${params.cwd ? `cd ${shellQuote(params.cwd)} && ` : ""}exec ${resumeInvocation}`
       : params.cwd && params.useCodexCwdFlag
         ? `exec ${buildCodexInvocation(["-C", params.cwd, ...extraArgs], route)}`
         : params.cwd
@@ -410,7 +413,7 @@ async function buildCodexCommand(params: TerminalStartParams & { vendorRoute?: V
       await fs.mkdir(windowsCwd, { recursive: true });
     }
     const args = params.sessionId
-      ? ["resume", params.sessionId]
+      ? ["resume", "--all", params.sessionId]
       : params.cwd && params.useCodexCwdFlag
         ? ["-C", windowsCwd, ...extraArgs]
         : extraArgs;
@@ -428,7 +431,7 @@ async function buildCodexCommand(params: TerminalStartParams & { vendorRoute?: V
 
   const codexInvocation = buildCodexInvocation(extraArgs, route);
   const command = params.sessionId
-    ? `exec ${buildCodexInvocation(["resume", params.sessionId], route)}`
+    ? `exec ${buildCodexInvocation(["resume", "--all", params.sessionId], route)}`
     : params.cwd && params.useCodexCwdFlag
       ? `exec ${buildCodexInvocation(["-C", params.cwd, ...extraArgs], route)}`
       : `exec ${codexInvocation}`;

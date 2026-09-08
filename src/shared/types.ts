@@ -2,6 +2,8 @@ export type CodexMessage = {
   role: "user" | "assistant" | "system" | "tool" | "unknown";
   text: string;
   timestamp?: string;
+  // 仅在详情页流式读取时提供，用于将“从此处分支”精确定位到原始 JSONL 记录。
+  sourceLine?: number;
 };
 
 export type CodexSession = {
@@ -16,6 +18,7 @@ export type CodexSession = {
   cliVersion?: string;
   filePath: string;
   fileMtimeMs?: number;
+  fileChangeMs?: number;
   fileSize?: number;
   messageCount: number;
   preview: CodexMessage[];
@@ -84,6 +87,7 @@ export type SessionBranchMetadata = {
   parentTargetId?: string;
   parentSessionId?: string;
   parentMessageIndex?: number;
+  parentMessageLine?: number;
   createdBy?: "branch" | "manual";
 };
 
@@ -470,6 +474,7 @@ export type GatewayPortUpdateResult = GatewayPortStatus & {
 export type CodexSessionFile = {
   filePath: string;
   mtimeMs: number;
+  changeMs?: number;
   size: number;
 };
 
@@ -530,7 +535,7 @@ export type TerminalStartParams = {
 export type SessionBranchParams = {
   targetId: string;
   sessionId: string;
-  messageIndex: number;
+  messageLine: number;
 };
 
 export type TerminalStartRequest = TerminalStartParams & {

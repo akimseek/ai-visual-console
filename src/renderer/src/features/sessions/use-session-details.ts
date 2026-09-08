@@ -22,6 +22,8 @@ export function useSessionDetails({
   const [detailDialogSession, setDetailDialogSession] = useState<AiSession | null>(null);
   const [selectedSessionDetails, setSelectedSessionDetails] = useState<AiSession | null>(null);
   const [selectedSessionLoading, setSelectedSessionLoading] = useState(false);
+  const [detailLoadError, setDetailLoadError] = useState("");
+  const [detailRetryKey, setDetailRetryKey] = useState(0);
   const [detailHasMore, setDetailHasMore] = useState(false);
   const [detailLoadingMore, setDetailLoadingMore] = useState(false);
   const [branchPanel, setBranchPanel] = useState<BranchPanelState | null>(null);
@@ -40,6 +42,7 @@ export function useSessionDetails({
     if (!sessionToLoad) {
       setSelectedSessionDetails(null);
       setSelectedSessionLoading(false);
+      setDetailLoadError("");
       setDetailHasMore(false);
       return;
     }
@@ -47,6 +50,7 @@ export function useSessionDetails({
     let cancelled = false;
     setSelectedSessionDetails(null);
     setSelectedSessionLoading(true);
+    setDetailLoadError("");
     void window.codexConsole
       .getSessionMessagesPage(targetId, sessionToLoad.id, -1, 100)
       .then((page) => {
@@ -56,7 +60,11 @@ export function useSessionDetails({
         setDetailHasMore(page.offset > 0);
       })
       .catch((error) => {
-        if (!cancelled) notifyError(captureError(error, "loadSessionDetails", "加载完整会话失败。"));
+        if (!cancelled) {
+          const message = captureError(error, "loadSessionDetails", "加载完整会话失败。");
+          setDetailLoadError(message);
+          notifyError(message);
+        }
       })
       .finally(() => {
         if (!cancelled) setSelectedSessionLoading(false);
@@ -67,7 +75,7 @@ export function useSessionDetails({
     };
     // 详情仅请求首个消息页；进入终端和详情首屏都不读取完整 JSONL。
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [targetId, detailDialogSession?.id]);
+  }, [targetId, detailDialogSession?.id, detailRetryKey]);
 
   useEffect(() => {
     if (detailDialogSession) return;
@@ -132,6 +140,7 @@ export function useSessionDetails({
     setBranchPanel(null);
     setDetailHasMore(false);
     setDetailLoadingMore(false);
+    setDetailLoadError("");
   }
 
   async function loadMoreDetailMessages() {
@@ -151,6 +160,10 @@ export function useSessionDetails({
     }
   }
 
+  function retryDetailMessages() {
+    setDetailRetryKey((value) => value + 1);
+  }
+
   return {
     detailDialogSession,
     setDetailDialogSession,
@@ -158,6 +171,8 @@ export function useSessionDetails({
     setSelectedSessionDetails,
     selectedSessionLoading,
     setSelectedSessionLoading,
+    detailLoadError,
+    retryDetailMessages,
     branchPanel,
     detailHasMore,
     detailLoadingMore,

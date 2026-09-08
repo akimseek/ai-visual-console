@@ -81,19 +81,19 @@ describe("sanitizeWslDistro", () => {
 
 describe("parseWslSessionFileList", () => {
   it("解析 find -printf 的制表符分隔输出，mtime 转为毫秒", () => {
-    const stdout = "/home/me/.codex/sessions/rollout-a.jsonl\t1700000000\t1234\n";
+    const stdout = "/home/me/.codex/sessions/rollout-a.jsonl\t1700000000\t1700000001\t1234\n";
     expect(parseWslSessionFileList(stdout)).toEqual([
-      { filePath: "/home/me/.codex/sessions/rollout-a.jsonl", mtimeMs: 1700000000000, size: 1234 }
+      { filePath: "/home/me/.codex/sessions/rollout-a.jsonl", mtimeMs: 1700000000000, changeMs: 1700000001000, size: 1234 }
     ]);
   });
 
   it("忽略空行与残缺/非数值行", () => {
     const stdout = [
-      "/a/rollout-1.jsonl\t1700000000\t10",
+      "/a/rollout-1.jsonl\t1700000000\t1700000000\t10",
       "",
       "   ",
-      "/a/rollout-2.jsonl\tnot-a-number\t20",
-      "/a/rollout-3.jsonl\t1700000001\t30"
+      "/a/rollout-2.jsonl\tnot-a-number\t1700000000\t20",
+      "/a/rollout-3.jsonl\t1700000001\t1700000001\t30"
     ].join("\n");
     const result = parseWslSessionFileList(stdout);
     expect(result.map((file) => file.filePath)).toEqual(["/a/rollout-1.jsonl", "/a/rollout-3.jsonl"]);

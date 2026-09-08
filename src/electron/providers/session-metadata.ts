@@ -156,6 +156,10 @@ function normalizeBranch(branch?: SessionBranchMetadata): SessionBranchMetadata 
       typeof branch.parentMessageIndex === "number" && Number.isInteger(branch.parentMessageIndex)
         ? branch.parentMessageIndex
         : undefined,
+    parentMessageLine:
+      typeof branch.parentMessageLine === "number" && Number.isInteger(branch.parentMessageLine)
+        ? branch.parentMessageLine
+        : undefined,
     createdBy: branch.createdBy === "manual" ? "manual" : "branch"
   };
 }

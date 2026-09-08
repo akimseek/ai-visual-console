@@ -16,7 +16,7 @@ import { pathExists } from "../../core/fs-utils";
 import { assertSessionFileInside } from "../session-file-ops";
 
 const SESSION_FILE_RE = /^rollout-.+\.jsonl$/;
-const CACHE_VERSION = 5;
+const CACHE_VERSION = 6;
 const LIST_READ_BYTES = 64 * 1024;
 const MAX_SESSION_READ_BYTES = 32 * 1024 * 1024;
 const LIST_PARSE_CONCURRENCY = 16;
@@ -31,6 +31,7 @@ type SessionCache = {
 
 type CachedSession = {
   mtimeMs: number;
+  changeMs?: number;
   size: number;
   session: CodexSession;
 };
@@ -103,7 +104,7 @@ export async function listSessionsFromFiles(
   const nextCache = emptyCache();
   const sessions = await mapLimit(files, LIST_PARSE_CONCURRENCY, async (file) => {
       const cached = cache.sessions[file.filePath];
-      if (cached && cached.mtimeMs === file.mtimeMs && cached.size === file.size) {
+      if (cached && cached.mtimeMs === file.mtimeMs && cached.changeMs === file.changeMs && cached.size === file.size) {
         nextCache.sessions[file.filePath] = cached;
         return cached.session;
       }
@@ -119,6 +120,7 @@ export async function listSessionsFromFiles(
 
       nextCache.sessions[file.filePath] = {
         mtimeMs: file.mtimeMs,
+        changeMs: file.changeMs,
         size: file.size,
         session
       };
@@ -254,7 +256,7 @@ async function findSessionFiles(root: string): Promise<CodexSessionFile[]> {
         if (entry.isDirectory()) return findSessionFiles(fullPath);
         if (entry.isFile() && SESSION_FILE_RE.test(entry.name)) {
           const stat = await fs.stat(fullPath);
-          return [{ filePath: fullPath, mtimeMs: stat.mtimeMs, size: stat.size }];
+          return [{ filePath: fullPath, mtimeMs: stat.mtimeMs, changeMs: stat.ctimeMs, size: stat.size }];
         }
         return [];
       })
@@ -326,6 +328,7 @@ async function writeCache(cachePath: string, cache: SessionCache) {
       Object.entries(cache.sessions).map(([filePath, entry]) => [filePath, {
         filePath,
         mtimeMs: entry.mtimeMs,
+        changeMs: entry.changeMs,
         size: entry.size,
         session: entry.session
       }])

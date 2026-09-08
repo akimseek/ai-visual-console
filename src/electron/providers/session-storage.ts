@@ -14,7 +14,7 @@ export type SessionStorageContext = {
 export type SessionStorage = {
   readText(filePath: string): Promise<string>;
   writeText(filePath: string, content: string): Promise<void>;
-  readLines(filePath: string, onLine: LineHandler, startLine?: number): Promise<void>;
+  readLines(filePath: string, onLine: LineHandler, startLine?: number, options?: { timeoutMs?: number }): Promise<void>;
   exists(filePath: string): Promise<boolean>;
   move(source: string, destination: string, conflictMessage?: string): Promise<void>;
   remove(filePath: string): Promise<void>;
@@ -28,7 +28,9 @@ export function createSessionStorage(context: SessionStorageContext): SessionSto
     return {
       readText: (filePath) => wslReadFile(distro, filePath),
       writeText: (filePath, content) => wslWriteFile(distro, filePath, content),
-      readLines: (filePath, onLine, startLine = 1) => readWslLines(distro, filePath, onLine, startLine),
+      readLines: (filePath, onLine, startLine = 1, options) => options?.timeoutMs
+        ? readWslLines(distro, filePath, onLine, startLine, options.timeoutMs)
+        : readWslLines(distro, filePath, onLine, startLine),
       exists: (filePath) => wslPathExists(distro, filePath),
       move: (source, destination, conflictMessage) => moveWslFile(distro, source, destination, conflictMessage),
       remove: (filePath) => removeWslFile(distro, filePath)
@@ -71,4 +73,3 @@ async function moveWslFile(distro: string, source: string, destination: string, 
 async function removeWslFile(distro: string, filePath: string) {
   await wslRun(distro, "rm", ["-f", filePath]);
 }
-

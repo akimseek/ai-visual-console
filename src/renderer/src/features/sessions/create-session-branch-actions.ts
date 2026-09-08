@@ -33,9 +33,9 @@ export function createSessionBranchActions({
     clearPendingTerminalTab();
     try {
       await runWorkspaceAction("正在创建分支会话...", async () => {
-        const messageIndex = getBranchMessageCount(turn);
-        if (messageIndex <= 0) throw new Error("当前会话没有可保留的上下文。");
-        const branch = await window.codexConsole.branchSession({ targetId, sessionId: session.id, messageIndex });
+        const messageLine = getBranchMessageLine(turn);
+        if (messageLine <= 0) throw new Error("当前会话没有可保留的上下文。");
+        const branch = await window.codexConsole.branchSession({ targetId, sessionId: session.id, messageLine });
         await loadActiveSessions();
         setBranchPanel((current) =>
           current?.sessionId === session.id
@@ -52,11 +52,11 @@ export function createSessionBranchActions({
   return { branchFromTurn };
 }
 
-function getBranchMessageCount(turn: ConversationTurn) {
+function getBranchMessageLine(turn: ConversationTurn) {
   for (let index = turn.replies.length - 1; index >= 0; index -= 1) {
     const entry = turn.replies[index];
-    if (entry.message.role === "assistant") return entry.index + 1;
+    if (entry.message.role === "assistant") return entry.message.sourceLine || 0;
   }
-  if (turn.replies.length > 0) return turn.replies[turn.replies.length - 1].index + 1;
-  return turn.user ? turn.user.index + 1 : 0;
+  if (turn.replies.length > 0) return turn.replies[turn.replies.length - 1].message.sourceLine || 0;
+  return turn.user?.message.sourceLine || 0;
 }

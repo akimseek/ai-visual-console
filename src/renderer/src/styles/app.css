@@ -7170,6 +7170,11 @@ textarea:focus-visible {
   gap: 12px;
 }
 
+.session-detail-latest-anchor {
+  block-size: 1px;
+  scroll-margin-bottom: 18px;
+}
+
 .session-detail-timeline-heading {
   display: flex;
   align-items: baseline;

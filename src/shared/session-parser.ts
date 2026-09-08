@@ -17,7 +17,7 @@ export type SessionLine = {
 
 export function parseSessionContent(filePath: string, content: string): CodexSession | null {
   const parser = createSessionContentParser(filePath);
-  for (const line of content.split(/\r?\n/)) parser.push(line);
+  for (const [index, line] of content.split(/\r?\n/).entries()) parser.push(line, index + 1);
   return parser.finish();
 }
 
@@ -33,7 +33,7 @@ export function createSessionContentParser(filePath: string) {
   let usage: SessionUsage | undefined;
   const messages: CodexMessage[] = [];
 
-  function push(line: string) {
+  function push(line: string, _lineNumber?: number) {
     if (!line) return;
     const item = safeJsonParse<SessionLine>(line);
     if (!item) return;
@@ -158,6 +158,7 @@ export function parseSessionListContent(file: CodexSessionFile, content: string)
     cliVersion,
     filePath: file.filePath,
     fileMtimeMs: file.mtimeMs,
+    fileChangeMs: file.changeMs,
     fileSize: file.size,
     messageCount,
     preview: messages,
