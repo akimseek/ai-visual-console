@@ -1,6 +1,6 @@
 import { lazy, Suspense, type MouseEvent, type RefObject, type WheelEvent } from "react";
 import { PanelLeftClose, PanelLeftOpen } from "lucide-react";
-import type { AiSession } from "../../types";
+import type { AiSession, VendorRouteMode } from "../../types";
 import type { TerminalTab } from "./terminal-tab-state";
 import { TerminalTabs } from "./terminal-tabs";
 
@@ -64,8 +64,8 @@ export function TerminalWorkspace({
   onCloseTab: (tabKey: string) => void;
   focusRequest: number;
   terminalInputStates: Record<string, TerminalInputState>;
-  onTerminalReady: (tabKey: string, terminalId?: string, vendorId?: string) => void;
-  onVendorSwitch: (tabKey: string, vendorId: string, reason: "manual" | "candidate-pool" | "failure") => void;
+  onTerminalReady: (tabKey: string, terminalId?: string, vendorId?: string, mode?: VendorRouteMode) => void;
+  onVendorSwitch: (tabKey: string, vendorId: string, reason: "manual" | "candidate-pool" | "failure", mode: VendorRouteMode) => void;
   onTerminalExit: (tabKey: string, exitCode: number) => void;
   onTerminalInputState: (tabKey: string, state: TerminalInputState) => void;
   systemTerminalOpen: boolean;
@@ -122,8 +122,8 @@ export function TerminalWorkspace({
                 active={tab.key === activeTabKey}
                 focusRequest={focusRequest}
                 requestedInputMode={terminalInputStates[tab.key]?.mode}
-                onReady={(terminalId, vendorId) => onTerminalReady(tab.key, terminalId, vendorId)}
-                onVendorSwitch={(vendorId, reason) => onVendorSwitch(tab.key, vendorId, reason)}
+                onReady={(terminalId, vendorId, mode) => onTerminalReady(tab.key, terminalId, vendorId, mode)}
+                onVendorSwitch={(vendorId, reason, mode) => onVendorSwitch(tab.key, vendorId, reason, mode)}
                 onExit={(exitCode) => onTerminalExit(tab.key, exitCode)}
                 onInputModeChange={(state) => onTerminalInputState(tab.key, state)}
               />

@@ -4,7 +4,7 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import type { AiProviderId, SystemTerminalStartRequest, TerminalStartParams } from "../types";
+import type { AiProviderId, SystemTerminalStartRequest, TerminalStartParams, VendorRouteMode, VendorRouteUpdateResult } from "../types";
 import {
   buildCmdCommand,
   buildPosixShellCommand as buildShellCommand,
@@ -17,7 +17,9 @@ import {
   buildRouteUrl,
   createVendorRoute,
   destroyVendorRoute,
+  getVendorRoute,
   resolveWslGatewayBaseUrl,
+  setVendorRoute,
   switchVendorRoute,
   bindVendorRouteTerminal,
   type VendorRoute
@@ -110,7 +112,7 @@ export async function startTerminalSession(
     if (route) bindVendorRouteTerminal(route.routeId, result.terminalId);
     // CLI 可能在 startTerminalSession 返回前就完成首个请求并触发故障切换；
     // 返回路由当前值，避免渲染层只拿到启动瞬间的旧供应商。
-    return { ...result, vendorId: route?.vendorId || result.vendorId };
+    return { ...result, vendorId: route?.vendorId || result.vendorId, vendorMode: route?.mode };
   } catch (error) {
     if (route) await destroyVendorRoute(route.routeId);
     if (resumeKey) pendingResumeKeys.delete(resumeKey);
@@ -302,6 +304,19 @@ export async function switchTerminalVendor(terminalId: string, providerId: AiPro
   if (!session) return { switched: 0, reason: "terminal-not-found" as const };
   if (!session.vendorRouteId) return { switched: 0, reason: "gateway-not-active" as const };
   return switchVendorRoute(session.vendorRouteId, providerId, vendorId);
+}
+
+export async function setTerminalVendorRoute(
+  terminalId: string,
+  vendorId: string | undefined,
+  mode: VendorRouteMode
+): Promise<VendorRouteUpdateResult> {
+  const session = sessions.get(terminalId);
+  if (!session) return { switched: 0, reason: "terminal-not-found" };
+  if (!session.vendorRouteId) return { switched: 0, reason: "gateway-not-active" };
+  const route = getVendorRoute(session.vendorRouteId);
+  if (!route) return { switched: 0, reason: "route-not-found" };
+  return setVendorRoute(route.routeId, route.providerId, { vendorId, mode });
 }
 
 function queueTerminalOutput(session: TerminalSession, data: string) {

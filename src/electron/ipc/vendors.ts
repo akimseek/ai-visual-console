@@ -15,7 +15,7 @@ import {
   refreshVendorBalances
 } from "../gateway/vendor-balance";
 import { listGatewayVendorHealth } from "../gateway/gateway-resilience";
-import { switchTerminalVendor } from "../terminal/terminal-sessions";
+import { setTerminalVendorRoute, switchTerminalVendor } from "../terminal/terminal-sessions";
 import { invalidateGatewayVendorSnapshot } from "../gateway/vendor-registry";
 import { findTargetForVendor } from "../core/main-helpers";
 import { getProviderIdFromTargetId } from "../../shared/target-ids";
@@ -92,6 +92,12 @@ export function registerVendorIpcHandlers() {
     const vendor = (await listApiVendors()).find((item) => item.id === checkedVendorId);
     if (!vendor) throw new Error("供应商不存在。");
     return switchTerminalVendor(checkedTerminalId, vendor.providerId, vendor.id);
+  });
+  ipcMain.handle("vendor:route-mode", async (_event, terminalId: unknown, vendorId: unknown, mode: unknown) => {
+    const checkedMode = mode === "dynamic" || mode === "locked" ? mode : undefined;
+    if (!checkedMode) throw new Error("供应商路由模式无效。");
+    const checkedVendorId = typeof vendorId === "string" && vendorId.trim() ? vendorId.trim() : undefined;
+    return setTerminalVendorRoute(requireString(terminalId, "terminalId"), checkedVendorId, checkedMode);
   });
   ipcMain.handle("vendor:list-models", async (_event, vendorId: unknown) => {
     return listVendorModels(requireString(vendorId, "vendorId"));

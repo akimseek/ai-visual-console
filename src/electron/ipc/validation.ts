@@ -8,6 +8,7 @@ import type {
   SystemTerminalStartRequest,
   WorkspacePresetInput
 } from "../types";
+import type { GatewayFailoverRuleInput } from "../../shared/types";
 
 const sessionRequestQueue = new Map<string, Promise<unknown>>();
 
@@ -103,6 +104,23 @@ export function requireGatewayCircuitDurationSeconds(value: unknown) {
     throw new Error("熔断持续时间必须是 10 到 86400 秒之间的整数。");
   }
   return value;
+}
+
+export function requireGatewayFailoverRuleInput(value: unknown): GatewayFailoverRuleInput {
+  if (!value || typeof value !== "object") throw new Error("参数无效：gateway failover rule");
+  const input = value as Record<string, unknown>;
+  const scope = input.scope;
+  if (scope !== "global" && scope !== "provider" && scope !== "vendor") throw new Error("Gateway 故障规则作用域无效。");
+  if (input.enabled !== undefined && typeof input.enabled !== "boolean") throw new Error("参数无效：enabled");
+  return {
+    id: typeof input.id === "string" && input.id.trim() ? input.id.trim() : undefined,
+    scope,
+    providerId: input.providerId === undefined ? undefined : requireProviderId(input.providerId),
+    vendorId: typeof input.vendorId === "string" && input.vendorId.trim() ? input.vendorId.trim() : undefined,
+    pattern: requireString(input.pattern, "pattern"),
+    enabled: input.enabled !== false,
+    priority: input.priority === undefined ? undefined : requireNonNegativeInteger(input.priority, "priority")
+  };
 }
 
 export function requireAppCommand(value: unknown): AppCommand {

@@ -19,6 +19,8 @@ import type {
   CompressionPromptInput,
   GatewayFailureDiagnosticsPage,
   GatewayFailureOutcomeFilter,
+  GatewayFailoverRule,
+  GatewayFailoverRuleInput,
   GatewayLogCleanupFilter,
   GatewayLogCleanupPage,
   GatewayLogCleanupResult,
@@ -48,7 +50,9 @@ import type {
   VendorBalanceBatchResult,
   VendorBalanceRefreshResult,
   VendorModel,
+  VendorRouteMode,
   VendorRouteSwitchResult,
+  VendorRouteUpdateResult,
   WorkspacePreset,
   WorkspacePresetInput
 } from "./types";
@@ -73,11 +77,16 @@ export type CodexConsoleApi = {
   enableApiVendor: (request: ApiVendorEnableRequest) => Promise<ApiVendorEnableResult>;
   setApiVendorEnabled: (vendorId: string, enabled: boolean) => Promise<ApiVendorEnabledResult>;
   switchVendorRoute: (terminalId: string, vendorId: string) => Promise<VendorRouteSwitchResult>;
+  setVendorRouteMode: (terminalId: string, vendorId: string | undefined, mode: VendorRouteMode) => Promise<VendorRouteUpdateResult>;
   listVendorModels: (vendorId: string) => Promise<VendorModel[]>;
   refreshVendorBalance: (vendorId: string) => Promise<VendorBalanceRefreshResult>;
   refreshVendorBalances: () => Promise<VendorBalanceBatchResult>;
   getGatewayVendorHealth: () => Promise<GatewayVendorHealth[]>;
   resetGatewayVendorHealth: (vendorId?: string) => Promise<void>;
+  listGatewayFailoverRules: () => Promise<GatewayFailoverRule[]>;
+  saveGatewayFailoverRule: (input: GatewayFailoverRuleInput) => Promise<GatewayFailoverRule>;
+  deleteGatewayFailoverRule: (ruleId: string) => Promise<{ deleted: boolean }>;
+  setGatewayFailoverRuleEnabled: (ruleId: string, enabled: boolean) => Promise<{ ruleId: string; enabled: boolean }>;
   queryGatewayLogs: (filter: GatewayLogCleanupFilter, page?: number, pageSize?: number) => Promise<GatewayLogCleanupPage>;
   deleteGatewayLogEntries: (selections: GatewayLogCleanupSelection[]) => Promise<GatewayLogCleanupResult>;
   getGatewayUsageSummary: (periodStart: string, periodEnd: string) => Promise<GatewayUsageSummary>;

@@ -61,8 +61,15 @@ export type {
   VendorBalanceBatchResult,
   VendorBalanceRefreshResult,
   VendorBalanceSnapshot
+  ,VendorRouteMode
+  ,VendorRouteSwitchResult
+  ,VendorRouteUpdate
+  ,VendorRouteUpdateResult
   ,GatewayVendorHealth
   ,GatewayVendorHealthStatus
+  ,GatewayFailoverRule
+  ,GatewayFailoverRuleInput
+  ,GatewayFailoverRuleScope
   ,GatewayUsage
   ,GatewayUsageSummary
   ,GatewayUsageDimension

@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import type { AiProviderId, AiTarget, ApiVendor } from "../../types";
+import type { AiProviderId, AiTarget, ApiVendor, GatewayFailoverRule, GatewayFailoverRuleInput } from "../../types";
 import { captureError } from "../../hooks/error-utils";
 import {
   buildVendorConfigTemplateFromExisting,
@@ -36,6 +36,8 @@ export function useVendors({
   const [vendorToast, setVendorToast] = useState<VendorToast>(null);
   const [refreshingVendorIds, setRefreshingVendorIds] = useState<string[]>([]);
   const [refreshingAllBalances, setRefreshingAllBalances] = useState(false);
+  const [failoverRules, setFailoverRules] = useState<GatewayFailoverRule[]>([]);
+  const [failoverRulesBusy, setFailoverRulesBusy] = useState(false);
 
   useEffect(() => {
     if (!vendorToast) return;
@@ -49,7 +51,56 @@ export function useVendors({
     setVendorError("");
     setVendorFieldErrors({});
     setVendorMessage("");
-    await loadApiVendors();
+    await Promise.all([loadApiVendors(), loadFailoverRules()]);
+  }
+
+  async function loadFailoverRules() {
+    setFailoverRulesBusy(true);
+    try {
+      setFailoverRules(await window.codexConsole.listGatewayFailoverRules());
+    } catch (error: unknown) {
+      setVendorError(captureError(error, "loadFailoverRules"));
+    } finally {
+      setFailoverRulesBusy(false);
+    }
+  }
+
+  async function saveFailoverRule(input: GatewayFailoverRuleInput) {
+    setFailoverRulesBusy(true);
+    setVendorError("");
+    try {
+      const saved = await window.codexConsole.saveGatewayFailoverRule(input);
+      setFailoverRules((current) => [...current.filter((rule) => rule.id !== saved.id), saved]
+        .sort((left, right) => left.priority - right.priority || left.updatedAt.localeCompare(right.updatedAt)));
+    } catch (error: unknown) {
+      setVendorError(captureError(error, "saveFailoverRule"));
+    } finally {
+      setFailoverRulesBusy(false);
+    }
+  }
+
+  async function deleteFailoverRule(ruleId: string) {
+    setFailoverRulesBusy(true);
+    try {
+      await window.codexConsole.deleteGatewayFailoverRule(ruleId);
+      setFailoverRules((current) => current.filter((rule) => rule.id !== ruleId));
+    } catch (error: unknown) {
+      setVendorError(captureError(error, "deleteFailoverRule"));
+    } finally {
+      setFailoverRulesBusy(false);
+    }
+  }
+
+  async function setFailoverRuleEnabled(ruleId: string, enabled: boolean) {
+    setFailoverRulesBusy(true);
+    try {
+      await window.codexConsole.setGatewayFailoverRuleEnabled(ruleId, enabled);
+      setFailoverRules((current) => current.map((rule) => rule.id === ruleId ? { ...rule, enabled } : rule));
+    } catch (error: unknown) {
+      setVendorError(captureError(error, "setFailoverRuleEnabled"));
+    } finally {
+      setFailoverRulesBusy(false);
+    }
   }
 
   async function loadApiVendors(showBusy = true) {
@@ -237,6 +288,12 @@ export function useVendors({
     refreshVendorBalanceById,
     refreshAllVendorBalances,
     refreshingVendorIds,
-    refreshingAllBalances
+    refreshingAllBalances,
+    failoverRules,
+    failoverRulesBusy,
+    loadFailoverRules,
+    saveFailoverRule,
+    deleteFailoverRule,
+    setFailoverRuleEnabled
   };
 }

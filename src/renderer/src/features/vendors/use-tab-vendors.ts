@@ -1,5 +1,5 @@
 import { useState } from "react";
-import type { AiTarget, ApiVendor } from "../../types";
+import type { AiProviderId, AiTarget, ApiVendor, VendorRouteMode } from "../../types";
 import type { NoticeState } from "../../hooks/use-app-notice";
 
 type SetNotice = (message: string, action?: { label: string; onClick: () => void }, tone?: NoticeState["tone"]) => void;
@@ -19,22 +19,26 @@ export function useTabVendors(options: {
   loadApiVendors: (force: boolean) => Promise<void>;
   setNotice: SetNotice;
   activeTabKey?: string;
+  activeProviderId?: AiProviderId;
   providerId: string;
   selectedTarget: AiTarget | undefined;
 }) {
-  const { vendors, loadApiVendors, setNotice, activeTabKey, providerId, selectedTarget } = options;
+  const { vendors, loadApiVendors, setNotice, activeTabKey, activeProviderId, providerId, selectedTarget } = options;
   const [vendorByTabKey, setVendorByTabKey] = useState<Record<string, string>>({});
+  const [modeByTabKey, setModeByTabKey] = useState<Record<string, VendorRouteMode>>({});
   const [lastSwitchByTabKey, setLastSwitchByTabKey] = useState<Record<string, TabVendorSwitch>>({});
 
   const activeVendorId = activeTabKey ? vendorByTabKey[activeTabKey] : undefined;
+  const activeVendorMode = activeTabKey ? modeByTabKey[activeTabKey] || "dynamic" : "dynamic";
   const activeVendorSwitch = activeTabKey ? lastSwitchByTabKey[activeTabKey] : undefined;
   const activeVendorName = activeVendorId
     ? vendors.find((vendor) => vendor.id === activeVendorId)?.name || ""
-    : vendors.find((vendor) => vendor.providerId === (selectedTarget?.provider || providerId) && vendor.enabled)?.name || "";
+    : vendors.find((vendor) => vendor.providerId === (activeProviderId || selectedTarget?.provider || providerId) && vendor.enabled)?.name || "";
 
-  function bindTabVendor(tabKey: string, vendorId?: string) {
+  function bindTabVendor(tabKey: string, vendorId?: string, mode: VendorRouteMode = "dynamic") {
     if (!vendorId) return;
     setVendorByTabKey((current) => ({ ...current, [tabKey]: vendorId }));
+    setModeByTabKey((current) => ({ ...current, [tabKey]: mode }));
     if (!vendors.some((vendor) => vendor.id === vendorId)) void loadApiVendors(false);
   }
 
@@ -52,10 +56,16 @@ export function useTabVendors(options: {
       delete next[tabKey];
       return next;
     });
+    setModeByTabKey((current) => {
+      if (!(tabKey in current)) return current;
+      const next = { ...current };
+      delete next[tabKey];
+      return next;
+    });
   }
 
-  function handleVendorSwitch(tabKey: string, vendorId: string, reason: VendorSwitchReason) {
-    bindTabVendor(tabKey, vendorId);
+  function handleVendorSwitch(tabKey: string, vendorId: string, reason: VendorSwitchReason, mode: VendorRouteMode = "dynamic") {
+    bindTabVendor(tabKey, vendorId, mode);
     // Gateway 事件不落盘；工作台仅展示当前应用运行期间该标签最近一次实际路由变更。
     setLastSwitchByTabKey((current) => ({
       ...current,
@@ -68,5 +78,9 @@ export function useTabVendors(options: {
       : `已切换供应商${vendor ? `：${vendor.name}` : ""}。`);
   }
 
-  return { activeVendorId, activeVendorName, activeVendorSwitch, bindTabVendor, releaseTabVendor, handleVendorSwitch };
+  function setTabVendorRoute(tabKey: string, vendorId: string, mode: VendorRouteMode) {
+    bindTabVendor(tabKey, vendorId, mode);
+  }
+
+  return { activeVendorId, activeVendorMode, activeVendorName, activeVendorSwitch, bindTabVendor, releaseTabVendor, handleVendorSwitch, setTabVendorRoute };
 }

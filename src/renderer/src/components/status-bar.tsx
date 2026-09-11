@@ -1,6 +1,7 @@
 import type { RefObject } from "react";
-import type { AiSession } from "../types";
+import type { AiSession, ApiVendor, VendorRouteMode } from "../types";
 import { UsageDetailsPopover } from "../features/sessions/usage-details";
+import { VendorRoutePicker } from "./vendor-route-picker";
 
 type StatusText = { label: string; title: string };
 
@@ -10,7 +11,13 @@ export function StatusBar({
   session,
   updatedAt,
   cwd,
+  vendorId,
   vendorName,
+  vendorMode,
+  routeVendors,
+  vendorRouteDisabled,
+  onSelectVendor,
+  onSetVendorMode,
   model,
   tokenUsage,
   contextUsage,
@@ -27,7 +34,13 @@ export function StatusBar({
   session: AiSession | null;
   updatedAt: string;
   cwd: string;
+  vendorId?: string;
   vendorName: string;
+  vendorMode: VendorRouteMode;
+  routeVendors: ApiVendor[];
+  vendorRouteDisabled: boolean;
+  onSelectVendor: (vendorId: string) => Promise<void>;
+  onSetVendorMode: (mode: VendorRouteMode) => Promise<void>;
   model: StatusText;
   tokenUsage: StatusText;
   contextUsage: StatusText;
@@ -58,7 +71,15 @@ export function StatusBar({
         </div>
         <div className="status-item status-item-wide">
           <span>当前供应商</span>
-          <strong title={vendorName}>{vendorName || "-"}</strong>
+          <VendorRoutePicker
+            vendorId={vendorId}
+            vendorName={vendorName}
+            mode={vendorMode}
+            vendors={routeVendors}
+            disabled={vendorRouteDisabled}
+            onSelectVendor={onSelectVendor}
+            onSetMode={onSetVendorMode}
+          />
         </div>
       </div>
       <div className="statusbar-right">

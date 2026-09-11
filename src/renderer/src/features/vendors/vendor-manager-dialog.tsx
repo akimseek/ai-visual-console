@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState } from "react";
 import type { ChangeEvent, PointerEvent, ReactNode } from "react";
-import { Pencil, Plus, RefreshCw, Trash2, X } from "lucide-react";
-import type { AiProviderId, AiTarget, ApiVendor, ApiVendorConfigTemplate, VendorBalanceQueryConfig, VendorModelQueryConfig } from "../../types";
+import { Pencil, Plus, RefreshCw, ShieldAlert, Trash2, X } from "lucide-react";
+import type { AiProviderId, AiTarget, ApiVendor, ApiVendorConfigTemplate, GatewayFailoverRule, GatewayFailoverRuleInput, GatewayFailoverRuleScope, VendorBalanceQueryConfig, VendorModelQueryConfig } from "../../types";
 import { formatDate } from "../../lib/format";
-import { PAGINATION_DEFAULT_PAGE_SIZE } from "../../../../shared/constants";
+import { GATEWAY_FAILOVER_DEFAULT_PATTERNS, PAGINATION_DEFAULT_PAGE_SIZE } from "../../../../shared/constants";
 import { IconButton } from "../../components/icon-button";
 import { Pagination } from "../../components/pagination";
 import {
@@ -44,6 +44,11 @@ export function VendorManagerDialog({
   onRefreshAllBalances,
   refreshingVendorIds,
   refreshingAllBalances,
+  failoverRules,
+  failoverRulesBusy,
+  onSaveFailoverRule,
+  onDeleteFailoverRule,
+  onToggleFailoverRule,
   onBack,
   onClose
 }: {
@@ -68,6 +73,11 @@ export function VendorManagerDialog({
   onRefreshAllBalances: () => void;
   refreshingVendorIds: string[];
   refreshingAllBalances: boolean;
+  failoverRules: GatewayFailoverRule[];
+  failoverRulesBusy: boolean;
+  onSaveFailoverRule: (input: GatewayFailoverRuleInput) => void;
+  onDeleteFailoverRule: (ruleId: string) => void;
+  onToggleFailoverRule: (ruleId: string, enabled: boolean) => void;
   onBack: () => void;
   onClose: () => void;
 }) {
@@ -78,6 +88,13 @@ export function VendorManagerDialog({
   const [modelQueryText, setModelQueryText] = useState("");
   const [balanceQueryText, setBalanceQueryText] = useState("");
   const [queryConfigErrors, setQueryConfigErrors] = useState<{ model?: string; balance?: string }>({});
+  const [ruleScope, setRuleScope] = useState<GatewayFailoverRuleScope>("global");
+  const [ruleProvider, setRuleProvider] = useState<AiProviderId>(target?.provider || "codex");
+  const [ruleVendor, setRuleVendor] = useState("");
+  const [rulePattern, setRulePattern] = useState("");
+  const [rulePriority, setRulePriority] = useState(100);
+  const [ruleTestText, setRuleTestText] = useState("");
+  const [failoverRulesOpen, setFailoverRulesOpen] = useState(false);
   const tableContainerRef = useRef<HTMLDivElement | null>(null);
   const tableRef = useRef<HTMLTableElement | null>(null);
   const resizeRef = useRef<{ index: number; startX: number; startWidths: number[] } | null>(null);
@@ -176,6 +193,30 @@ export function VendorManagerDialog({
     onSave();
   }
 
+  function saveRule() {
+    const pattern = rulePattern.trim();
+    if (!pattern || failoverRulesBusy) return;
+    onSaveFailoverRule({
+      scope: ruleScope,
+      providerId: ruleScope === "global" ? undefined : ruleProvider,
+      vendorId: ruleScope === "vendor" ? ruleVendor || undefined : undefined,
+      pattern,
+      priority: rulePriority
+    });
+    setRulePattern("");
+  }
+
+  const testProvider = ruleScope === "global" ? (target?.provider || "codex") : ruleProvider;
+  const testPatterns = [
+    ...GATEWAY_FAILOVER_DEFAULT_PATTERNS,
+    ...failoverRules
+      .filter((rule) => rule.enabled && (rule.scope === "global"
+        || (rule.scope === "provider" && rule.providerId === testProvider)
+        || (rule.scope === "vendor" && rule.providerId === testProvider && rule.vendorId === ruleVendor)))
+      .map((rule) => rule.pattern)
+  ];
+  const ruleTestMatched = ruleTestText.trim() && testPatterns.some((pattern) => ruleTestText.toLocaleLowerCase().includes(pattern.toLocaleLowerCase()));
+
   function moveColumnResize(event: PointerEvent<HTMLSpanElement>) {
     const resize = resizeRef.current;
     if (!resize) return;
@@ -201,6 +242,7 @@ export function VendorManagerDialog({
   }
 
   return (
+    <>
     <div className="dialog-overlay" role="presentation">
       <section className="vendor-manager-dialog" role="dialog" aria-modal="true" aria-labelledby="vendor-manager-title">
         <header>
@@ -227,6 +269,10 @@ export function VendorManagerDialog({
                 <button type="button" className="ui-button ui-button-primary" onClick={onRefreshAllBalances} disabled={Boolean(busy) || vendors.length === 0}>
                   <RefreshCw aria-hidden="true" size={15} strokeWidth={2} className={refreshingAllBalances ? "is-spinning" : undefined} />
                   刷新全部余额
+                </button>
+                <button type="button" className="ui-button ui-button-primary" onClick={() => setFailoverRulesOpen(true)} disabled={Boolean(busy)}>
+                  <ShieldAlert aria-hidden="true" size={15} strokeWidth={2} />
+                  故障规则
                 </button>
               </div>
             </div>
@@ -527,6 +573,44 @@ export function VendorManagerDialog({
         )}
       </section>
     </div>
+    {failoverRulesOpen && (
+      <div className="dialog-overlay" role="presentation">
+        <section className="gateway-failover-rules-dialog" role="dialog" aria-modal="true" aria-labelledby="gateway-failover-rules-dialog-title">
+          <header>
+            <div>
+              <h2 id="gateway-failover-rules-dialog-title">Gateway 故障规则</h2>
+              <p>维护供应商返回的容量、限流和临时不可用错误识别规则。</p>
+            </div>
+            <IconButton icon={X} label="关闭故障规则" onClick={() => setFailoverRulesOpen(false)} disabled={failoverRulesBusy} />
+          </header>
+          <GatewayFailoverRulesPanel
+            vendors={vendors}
+            rules={failoverRules}
+            busy={failoverRulesBusy}
+            scope={ruleScope}
+            providerId={ruleProvider}
+            vendorId={ruleVendor}
+            pattern={rulePattern}
+            priority={rulePriority}
+            testText={ruleTestText}
+            testMatched={Boolean(ruleTestMatched)}
+            onScopeChange={setRuleScope}
+            onProviderChange={setRuleProvider}
+            onVendorChange={setRuleVendor}
+            onPatternChange={setRulePattern}
+            onPriorityChange={setRulePriority}
+            onTestTextChange={setRuleTestText}
+            onSave={saveRule}
+            onDelete={onDeleteFailoverRule}
+            onToggle={onToggleFailoverRule}
+          />
+          <footer>
+            <button type="button" className="ui-button ui-button-secondary" onClick={() => setFailoverRulesOpen(false)} disabled={failoverRulesBusy}>关闭</button>
+          </footer>
+        </section>
+      </div>
+    )}
+    </>
   );
 }
 
@@ -537,6 +621,133 @@ function parsePriceInput(value: string) {
   const text = `${integer || "0"}.${fraction.slice(0, 2)}`;
   const parsed = Number(text);
   return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+function GatewayFailoverRulesPanel({
+  vendors,
+  rules,
+  busy,
+  scope,
+  providerId,
+  vendorId,
+  pattern,
+  priority,
+  testText,
+  testMatched,
+  onScopeChange,
+  onProviderChange,
+  onVendorChange,
+  onPatternChange,
+  onPriorityChange,
+  onTestTextChange,
+  onSave,
+  onDelete,
+  onToggle
+}: {
+  vendors: ApiVendor[];
+  rules: GatewayFailoverRule[];
+  busy: boolean;
+  scope: GatewayFailoverRuleScope;
+  providerId: AiProviderId;
+  vendorId: string;
+  pattern: string;
+  priority: number;
+  testText: string;
+  testMatched: boolean;
+  onScopeChange: (scope: GatewayFailoverRuleScope) => void;
+  onProviderChange: (providerId: AiProviderId) => void;
+  onVendorChange: (vendorId: string) => void;
+  onPatternChange: (pattern: string) => void;
+  onPriorityChange: (priority: number) => void;
+  onTestTextChange: (text: string) => void;
+  onSave: () => void;
+  onDelete: (ruleId: string) => void;
+  onToggle: (ruleId: string, enabled: boolean) => void;
+}) {
+  return (
+    <section className="vendor-failover-rules" aria-labelledby="vendor-failover-rules-title">
+      <div className="vendor-failover-rules-heading">
+        <div>
+          <strong id="vendor-failover-rules-title">Gateway 故障识别规则</strong>
+          <small>内置规则始终生效；自定义规则用于识别供应商返回的容量、限流和临时不可用提示。</small>
+        </div>
+        <span>{rules.length} 条自定义规则</span>
+      </div>
+      <div className="vendor-failover-defaults">
+        <span>内置规则</span>
+        {GATEWAY_FAILOVER_DEFAULT_PATTERNS.map((item) => <code key={item}>{item}</code>)}
+      </div>
+      {rules.length > 0 && (
+        <div className="vendor-failover-rule-list">
+          {rules.map((rule) => (
+            <div className={`vendor-failover-rule-row${rule.enabled ? "" : " disabled"}`} key={rule.id}>
+              <button
+                type="button"
+                className={`vendor-candidate-toggle${rule.enabled ? " active" : ""}`}
+                role="switch"
+                aria-checked={rule.enabled}
+                aria-label={`${rule.pattern}${rule.enabled ? "已启用" : "已停用"}`}
+                onClick={() => onToggle(rule.id, !rule.enabled)}
+                disabled={busy}
+              ><span /></button>
+              <code title={rule.pattern}>{rule.pattern}</code>
+              <span>{formatRuleScope(rule, vendors)}</span>
+              <span>优先级 {rule.priority}</span>
+              <IconButton icon={Trash2} label={`删除规则 ${rule.pattern}`} onClick={() => onDelete(rule.id)} disabled={busy} />
+            </div>
+          ))}
+        </div>
+      )}
+      <div className="vendor-failover-rule-editor">
+        <label>
+          <span>作用域</span>
+          <select value={scope} onChange={(event) => onScopeChange(event.target.value as GatewayFailoverRuleScope)}>
+            <option value="global">全局</option>
+            <option value="provider">指定 Provider</option>
+            <option value="vendor">指定供应商</option>
+          </select>
+        </label>
+        {scope !== "global" && <label>
+          <span>Provider</span>
+          <select value={providerId} onChange={(event) => onProviderChange(event.target.value as AiProviderId)}>
+            {(["codex", "claude", "gemini", "qoder"] as AiProviderId[]).map((item) => <option key={item} value={item}>{providerLabel(item)}</option>)}
+          </select>
+        </label>}
+        {scope === "vendor" && <label>
+          <span>供应商</span>
+          <select value={vendorId} onChange={(event) => onVendorChange(event.target.value)}>
+            <option value="">请选择供应商</option>
+            {vendors.filter((vendor) => vendor.providerId === providerId).map((vendor) => <option key={vendor.id} value={vendor.id}>{vendor.name}</option>)}
+          </select>
+        </label>}
+        <label className="vendor-failover-pattern-field">
+          <span>匹配文本</span>
+          <input value={pattern} maxLength={200} placeholder="例如：quota exhausted" onChange={(event) => onPatternChange(event.target.value)} />
+        </label>
+        <label>
+          <span>优先级</span>
+          <input type="number" min={0} max={1000} step={1} value={priority} onChange={(event) => onPriorityChange(Math.max(0, Math.min(1000, Number(event.target.value) || 0)))} />
+        </label>
+        <button type="button" className="ui-button ui-button-secondary" onClick={onSave} disabled={busy || !pattern.trim() || (scope === "vendor" && !vendorId)}>
+          <Plus aria-hidden="true" size={14} />
+          添加规则
+        </button>
+      </div>
+      <div className="vendor-failover-rule-test">
+        <label>
+          <span>规则预览</span>
+          <input value={testText} placeholder="粘贴一段供应商错误文本进行测试" onChange={(event) => onTestTextChange(event.target.value)} />
+        </label>
+        {testText.trim() && <small className={testMatched ? "matched" : "not-matched"}>{testMatched ? "将触发故障切换" : "不会触发故障切换"}</small>}
+      </div>
+    </section>
+  );
+}
+
+function formatRuleScope(rule: GatewayFailoverRule, vendors: ApiVendor[]) {
+  if (rule.scope === "global") return "全局";
+  if (rule.scope === "provider") return providerLabel(rule.providerId!);
+  return vendors.find((vendor) => vendor.id === rule.vendorId)?.name || "已删除供应商";
 }
 
 function parseSortInput(value: string) {

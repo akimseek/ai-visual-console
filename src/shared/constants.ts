@@ -18,6 +18,22 @@ export const GATEWAY_REQUEST_LIMITS = {
   upstreamTimeoutMs: 10 * 60 * 1000
 } as const;
 
+export const GATEWAY_FAILOVER_DEFAULT_PATTERNS = [
+  "selected model is at capacity",
+  "exceeded retry limit",
+  "429 too many requests",
+  "too many requests",
+  "currently overloaded",
+  "rate limit",
+  "temporarily unavailable"
+] as const;
+
+export const GATEWAY_FAILOVER_RULE_LIMITS = {
+  maxPatternLength: 200,
+  maxRuleCount: 100,
+  maxPriority: 1000
+} as const;
+
 export const GATEWAY_ERROR_MESSAGES = {
   routeNotFound: "gateway route not found",
   unauthorized: "gateway unauthorized",

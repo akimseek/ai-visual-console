@@ -9,7 +9,10 @@ import type {
   ApiVendorInput,
   VendorBalanceBatchResult,
   VendorBalanceRefreshResult,
-  VendorModel
+  VendorModel,
+  VendorRouteMode,
+  VendorRouteSwitchResult,
+  VendorRouteUpdateResult
 } from "../types";
 import { invoke } from "./ipc-bridge";
 
@@ -26,10 +29,9 @@ export function createVendorApi(ipc: IpcRenderer) {
     setApiVendorEnabled: (vendorId: string, enabled: boolean) =>
       invoke<ApiVendorEnabledResult>(ipc, "vendor:set-enabled", vendorId, enabled),
     switchVendorRoute: (terminalId: string, vendorId: string) =>
-      invoke<{
-        switched: number;
-        reason?: "terminal-not-found" | "gateway-not-active" | "route-not-found" | "provider-mismatch" | "vendor-not-found" | "vendor-disabled";
-      }>(ipc, "vendor:route-switch", terminalId, vendorId),
+      invoke<VendorRouteSwitchResult>(ipc, "vendor:route-switch", terminalId, vendorId),
+    setVendorRouteMode: (terminalId: string, vendorId: string | undefined, mode: VendorRouteMode) =>
+      invoke<VendorRouteUpdateResult>(ipc, "vendor:route-mode", terminalId, vendorId, mode),
     listVendorModels: (vendorId: string) => invoke<VendorModel[]>(ipc, "vendor:list-models", vendorId),
     refreshVendorBalance: (vendorId: string) =>
       invoke<VendorBalanceRefreshResult>(ipc, "vendor:refresh-balance", vendorId),

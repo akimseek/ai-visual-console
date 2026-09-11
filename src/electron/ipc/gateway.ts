@@ -14,11 +14,20 @@ import {
   requireGatewayCircuitDurationSeconds,
   requireGatewayCircuitFailureThreshold,
   requireGatewayFailureThreshold,
-  requireGatewayPort
+  requireGatewayPort,
+  requireGatewayFailoverRuleInput,
+  requireString,
+  requireBoolean
 } from "./validation";
 import { deleteGatewayRequestEntries, getGatewayFailureDiagnosticsPage, getGatewayRequestCleanupEntries, getGatewayUsageReport, getGatewayUsageSummary, getRecentGatewayFailures } from "../gateway/gateway-request-store";
 import { deleteGatewayFileEntries, getGatewayFileCleanupEntries } from "../gateway/gateway-log";
 import { listGatewayVendorHealth, resetGatewayVendorHealth } from "../gateway/gateway-resilience";
+import {
+  deleteGatewayFailoverRule,
+  listGatewayFailoverRules,
+  saveGatewayFailoverRule,
+  setGatewayFailoverRuleEnabled
+} from "../gateway/gateway-failover-rules";
 
 export function registerGatewayIpcHandlers() {
   ipcMain.handle("gateway:get-port", async () => ({
@@ -58,6 +67,13 @@ export function registerGatewayIpcHandlers() {
   ipcMain.handle("gateway:get-vendor-health", () => listGatewayVendorHealth());
   ipcMain.handle("gateway:reset-vendor-health", (_event, vendorId: unknown) =>
     resetGatewayVendorHealth(typeof vendorId === "string" && vendorId.trim() ? vendorId.trim() : undefined));
+  ipcMain.handle("gateway:list-failover-rules", () => listGatewayFailoverRules());
+  ipcMain.handle("gateway:save-failover-rule", (_event, input: unknown) =>
+    saveGatewayFailoverRule(requireGatewayFailoverRuleInput(input)));
+  ipcMain.handle("gateway:delete-failover-rule", (_event, ruleId: unknown) =>
+    deleteGatewayFailoverRule(requireString(ruleId, "ruleId")));
+  ipcMain.handle("gateway:set-failover-rule-enabled", (_event, ruleId: unknown, enabled: unknown) =>
+    setGatewayFailoverRuleEnabled(requireString(ruleId, "ruleId"), requireBoolean(enabled, "enabled")));
   /* legacy conditional cleanup handler removed; deletion is ID-scoped below. */
   /* ipcMain.handle("gateway:clear-logs", async (_event, filter: unknown) => {
     if (!filter || typeof filter !== "object") throw new Error("Gateway 日志清理条件无效。");

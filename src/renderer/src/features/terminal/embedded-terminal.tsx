@@ -9,6 +9,7 @@ import { useXtermHost, type XtermKeyHandler } from "./use-xterm-host";
 import { ComposerInput, type ComposerAttachment, type ComposerSubmitPayload } from "./composer-input";
 import { TerminalTextContextMenu } from "./terminal-text-context-menu";
 import { getProviderIdFromTargetId } from "../../../../shared/target-ids";
+import type { VendorRouteMode } from "../../types";
 
 type EmbeddedTerminalProps = {
   targetId: string;
@@ -22,8 +23,8 @@ type EmbeddedTerminalProps = {
   active: boolean;
   focusRequest?: number;
   requestedInputMode?: "composer" | "terminal";
-  onReady?: (terminalId?: string, vendorId?: string) => void;
-  onVendorSwitch?: (vendorId: string, reason: "manual" | "candidate-pool" | "failure") => void;
+  onReady?: (terminalId?: string, vendorId?: string, mode?: VendorRouteMode) => void;
+  onVendorSwitch?: (vendorId: string, reason: "manual" | "candidate-pool" | "failure", mode: VendorRouteMode) => void;
   onExit?: (exitCode: number) => void;
   onInputModeChange?: (state: { mode: "composer" | "terminal"; composerVisible: boolean }) => void;
 };
@@ -61,7 +62,7 @@ export function EmbeddedTerminal({
   const terminalIdRef = useRef("");
   // 网关可能在 PTY 启动回调返回前就完成首个请求并切换供应商，先暂存事件，
   // 待 terminalIdRef 建立后再提交给父组件更新状态栏。
-  const pendingVendorSwitchRef = useRef<{ vendorId: string; reason: "manual" | "candidate-pool" | "failure" } | null>(null);
+  const pendingVendorSwitchRef = useRef<{ vendorId: string; reason: "manual" | "candidate-pool" | "failure"; mode: VendorRouteMode } | null>(null);
   const inputModeRef = useRef<"composer" | "terminal">(initialInputMode);
   const composerVisibleRef = useRef(!sessionId);
   const composerSubmittedRef = useRef(false);
@@ -412,11 +413,11 @@ export function EmbeddedTerminal({
       if (!event.vendorId) return;
       // 只有旧版/极早期事件没有 terminalId 时才暂存；带 terminalId 的事件属于其他终端时必须继续过滤。
       if (!terminalIdRef.current && !event.terminalId) {
-        pendingVendorSwitchRef.current = { vendorId: event.vendorId, reason: event.reason };
+        pendingVendorSwitchRef.current = { vendorId: event.vendorId, reason: event.reason, mode: event.mode };
         return;
       }
       if (event.terminalId !== terminalIdRef.current) return;
-      onVendorSwitchRef.current?.(event.vendorId, event.reason);
+      onVendorSwitchRef.current?.(event.vendorId, event.reason, event.mode);
     });
 
     void window.codexConsole
@@ -430,7 +431,7 @@ export function EmbeddedTerminal({
         cols: xterm.terminalRef.current!.cols,
         rows: xterm.terminalRef.current!.rows
       })
-      .then(({ terminalId, vendorId }) => {
+      .then(({ terminalId, vendorId, vendorMode }) => {
         if (disposed || xterm.disposeRef.current.disposed) {
           void window.codexConsole.stopTerminal(terminalId);
           return;
@@ -439,9 +440,9 @@ export function EmbeddedTerminal({
         setStatus("Codex 运行中");
         const pendingVendorSwitch = pendingVendorSwitchRef.current;
         pendingVendorSwitchRef.current = null;
-        onReadyRef.current?.(terminalId, pendingVendorSwitch?.vendorId || vendorId);
+        onReadyRef.current?.(terminalId, pendingVendorSwitch?.vendorId || vendorId, pendingVendorSwitch?.mode || vendorMode);
         if (pendingVendorSwitch && pendingVendorSwitch.vendorId !== vendorId) {
-          onVendorSwitchRef.current?.(pendingVendorSwitch.vendorId, pendingVendorSwitch.reason);
+          onVendorSwitchRef.current?.(pendingVendorSwitch.vendorId, pendingVendorSwitch.reason, pendingVendorSwitch.mode);
         }
         if (prompt?.trim() && !sessionId) {
           void window.codexConsole.writeTerminal(terminalId, `${prompt.trim()}\r`);

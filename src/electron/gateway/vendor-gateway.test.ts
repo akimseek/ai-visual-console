@@ -8,6 +8,7 @@ import {
   createVendorRoute,
   destroyVendorRoute,
   extractGatewayResponseError,
+  setVendorRoute,
   stopVendorGateway,
   switchVendorRoute
 } from "./vendor-gateway";
@@ -77,7 +78,73 @@ describe("vendor gateway", () => {
   it("从 JSON 或 SSE 错误响应提取受限的具体错误信息", () => {
     expect(extractGatewayResponseError('{"error":{"message":"模型不存在"}}')).toBe("模型不存在");
     expect(extractGatewayResponseError('data: {"error":{"message":"请求被限流"}}\n\ndata: [DONE]\n\n')).toBe("请求被限流");
+    expect(extractGatewayResponseError("Selected model is at capacity. Please try a different model.")).toContain("Selected model is at capacity");
+    expect(extractGatewayResponseError("exceeded retry limit, last status: 429 Too Many Requests")).toContain("exceeded retry limit");
     expect(extractGatewayResponseError('{"data":"private response"}')).toBeUndefined();
+    expect(extractGatewayResponseError('{"output_text":"The phrase rate limit is part of the answer."}')).toBeUndefined();
+  });
+
+  it("HTTP 200 携带容量或 429 错误时切换到下一个供应商", async () => {
+    const authorizations: string[] = [];
+    const upstream = createServer((request, response) => {
+      const authorization = request.headers.authorization || "";
+      authorizations.push(authorization);
+      response.writeHead(200, { "content-type": "application/json" });
+      if (authorization === "Bearer key-one") {
+        response.end(JSON.stringify({ error: { message: "Selected model is at capacity. Please try a different model." } }));
+      } else {
+        response.end(JSON.stringify({ id: "ok", output: [] }));
+      }
+    });
+    servers.push(upstream);
+    await new Promise<void>((resolve) => upstream.listen(0, "127.0.0.1", () => resolve()));
+    const address = upstream.address();
+    if (!address || typeof address === "string") throw new Error("upstream did not start");
+    const apiBaseUrl = `http://127.0.0.1:${address.port}/v1`;
+    listApiVendorsMock.mockResolvedValue([
+      vendor("capacity", "key-one", apiBaseUrl, true),
+      vendor("healthy", "key-two", apiBaseUrl, true)
+    ]);
+
+    const route = await createVendorRoute("codex");
+    if (!route) throw new Error("route was not created");
+    const response = await fetch(`${route.baseUrl}/v1/responses`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${route.localToken}`, "content-type": "application/json" },
+      body: '{"model":"gpt-test","input":"retry"}'
+    });
+    expect(response.status).toBe(200);
+    expect(await response.text()).toContain('"id":"ok"');
+    expect(authorizations).toEqual(["Bearer key-one", "Bearer key-two"]);
+  });
+
+  it("HTTP 200 普通 JSON 内容包含限流短语时不应误切换", async () => {
+    const authorizations: string[] = [];
+    const upstream = createServer((request, response) => {
+      authorizations.push(request.headers.authorization || "");
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify({ output_text: "The phrase rate limit is part of the answer." }));
+    });
+    servers.push(upstream);
+    await new Promise<void>((resolve) => upstream.listen(0, "127.0.0.1", () => resolve()));
+    const address = upstream.address();
+    if (!address || typeof address === "string") throw new Error("upstream did not start");
+    const apiBaseUrl = `http://127.0.0.1:${address.port}/v1`;
+    listApiVendorsMock.mockResolvedValue([
+      vendor("normal-one", "key-one", apiBaseUrl, true),
+      vendor("normal-two", "key-two", apiBaseUrl, true)
+    ]);
+
+    const route = await createVendorRoute("codex");
+    if (!route) throw new Error("route was not created");
+    const response = await fetch(`${route.baseUrl}/v1/responses`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${route.localToken}`, "content-type": "application/json" },
+      body: '{"model":"gpt-test","input":"normal"}'
+    });
+    expect(response.status).toBe(200);
+    expect(await response.text()).toContain("rate limit is part");
+    expect(authorizations).toEqual(["Bearer key-one"]);
   });
 
   it("按 route token 转发并在切换后使用新供应商", async () => {
@@ -267,6 +334,57 @@ describe("vendor gateway", () => {
     const result = await switchVendorRoute(route.routeId, "codex", second.id);
     expect(result).toEqual({ switched: 0, reason: "vendor-disabled" });
     expect(route.vendorId).toBe(first.id);
+  });
+
+  it("锁定供应商后仅在同一供应商上重试，不故障转移到候选池", async () => {
+    const authorizations: string[] = [];
+    const upstream = createServer((request, response) => {
+      authorizations.push(request.headers.authorization || "");
+      response.writeHead(500, { "content-type": "application/json" });
+      response.end('{"error":"down"}');
+    });
+    servers.push(upstream);
+    await new Promise<void>((resolve) => upstream.listen(0, "127.0.0.1", () => resolve()));
+    const address = upstream.address();
+    if (!address || typeof address === "string") throw new Error("upstream did not start");
+    const apiBaseUrl = `http://127.0.0.1:${address.port}/v1`;
+    listApiVendorsMock.mockResolvedValue([
+      vendor("locked", "key-one", apiBaseUrl, true),
+      vendor("candidate", "key-two", apiBaseUrl, true)
+    ]);
+
+    const route = await createVendorRoute("codex");
+    if (!route) throw new Error("route was not created");
+    expect(await setVendorRoute(route.routeId, "codex", { mode: "locked" })).toEqual({
+      switched: 1,
+      vendorId: "locked",
+      mode: "locked"
+    });
+
+    const response = await fetch(`${route.baseUrl}/v1/responses`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${route.localToken}`, "content-type": "application/json" },
+      body: '{"prompt":"retry"}'
+    });
+    expect(response.status).toBe(500);
+    await response.text();
+    expect(authorizations.length).toBeGreaterThan(0);
+    expect(authorizations.every((authorization) => authorization === "Bearer key-one")).toBe(true);
+  });
+
+  it("锁定供应商拒绝已关闭的候选项", async () => {
+    const first = vendor("first", "key-one", "https://example.com/v1", true);
+    const second = vendor("second", "key-two", "https://example.com/v1", false);
+    listApiVendorsMock.mockResolvedValue([first, second]);
+    const route = await createVendorRoute("codex");
+    if (!route) throw new Error("route was not created");
+
+    expect(await setVendorRoute(route.routeId, "codex", { vendorId: second.id, mode: "locked" })).toEqual({
+      switched: 0,
+      reason: "vendor-disabled"
+    });
+    expect(route.vendorId).toBe(first.id);
+    expect(route.mode).toBe("dynamic");
   });
 
   it("拒绝错误 route token", async () => {

@@ -2,6 +2,8 @@ import type { IpcRenderer } from "electron";
 import type {
   GatewayFailureDiagnosticsPage,
   GatewayFailureOutcomeFilter,
+  GatewayFailoverRule,
+  GatewayFailoverRuleInput,
   GatewayLogCleanupFilter,
   GatewayLogCleanupPage,
   GatewayLogCleanupResult,
@@ -37,6 +39,13 @@ export function createGatewayApi(ipc: IpcRenderer) {
     getGatewayVendorHealth: () => invoke<GatewayVendorHealth[]>(ipc, "gateway:get-vendor-health"),
     resetGatewayVendorHealth: (vendorId?: string) =>
       invoke<void>(ipc, "gateway:reset-vendor-health", vendorId),
+    listGatewayFailoverRules: () => invoke<GatewayFailoverRule[]>(ipc, "gateway:list-failover-rules"),
+    saveGatewayFailoverRule: (input: GatewayFailoverRuleInput) =>
+      invoke<GatewayFailoverRule>(ipc, "gateway:save-failover-rule", input),
+    deleteGatewayFailoverRule: (ruleId: string) =>
+      invoke<{ deleted: boolean }>(ipc, "gateway:delete-failover-rule", ruleId),
+    setGatewayFailoverRuleEnabled: (ruleId: string, enabled: boolean) =>
+      invoke<{ ruleId: string; enabled: boolean }>(ipc, "gateway:set-failover-rule-enabled", ruleId, enabled),
     queryGatewayLogs: (filter: GatewayLogCleanupFilter, page?: number, pageSize?: number) =>
       invoke<GatewayLogCleanupPage>(ipc, "gateway:query-logs", filter, page, pageSize),
     deleteGatewayLogEntries: (selections: GatewayLogCleanupSelection[]) =>

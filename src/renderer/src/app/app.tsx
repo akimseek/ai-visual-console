@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import type {
   AiSession,
-  SessionExportFormat
+  SessionExportFormat,
+  VendorRouteMode
 } from "../types";
 import { formatDate } from "../lib/format";
 import {
@@ -66,6 +67,19 @@ import type { GlobalSessionSearchResult } from "../features/sessions/global-sess
 import { useSessionQuickAccess } from "../features/sessions/use-session-quick-access";
 import { SessionQuickAccessPanel } from "../features/sessions/session-quick-access-panel";
 import type { SessionQuickAccessItem } from "../types";
+
+function resolveVendorRouteError(reason?: string) {
+  const messages: Record<string, string> = {
+    "terminal-not-found": "当前终端已关闭，请重新打开会话后再试。",
+    "gateway-not-active": "当前终端未启用供应商网关。",
+    "route-not-found": "当前终端的供应商路由已失效，请重新打开会话。",
+    "provider-mismatch": "所选供应商与当前终端平台不匹配。",
+    "vendor-not-found": "所选供应商不存在或已被删除。",
+    "vendor-disabled": "所选供应商未启用或缺少完整的 API 配置。"
+  };
+  return reason ? messages[reason] || "更新供应商路由失败。" : "更新供应商路由失败。";
+}
+
 export function App() {
   const workspaceRef = useRef<HTMLElement | null>(null);
   const [error, setError] = useState("");
@@ -241,7 +255,12 @@ export function App() {
     refreshVendorBalanceById,
     refreshAllVendorBalances,
     refreshingVendorIds,
-    refreshingAllBalances
+    refreshingAllBalances,
+    failoverRules,
+    failoverRulesBusy,
+    saveFailoverRule,
+    deleteFailoverRule,
+    setFailoverRuleEnabled
   } = useVendors({
     selectedTarget,
     targetId,
@@ -254,11 +273,21 @@ export function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [targetId]);
   // 已有终端路由时只展示该路由的供应商；找不到名称也显示占位符，不能回退到候选池首项造成误导。
-  const { activeVendorId, activeVendorName, activeVendorSwitch, bindTabVendor, releaseTabVendor, handleVendorSwitch } = useTabVendors({
+  const {
+    activeVendorId,
+    activeVendorMode,
+    activeVendorName,
+    activeVendorSwitch,
+    bindTabVendor,
+    releaseTabVendor,
+    handleVendorSwitch,
+    setTabVendorRoute
+  } = useTabVendors({
     vendors,
     loadApiVendors,
     setNotice,
     activeTabKey: activeTab?.key,
+    activeProviderId: activeTab?.target.provider,
     providerId,
     selectedTarget
   });
@@ -292,6 +321,12 @@ export function App() {
     setDetailDialogSession,
     setBranchPanel
   });
+  const activeTerminalId = activeTab ? terminalIdsByTabKey[activeTab.key] : undefined;
+  const activeRouteProviderId = activeTab?.target.provider;
+  const routeVendors = activeRouteProviderId
+    ? vendors.filter((vendor) => vendor.providerId === activeRouteProviderId && vendor.enabled && vendor.apiKey.trim() && vendor.apiBaseUrl.trim())
+    : [];
+  const vendorRouteDisabled = !activeTerminalId || !activeVendorId || activeRouteProviderId === "qoder" || routeVendors.length === 0;
   const { finalizeNewSession } = useNewSessionFinalizer({
     listAndCacheSessions: async (nextTargetId) => {
       const items = await window.codexConsole.listSessions(nextTargetId);
@@ -655,11 +690,45 @@ export function App() {
     setTerminalInputState(tabKey, state);
   }
 
-  function handleTerminalReady(tabKey: string, terminalId?: string, vendorId?: string) {
+  function handleTerminalReady(tabKey: string, terminalId?: string, vendorId?: string, mode?: VendorRouteMode) {
     registerTerminalReady(tabKey, terminalId);
-    bindTabVendor(tabKey, vendorId);
+    bindTabVendor(tabKey, vendorId, mode);
     const tab = openTabs.find((item) => item.key === tabKey);
     if (tab?.customTitle) void finalizeNewSession(tab);
+  }
+
+  function handleTerminalVendorSwitch(
+    tabKey: string,
+    vendorId: string,
+    reason: "manual" | "candidate-pool" | "failure",
+    mode: VendorRouteMode
+  ) {
+    handleVendorSwitch(tabKey, vendorId, reason, mode);
+  }
+
+  async function updateActiveVendorRoute(vendorId: string | undefined, mode: VendorRouteMode, noticeType: "vendor" | "mode") {
+    if (!activeTab || !activeTerminalId) {
+      setNotice("当前终端尚未建立供应商路由。", undefined, "error");
+      return;
+    }
+    try {
+      const result = await window.codexConsole.setVendorRouteMode(activeTerminalId, vendorId, mode);
+      if (!result.switched || !result.vendorId || !result.mode) {
+        setNotice(resolveVendorRouteError(result.reason), undefined, "error");
+        return;
+      }
+      setTabVendorRoute(activeTab.key, result.vendorId, result.mode);
+      const vendor = vendors.find((item) => item.id === result.vendorId);
+      if (noticeType === "vendor") {
+        setNotice(`已切换供应商：${vendor?.name || "当前供应商"}。`);
+        return;
+      }
+      setNotice(result.mode === "locked"
+        ? `已锁定供应商：${vendor?.name || "当前供应商"}。`
+        : "已启用动态供应商切换。");
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "更新供应商路由失败。", undefined, "error");
+    }
   }
 
   function handleTerminalExit(tabKey: string, exitCode: number) {
@@ -869,7 +938,7 @@ export function App() {
             focusRequest={workspaceFocusRequest}
             terminalInputStates={terminalInputStatesByTabKey}
             onTerminalReady={handleTerminalReady}
-            onVendorSwitch={handleVendorSwitch}
+            onVendorSwitch={handleTerminalVendorSwitch}
             onTerminalExit={handleTerminalExit}
             onTerminalInputState={handleTerminalInputState}
             systemTerminalOpen={systemTerminalOpen}
@@ -924,7 +993,13 @@ export function App() {
         session={statusSession}
         updatedAt={statusUpdatedAt}
         cwd={statusCwd}
+        vendorId={activeVendorId}
         vendorName={activeVendorName}
+        vendorMode={activeVendorMode}
+        routeVendors={routeVendors}
+        vendorRouteDisabled={vendorRouteDisabled}
+        onSelectVendor={(vendorId) => updateActiveVendorRoute(vendorId, activeVendorMode, "vendor")}
+        onSetVendorMode={(mode) => updateActiveVendorRoute(undefined, mode, "mode")}
         model={statusModel}
         tokenUsage={statusTokenUsage}
         contextUsage={statusContextUsage}
@@ -1004,6 +1079,11 @@ export function App() {
         onRefreshAllBalances={() => void refreshAllVendorBalances()}
         refreshingVendorIds={refreshingVendorIds}
         refreshingAllBalances={refreshingAllBalances}
+        failoverRules={failoverRules}
+        failoverRulesBusy={failoverRulesBusy}
+        onSaveFailoverRule={(input) => void saveFailoverRule(input)}
+        onDeleteFailoverRule={(ruleId) => void deleteFailoverRule(ruleId)}
+        onToggleFailoverRule={(ruleId, enabled) => void setFailoverRuleEnabled(ruleId, enabled)}
         onBack={() => setVendorManagerMode("list")}
         onClose={() => setVendorManagerOpen(false)}
       />

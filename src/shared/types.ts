@@ -186,6 +186,30 @@ export type ApiVendor = {
   gatewayHealth?: GatewayVendorHealth;
 };
 
+export type GatewayFailoverRuleScope = "global" | "provider" | "vendor";
+
+export type GatewayFailoverRule = {
+  id: string;
+  scope: GatewayFailoverRuleScope;
+  providerId?: AiProviderId;
+  vendorId?: string;
+  pattern: string;
+  enabled: boolean;
+  priority: number;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type GatewayFailoverRuleInput = {
+  id?: string;
+  scope: GatewayFailoverRuleScope;
+  providerId?: AiProviderId;
+  vendorId?: string;
+  pattern: string;
+  enabled?: boolean;
+  priority?: number;
+};
+
 export type VendorBalanceProtocol = "generic" | "new-api";
 
 export type VendorBalanceStatus = "idle" | "loading" | "success" | "error";
@@ -393,8 +417,21 @@ export type ApiVendorEnableResult = {
 };
 
 export type VendorRouteSwitchResult = {
-  switched: number;
+  switched: 0 | 1;
   reason?: "terminal-not-found" | "gateway-not-active" | "route-not-found" | "provider-mismatch" | "vendor-not-found" | "vendor-disabled";
+};
+
+// Gateway 路由只属于当前终端标签。动态模式允许故障转移，锁定模式始终请求指定供应商。
+export type VendorRouteMode = "dynamic" | "locked";
+
+export type VendorRouteUpdate = {
+  vendorId?: string;
+  mode: VendorRouteMode;
+};
+
+export type VendorRouteUpdateResult = VendorRouteSwitchResult & {
+  vendorId?: string;
+  mode?: VendorRouteMode;
 };
 
 export type CompressionPrompt = {
@@ -546,12 +583,14 @@ export type TerminalStartRequest = TerminalStartParams & {
 export type TerminalStartResult = {
   terminalId: string;
   vendorId?: string;
+  vendorMode?: VendorRouteMode;
 };
 
 export type GatewayVendorSwitchEvent = {
   terminalId: string;
   vendorId: string;
   reason: "manual" | "candidate-pool" | "failure";
+  mode: VendorRouteMode;
 };
 
 /** Gateway 请求完成并写入本地日志后通知工作台刷新统计。 */
