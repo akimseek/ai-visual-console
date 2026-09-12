@@ -1,4 +1,4 @@
-import type { AiSession, AiTarget } from "../../types";
+import type { AiSession, AiTarget, TerminalAttentionKind, TerminalStatus, TerminalStatusEvent } from "../../types";
 
 export type TerminalTab = {
   key: string;
@@ -18,6 +18,32 @@ export type TerminalTab = {
   knownSessionIds?: string[];
   createdAt?: number;
 };
+
+export type TerminalTabAttention = {
+  status: TerminalStatus;
+  turnId?: number;
+  kind?: TerminalAttentionKind;
+  title?: string;
+  detail?: string;
+  unread: boolean;
+  updatedAt: number;
+};
+
+export function applyTerminalStatus(current: TerminalTabAttention | undefined, event: TerminalStatusEvent): TerminalTabAttention {
+  if (event.status === "running") {
+    return { status: "running", unread: false, updatedAt: event.updatedAt };
+  }
+  const previous = current?.status === event.status && current?.title === event.attention?.title && current?.detail === event.attention?.detail;
+  return {
+    status: event.status,
+    turnId: event.turnId,
+    kind: event.attention?.kind,
+    title: event.attention?.title,
+    detail: event.attention?.detail,
+    unread: previous ? current?.unread ?? true : true,
+    updatedAt: event.updatedAt
+  };
+}
 
 // 终端运行状态只服务于渲染层展示，不参与 PTY 启动、停止或会话文件写入。
 export function upsertTerminalTab(tabs: TerminalTab[], tab: TerminalTab) {

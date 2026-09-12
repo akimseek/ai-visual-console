@@ -1,4 +1,5 @@
 import type { LucideIcon } from "lucide-react";
+import type { ReactNode } from "react";
 
 // 应用内自绘菜单栏：鼠标移入展开下拉，支持二级子菜单。从 App.tsx 抽出为独立组件。
 
@@ -22,11 +23,13 @@ export type AppMenuDefinition = {
 export function AppMenuBar({
   menus,
   openMenu,
-  onOpenMenu
+  onOpenMenu,
+  trailing
 }: {
   menus: AppMenuDefinition[];
   openMenu: string;
   onOpenMenu: (menuId: string) => void;
+  trailing?: ReactNode;
 }) {
   const renderItemLabel = (item: AppMenuItem) => {
     const Icon = item.icon;
@@ -108,6 +111,7 @@ export function AppMenuBar({
         );
       })}
       </div>
+      {trailing && <div className="app-menu-actions">{trailing}</div>}
     </nav>
   );
 }

@@ -1,5 +1,6 @@
 import type { MouseEvent, RefObject, WheelEvent } from "react";
-import { X } from "lucide-react";
+import { CheckCircle2, CircleAlert, Clock3, X } from "lucide-react";
+import type { TerminalTabAttention } from "./terminal-tab-state";
 
 type TerminalTabInfo = { key: string; title: string; session?: { id: string } | null };
 
@@ -7,6 +8,7 @@ type TerminalTabInfo = { key: string; title: string; session?: { id: string } | 
 // 从 App.tsx 的内联 JSX 抽出为展示组件。
 export function TerminalTabs({
   tabs,
+  attentionByTabKey,
   activeTabKey,
   tabsRef,
   onWheel,
@@ -15,6 +17,7 @@ export function TerminalTabs({
   onClose
 }: {
   tabs: TerminalTabInfo[];
+  attentionByTabKey: Record<string, TerminalTabAttention>;
   activeTabKey: string;
   tabsRef: RefObject<HTMLDivElement | null>;
   onWheel: (event: WheelEvent<HTMLDivElement>) => void;
@@ -32,6 +35,14 @@ export function TerminalTabs({
     >
       {tabs.map((tab) => {
         const label = truncateTabTitle(tab.title);
+        const attention = attentionByTabKey[tab.key];
+        const AttentionIcon = attention?.kind === "awaiting-confirmation"
+          ? Clock3
+          : attention?.kind === "error"
+            ? CircleAlert
+            : attention?.kind === "completed"
+              ? CheckCircle2
+              : null;
         return (
           <button
             key={tab.key}
@@ -41,7 +52,12 @@ export function TerminalTabs({
             onClick={() => onSelect(tab.key, tab.session?.id || "")}
             title={tab.title}
             >
-              <span>{label}</span>
+              <span className="terminal-tab-label">
+                {AttentionIcon && attention.unread && <span className={`terminal-tab-attention ${attention.kind} unread`} aria-label={attention.title} title={attention.title}>
+                  <AttentionIcon aria-hidden="true" size={14} strokeWidth={2} />
+                </span>}
+                <span>{label}</span>
+              </span>
             <span
               className="terminal-tab-close"
               role="button"

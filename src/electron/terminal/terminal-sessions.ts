@@ -5,6 +5,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { AiProviderId, SystemTerminalStartRequest, TerminalStartParams, VendorRouteMode, VendorRouteUpdateResult } from "../types";
+import type { TerminalStatusEvent } from "../types";
 import {
   buildCmdCommand,
   buildPosixShellCommand as buildShellCommand,
@@ -24,6 +25,7 @@ import {
   bindVendorRouteTerminal,
   type VendorRoute
 } from "../gateway/vendor-gateway";
+import { TerminalStatusDetector } from "./terminal-status-detector";
 
 type TerminalSession = {
   id: string;
@@ -35,6 +37,7 @@ type TerminalSession = {
   vendorRouteId?: string;
   resumeKey?: string;
   exitPromise: Promise<void>;
+  statusDetector?: TerminalStatusDetector;
 };
 
 type TerminalCommand = {
@@ -107,7 +110,9 @@ export async function startTerminalSession(
       params.rows,
       route?.routeId,
       resumeKey,
-      route?.vendorId
+      route?.vendorId,
+      provider.id,
+      true
     );
     if (route) bindVendorRouteTerminal(route.routeId, result.terminalId);
     // CLI 可能在 startTerminalSession 返回前就完成首个请求并触发故障切换；
@@ -134,7 +139,9 @@ async function startPtySession(
   rows?: number,
   vendorRouteId?: string,
   resumeKey?: string,
-  vendorId?: string
+  vendorId?: string,
+  providerId?: AiProviderId,
+  trackStatus = false
 ) {
   const pty = loadNodePty();
   const terminalId = crypto.randomUUID();
@@ -158,7 +165,10 @@ async function startPtySession(
     outputChunks: [],
     vendorRouteId,
     resumeKey,
-    exitPromise
+    exitPromise,
+    statusDetector: trackStatus && providerId
+      ? new TerminalStatusDetector(terminalId, providerId, (event: TerminalStatusEvent) => sendToWindow(window, "terminal:status", event))
+      : undefined
   };
   sessions.set(terminalId, session);
   if (resumeKey) {
@@ -168,8 +178,10 @@ async function startPtySession(
 
   child.onData((data) => {
     queueTerminalOutput(session, data);
+    session.statusDetector?.inspectOutput(data);
   });
   child.onExit(({ exitCode }) => {
+    session.statusDetector?.markExit(exitCode);
     resolveExit();
     flushTerminalOutput(session);
     sessions.delete(terminalId);
@@ -279,7 +291,9 @@ function toWindowsShellCwd(cwd: string) {
 
 export function writeTerminalSession(terminalId: string, data: string) {
   const session = sessions.get(terminalId);
-  if (session) session.pty.write(data);
+  if (!session) return;
+  session.statusDetector?.markInput(data);
+  session.pty.write(data);
 }
 
 export function resizeTerminalSession(terminalId: string, cols: number, rows: number) {
@@ -292,6 +306,8 @@ export function stopTerminalSession(terminalId: string) {
   if (session.outputTimer) clearTimeout(session.outputTimer);
   session.outputTimer = undefined;
   session.outputChunks = [];
+  // 用户主动关闭标签不应被记录为异常停止提醒。
+  session.statusDetector = undefined;
   session.pty.kill();
   sessions.delete(terminalId);
   if (session.resumeKey) pendingResumeKeys.delete(session.resumeKey);

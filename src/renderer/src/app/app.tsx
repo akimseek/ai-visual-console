@@ -20,6 +20,7 @@ import { useCliInstaller } from "../hooks/use-cli-installer";
 import { useSkills } from "../features/skills/use-skills";
 import { useGatewayPortDialog } from "../features/settings/use-gateway-port-dialog";
 import { StatusBar } from "../components/status-bar";
+import { TerminalAttentionCenter } from "../components/terminal-attention-center";
 import { SessionList } from "../features/sessions/session-list";
 import { useStableCallback } from "../hooks/use-stable-callback";
 import { SidebarControls } from "../components/sidebar-controls";
@@ -147,6 +148,7 @@ export function App() {
     setOpenTabs,
     activeTabKey,
     terminalIdsByTabKey,
+    terminalAttentionByTabKey,
     terminalInputStatesByTabKey,
     activateTerminalTab,
     selectTerminalTab,
@@ -154,6 +156,9 @@ export function App() {
     setTerminalInputState,
     registerTerminalReady,
     markTerminalExited,
+    clearTerminalAttention,
+    dismissTerminalAttention,
+    recordTerminalError,
     clearPendingTerminalTab
   } = useTerminalTabs({ setSelectedId });
   const activeTab = openTabs.find((tab) => tab.key === activeTabKey) || openTabs[0] || null;
@@ -736,6 +741,14 @@ export function App() {
     sessionTabs.handleTerminalExit(tabKey, exitCode);
   }
 
+  function handleTerminalError(tabKey: string, detail: string) {
+    // 历史会话启动阶段的 CLI 错误已经直接写入终端，不应被当作用户轮次提醒；
+    // 用户在历史会话内提交新指令后，异常仍由 PTY 状态检测器负责提醒。
+    const tab = openTabs.find((item) => item.key === tabKey);
+    if (tab?.session) return;
+    recordTerminalError(tabKey, detail);
+  }
+
   async function openGlobalSearchResult(result: GlobalSessionSearchResult) {
     if (!result.target.available) return;
     setWorkbenchOpen(false);
@@ -809,6 +822,18 @@ export function App() {
         menus={appMenus}
         openMenu={openAppMenu}
         onOpenMenu={setOpenAppMenu}
+        trailing={
+          <TerminalAttentionCenter
+            tabs={openTabs}
+            attentionByTabKey={terminalAttentionByTabKey}
+            onSelect={(tabKey) => {
+              const tab = openTabs.find((item) => item.key === tabKey);
+              if (tab) selectTerminalTab(tab.key, tab.session?.id || "");
+            }}
+            onClear={clearTerminalAttention}
+            onDismiss={dismissTerminalAttention}
+          />
+        }
       />
       <CommandPalette menus={appMenus} open={commandPaletteOpen} onClose={() => setCommandPaletteOpen(false)} />
     <VendorDataProvider vendors={vendors}>
@@ -937,9 +962,11 @@ export function App() {
             onCloseTab={sessionTabs.closeSessionTab}
             focusRequest={workspaceFocusRequest}
             terminalInputStates={terminalInputStatesByTabKey}
+            attentionByTabKey={terminalAttentionByTabKey}
             onTerminalReady={handleTerminalReady}
             onVendorSwitch={handleTerminalVendorSwitch}
             onTerminalExit={handleTerminalExit}
+            onTerminalError={handleTerminalError}
             onTerminalInputState={handleTerminalInputState}
             systemTerminalOpen={systemTerminalOpen}
             activeCwd={activeCwd}

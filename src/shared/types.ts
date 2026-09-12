@@ -586,6 +586,29 @@ export type TerminalStartResult = {
   vendorMode?: VendorRouteMode;
 };
 
+export type TerminalStatus = "running" | "awaiting-confirmation" | "completed" | "error";
+
+export type TerminalAttentionKind = Exclude<TerminalStatus, "running">;
+
+export type TerminalStatusEvent = {
+  terminalId: string;
+  /** 同一 PTY 内的请求轮次；用于抑制延迟到达的旧提醒事件。 */
+  turnId?: number;
+  status: TerminalStatus;
+  attention?: {
+    kind: TerminalAttentionKind;
+    title: string;
+    detail?: string;
+  };
+  updatedAt: number;
+};
+
+export type TerminalAttentionNotification = {
+  tabKey: string;
+  title: string;
+  detail?: string;
+};
+
 export type GatewayVendorSwitchEvent = {
   terminalId: string;
   vendorId: string;

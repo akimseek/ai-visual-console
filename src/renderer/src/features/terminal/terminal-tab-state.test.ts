@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { omitTerminalTabRecords, removeTerminalTabs, type TerminalTab, upsertTerminalTab } from "./terminal-tab-state";
+import { applyTerminalStatus, omitTerminalTabRecords, removeTerminalTabs, type TerminalTab, upsertTerminalTab } from "./terminal-tab-state";
 
 const target = { id: "codex:local", provider: "codex", label: "本地", kind: "local", available: true } as const;
 
@@ -40,6 +40,28 @@ describe("terminal tab state", () => {
     const records = { a: "one", b: "two" };
     expect(omitTerminalTabRecords(records, new Set(["a"]))).toEqual({ b: "two" });
     expect(omitTerminalTabRecords(records, new Set(["missing"]))).toBe(records);
+  });
+
+  it("为每个标签独立维护提醒状态并支持标记已读", () => {
+    const completed = applyTerminalStatus(undefined, {
+      terminalId: "terminal-a",
+      turnId: 1,
+      status: "completed",
+      attention: { kind: "completed", title: "本轮已完成" },
+      updatedAt: 1
+    });
+    expect(completed.unread).toBe(true);
+    const read = { ...completed, unread: false };
+    const repeated = applyTerminalStatus(read, {
+      terminalId: "terminal-a",
+      turnId: 1,
+      status: "completed",
+      attention: { kind: "completed", title: "本轮已完成" },
+      updatedAt: 2
+    });
+    expect(repeated.unread).toBe(false);
+    const running = applyTerminalStatus(repeated, { terminalId: "terminal-a", status: "running", updatedAt: 3 });
+    expect(running).toEqual({ status: "running", unread: false, updatedAt: 3 });
   });
 
 });

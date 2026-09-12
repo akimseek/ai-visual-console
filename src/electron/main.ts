@@ -1,4 +1,4 @@
-import { app, BrowserWindow, Menu, session, shell } from "electron";
+import { app, BrowserWindow, Menu, Tray, dialog, session, shell } from "electron";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { setSessionCacheRoot, setSessionDatabasePath } from "./providers/codex/codex-store";
@@ -30,6 +30,10 @@ import { registerCliIpcHandlers } from './ipc/cli';
 
 const isDev = Boolean(process.env.VITE_DEV_SERVER_URL);
 const processStartedAt = performance.now();
+// Electron 开发运行时默认会以 electron.app 作为 Windows 通知应用名；
+// 显式设置显示名，确保系统通知与窗口、安装包使用同一产品名称。
+app.setName("AI 可视化控制台");
+if (process.platform === "win32") app.setAppUserModelId("com.akimsoft.ai.visual.console");
 const applicationRuntimeRoot = resolveRuntimeStorageRoot({
   isPackaged: app.isPackaged,
   executablePath: app.getPath("exe"),
@@ -77,6 +81,13 @@ function createWindow() {
   window.once("ready-to-show", () => {
     void writePerformanceLog("window.ready-to-show", performance.now() - createStartedAt);
   });
+
+  applicationWindow = window;
+  window.on("close", (event) => {
+    if (exitRequested) return;
+    event.preventDefault();
+    void requestExitConfirmation(window);
+  });
   window.webContents.once("did-finish-load", () => {
     void writePerformanceLog("window.did-finish-load", performance.now() - createStartedAt);
   });
@@ -120,6 +131,61 @@ function createWindow() {
       .catch((error: unknown) => {
         void writePerformanceLog("window.loadFile.failed", performance.now() - loadStartedAt, String(error));
       });
+  }
+}
+
+let applicationWindow: BrowserWindow | null = null;
+let applicationTray: Tray | null = null;
+let exitRequested = false;
+let exitPromptOpen = false;
+
+function restoreApplicationWindow() {
+  if (!applicationWindow || applicationWindow.isDestroyed()) return;
+  if (applicationWindow.isMinimized()) applicationWindow.restore();
+  applicationWindow.show();
+  applicationWindow.focus();
+}
+
+function ensureApplicationTray(window: BrowserWindow) {
+  if (applicationTray) return;
+  applicationTray = new Tray(getApplicationIconPath());
+  applicationTray.setToolTip("AI 可视化控制台");
+  applicationTray.setContextMenu(Menu.buildFromTemplate([
+    { label: "显示窗口", click: restoreApplicationWindow },
+    { type: "separator" },
+    { label: "退出", click: () => void requestExitConfirmation(window) }
+  ]));
+  applicationTray.on("click", restoreApplicationWindow);
+}
+
+async function requestExitConfirmation(window: BrowserWindow | null) {
+  if (exitPromptOpen || exitRequested) return;
+  exitPromptOpen = true;
+  try {
+    const options: Electron.MessageBoxOptions = {
+      type: "question",
+      title: "退出 AI 可视化控制台",
+      message: "请选择关闭方式",
+      detail: "最小化到托盘后，应用仍会在后台运行；直接退出会关闭所有终端和 Gateway。",
+      buttons: ["最小化到托盘", "直接退出", "取消"],
+      defaultId: 0,
+      cancelId: 2,
+      noLink: true
+    };
+    const result = window && !window.isDestroyed()
+      ? await dialog.showMessageBox(window, options)
+      : await dialog.showMessageBox(options);
+    if (result.response === 0) {
+      if (window && !window.isDestroyed()) {
+        ensureApplicationTray(window);
+        window.hide();
+      }
+    } else if (result.response === 1) {
+      exitRequested = true;
+      app.quit();
+    }
+  } finally {
+    exitPromptOpen = false;
   }
 }
 
@@ -211,6 +277,11 @@ async function shutdownApplication() {
 }
 
 app.on("before-quit", (event) => {
+  if (!exitRequested) {
+    event.preventDefault();
+    void requestExitConfirmation(applicationWindow);
+    return;
+  }
   if (shutdownComplete) return;
   event.preventDefault();
   void shutdownApplication().then(() => {
@@ -220,9 +291,15 @@ app.on("before-quit", (event) => {
 });
 
 app.on("window-all-closed", () => {
-  if (process.platform !== "darwin") app.quit();
+  if (process.platform !== "darwin" && exitRequested) app.quit();
 });
 
 app.on("activate", () => {
   if (BrowserWindow.getAllWindows().length === 0) createWindow();
+  else restoreApplicationWindow();
+});
+
+app.on("will-quit", () => {
+  applicationTray?.destroy();
+  applicationTray = null;
 });

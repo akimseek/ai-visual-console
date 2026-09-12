@@ -1,4 +1,4 @@
-import { BrowserWindow, clipboard, dialog, ipcMain, shell } from "electron";
+import { BrowserWindow, clipboard, dialog, ipcMain, Notification, shell } from "electron";
 import { getSessionFolderPath } from "../providers/ai-providers";
 import { pathExists } from "../core/fs-utils";
 import { wslPathExists } from "../core/wsl";
@@ -18,7 +18,8 @@ import {
   requireTerminalData,
   requireTerminalStartParams,
   requireSystemTerminalStartParams,
-  requireOpenPathRequest
+  requireOpenPathRequest,
+  requireTerminalAttentionNotification
 } from "./validation";
 
 export function registerTerminalIpcHandlers() {
@@ -48,6 +49,26 @@ export function registerTerminalIpcHandlers() {
     )
   );
   ipcMain.handle("terminal:stop", (_event, terminalId: unknown) => stopTerminalSession(requireString(terminalId, "terminalId")));
+  ipcMain.handle("terminal:attention-notification", (event, value: unknown) => {
+    const owner = BrowserWindow.fromWebContents(event.sender);
+    if (!owner || owner.isDestroyed() || (owner.isFocused() && !owner.isMinimized())) return false;
+    if (!Notification.isSupported()) return false;
+    const notification = requireTerminalAttentionNotification(value);
+    const toast = new Notification({
+      title: "会话提醒",
+      body: notification.detail ? `${notification.title}\n${notification.detail}` : notification.title,
+      silent: false
+    });
+    toast.on("click", () => {
+      if (owner.isDestroyed()) return;
+      if (owner.isMinimized()) owner.restore();
+      owner.show();
+      owner.focus();
+      owner.webContents.send("terminal:attention-notification-clicked", notification.tabKey);
+    });
+    toast.show();
+    return true;
+  });
   ipcMain.handle("clipboard:copy-text", (_event, text: unknown) => {
     clipboard.writeText(requireString(text, "text"));
   });
@@ -86,4 +107,3 @@ async function pathExistsForTarget(targetId: string, folderPath: string) {
   if (distro) return wslPathExists(distro, folderPath);
   return pathExists(folderPath);
 }
-

@@ -40,6 +40,15 @@ export function requireTerminalData(value: unknown) {
   return value;
 }
 
+export function requireTerminalAttentionNotification(value: unknown) {
+  if (!value || typeof value !== "object") throw new Error("参数无效：terminal attention notification");
+  const notification = value as Record<string, unknown>;
+  const tabKey = requireString(notification.tabKey, "tabKey");
+  const title = requireString(notification.title, "title");
+  const detail = notification.detail === undefined ? undefined : requireString(notification.detail, "detail");
+  return { tabKey, title: title.slice(0, 160), detail: detail?.slice(0, 240) };
+}
+
 export function requireNumber(value: unknown, name: string) {
   if (typeof value !== "number" || !Number.isFinite(value)) throw new Error(`参数无效：${name}`);
   return value;

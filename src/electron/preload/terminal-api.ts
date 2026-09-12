@@ -3,7 +3,9 @@ import type {
   OpenPathRequest,
   SystemTerminalStartRequest,
   TerminalStartRequest,
-  TerminalStartResult
+  TerminalStartResult,
+  TerminalStatusEvent,
+  TerminalAttentionNotification
 } from "../types";
 import { invoke, subscribeArgs } from "./ipc-bridge";
 
@@ -24,6 +26,12 @@ export function createTerminalApi(ipc: IpcRenderer) {
       subscribeArgs<[string, string]>(ipc, "terminal:data", handler),
     onTerminalExit: (handler: (terminalId: string, exitCode: number) => void) =>
       subscribeArgs<[string, number]>(ipc, "terminal:exit", handler),
+    onTerminalStatus: (handler: (event: TerminalStatusEvent) => void) =>
+      subscribeArgs<[TerminalStatusEvent]>(ipc, "terminal:status", handler),
+    notifyTerminalAttention: (notification: TerminalAttentionNotification) =>
+      invoke<boolean>(ipc, "terminal:attention-notification", notification),
+    onTerminalAttentionNotificationClicked: (handler: (tabKey: string) => void) =>
+      subscribeArgs<[string]>(ipc, "terminal:attention-notification-clicked", handler),
     openSessionFolder: (targetId: string, sessionId: string) =>
       invoke<void>(ipc, "shell:open-session-folder", targetId, sessionId),
     openPath: (params: OpenPathRequest) => invoke<void>(ipc, "shell:open-path", params),

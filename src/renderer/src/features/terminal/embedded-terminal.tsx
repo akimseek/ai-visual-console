@@ -26,6 +26,7 @@ type EmbeddedTerminalProps = {
   onReady?: (terminalId?: string, vendorId?: string, mode?: VendorRouteMode) => void;
   onVendorSwitch?: (vendorId: string, reason: "manual" | "candidate-pool" | "failure", mode: VendorRouteMode) => void;
   onExit?: (exitCode: number) => void;
+  onError?: (detail: string) => void;
   onInputModeChange?: (state: { mode: "composer" | "terminal"; composerVisible: boolean }) => void;
 };
 
@@ -55,6 +56,7 @@ export function EmbeddedTerminal({
   onReady,
   onVendorSwitch,
   onExit,
+  onError,
   onInputModeChange
 }: EmbeddedTerminalProps) {
   const initialInputMode = sessionId ? "terminal" : "composer";
@@ -71,6 +73,7 @@ export function EmbeddedTerminal({
   const composerResizeRef = useRef<{ y: number; height: number } | null>(null);
   const onReadyRef = useRef(onReady);
   const onExitRef = useRef(onExit);
+  const onErrorRef = useRef(onError);
   const onVendorSwitchRef = useRef(onVendorSwitch);
   const onInputModeChangeRef = useRef(onInputModeChange);
   const [, setStatus] = useState("正在启动 Codex...");
@@ -306,6 +309,9 @@ export function EmbeddedTerminal({
   useEffect(() => {
     onExitRef.current = onExit;
   }, [onExit]);
+  useEffect(() => {
+    onErrorRef.current = onError;
+  }, [onError]);
 
   useEffect(() => {
     onVendorSwitchRef.current = onVendorSwitch;
@@ -453,6 +459,7 @@ export function EmbeddedTerminal({
         const message = error instanceof Error ? error.message : "启动 Codex 失败。";
         setStatus("启动 Codex 失败");
         xterm.terminalRef.current?.writeln(message);
+        onErrorRef.current?.(message);
         onReadyRef.current?.();
       });
 

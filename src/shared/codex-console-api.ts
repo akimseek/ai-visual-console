@@ -47,6 +47,8 @@ import type {
   SystemTerminalStartRequest,
   TerminalStartRequest,
   TerminalStartResult,
+  TerminalStatusEvent,
+  TerminalAttentionNotification,
   VendorBalanceBatchResult,
   VendorBalanceRefreshResult,
   VendorModel,
@@ -150,6 +152,9 @@ export type CodexConsoleApi = {
   logPerformance: (label: string, durationMs: number, status?: string) => Promise<void>;
   onTerminalData: (handler: (terminalId: string, data: string) => void) => () => void;
   onTerminalExit: (handler: (terminalId: string, exitCode: number) => void) => () => void;
+  onTerminalStatus: (handler: (event: TerminalStatusEvent) => void) => () => void;
+  notifyTerminalAttention: (notification: TerminalAttentionNotification) => Promise<boolean>;
+  onTerminalAttentionNotificationClicked: (handler: (tabKey: string) => void) => () => void;
   onGatewayVendorSwitched: (handler: (event: GatewayVendorSwitchEvent) => void) => () => void;
   onGatewayRequestRecorded: (handler: (event: GatewayRequestRecordedEvent) => void) => () => void;
   openSessionFolder: (targetId: string, sessionId: string) => Promise<void>;

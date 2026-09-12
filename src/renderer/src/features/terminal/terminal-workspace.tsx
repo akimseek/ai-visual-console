@@ -1,7 +1,7 @@
 import { lazy, Suspense, type MouseEvent, type RefObject, type WheelEvent } from "react";
 import { PanelLeftClose, PanelLeftOpen } from "lucide-react";
 import type { AiSession, VendorRouteMode } from "../../types";
-import type { TerminalTab } from "./terminal-tab-state";
+import type { TerminalTab, TerminalTabAttention } from "./terminal-tab-state";
 import { TerminalTabs } from "./terminal-tabs";
 
 const EmbeddedTerminal = lazy(() =>
@@ -27,6 +27,7 @@ export function TerminalWorkspace({
   onOpenDetail,
   onOpenNewSession,
   tabs,
+  attentionByTabKey,
   activeTabKey,
   tabsRef,
   onTabsWheel,
@@ -38,6 +39,7 @@ export function TerminalWorkspace({
   onTerminalReady,
   onVendorSwitch,
   onTerminalExit,
+  onTerminalError,
   onTerminalInputState,
   systemTerminalOpen,
   activeCwd,
@@ -56,6 +58,7 @@ export function TerminalWorkspace({
   onOpenDetail: (session: AiSession) => void;
   onOpenNewSession: () => void;
   tabs: TerminalTab[];
+  attentionByTabKey: Record<string, TerminalTabAttention>;
   activeTabKey: string;
   tabsRef: RefObject<HTMLDivElement | null>;
   onTabsWheel: (event: WheelEvent<HTMLDivElement>) => void;
@@ -67,6 +70,7 @@ export function TerminalWorkspace({
   onTerminalReady: (tabKey: string, terminalId?: string, vendorId?: string, mode?: VendorRouteMode) => void;
   onVendorSwitch: (tabKey: string, vendorId: string, reason: "manual" | "candidate-pool" | "failure", mode: VendorRouteMode) => void;
   onTerminalExit: (tabKey: string, exitCode: number) => void;
+  onTerminalError: (tabKey: string, detail: string) => void;
   onTerminalInputState: (tabKey: string, state: TerminalInputState) => void;
   systemTerminalOpen: boolean;
   activeCwd?: string;
@@ -98,6 +102,7 @@ export function TerminalWorkspace({
       </section>
       <TerminalTabs
         tabs={tabs}
+        attentionByTabKey={attentionByTabKey}
         activeTabKey={activeTabKey}
         tabsRef={tabsRef}
         onWheel={onTabsWheel}
@@ -125,6 +130,7 @@ export function TerminalWorkspace({
                 onReady={(terminalId, vendorId, mode) => onTerminalReady(tab.key, terminalId, vendorId, mode)}
                 onVendorSwitch={(vendorId, reason, mode) => onVendorSwitch(tab.key, vendorId, reason, mode)}
                 onExit={(exitCode) => onTerminalExit(tab.key, exitCode)}
+                onError={(detail) => onTerminalError(tab.key, detail)}
                 onInputModeChange={(state) => onTerminalInputState(tab.key, state)}
               />
             ))}

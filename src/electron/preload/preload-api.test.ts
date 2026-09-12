@@ -76,6 +76,8 @@ describe("preload 业务域 API", () => {
       "onGatewayVendorSwitched",
       "onTerminalData",
       "onTerminalExit",
+      "onTerminalStatus",
+      "onTerminalAttentionNotificationClicked",
       "openPath",
       "openSessionFolder",
       "openSkillFolder",
@@ -109,6 +111,7 @@ describe("preload 业务域 API", () => {
       "startSystemTerminal",
       "startTerminal",
       "stopTerminal",
+      "notifyTerminalAttention",
       "switchVendorRoute",
       "writeTerminal"
     ].sort());
