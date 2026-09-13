@@ -103,6 +103,7 @@ export function ComposerInput({
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const attachMenuRef = useRef<HTMLDivElement | null>(null);
   const dropdownRef = useRef<HTMLDivElement | null>(null);
+  const pendingCompositionSubmitRef = useRef(false);
 
   // 供应商属于具体 CLI 协议，不能从全局列表直接取第一个启用项，
   // 否则 Claude/Gemini 会误用 Codex 供应商的模型接口。
@@ -247,7 +248,14 @@ export function ComposerInput({
   }
 
   function handleKeyDown(event: ReactKeyboardEvent<HTMLTextAreaElement>) {
-    if (event.nativeEvent.isComposing) return;
+    const isImeEnter = event.key === "Enter" && (event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229);
+    if (event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229) {
+      if (isImeEnter) {
+        event.preventDefault();
+        pendingCompositionSubmitRef.current = true;
+      }
+      return;
+    }
     if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "c") {
       const target = event.currentTarget;
       if (target.selectionStart === target.selectionEnd) {
@@ -264,6 +272,13 @@ export function ComposerInput({
     }
     event.preventDefault();
     handleSubmit();
+  }
+
+  function handleCompositionEnd() {
+    if (!pendingCompositionSubmitRef.current) return;
+    pendingCompositionSubmitRef.current = false;
+    // 等输入法把最后一个字符提交到 React value 后再读取文本。
+    window.setTimeout(handleSubmit, 0);
   }
 
   function handlePaste(event: ReactClipboardEvent<HTMLTextAreaElement>) {
@@ -326,6 +341,7 @@ export function ComposerInput({
   }
 
   function handleSubmit() {
+    pendingCompositionSubmitRef.current = false;
     if (!canSubmit && attachments.length === 0) return;
     const payload: ComposerSubmitPayload = {
       text: text.replace(/\r\n/g, "\n").replace(/\r/g, "\n").replace(/\n+$/, ""),
@@ -462,6 +478,7 @@ export function ComposerInput({
           onMouseDown={onMouseDown}
           onChange={(event) => onTextChange(event.target.value)}
           onKeyDown={handleKeyDown}
+          onCompositionEnd={handleCompositionEnd}
           onPaste={handlePaste}
           onContextMenu={handleTextContextMenu}
         />

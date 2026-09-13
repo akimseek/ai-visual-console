@@ -164,10 +164,18 @@ export function EmbeddedTerminal({
     const fullText = attachmentText ? `${attachmentText}\n${displayText}` : displayText;
     const expandedText = expandPastedContent(fullText);
     if (!terminalId || !expandedText.trim()) return;
-    await writeBracketedPaste(terminalId, expandedText);
-    if (getProviderIdFromTargetId(targetId) === "qoder") await wait(QODER_PASTE_SUBMIT_DELAY_MS);
+    const safeText = expandedText.replace(/\x1b/g, "");
+    const providerId = getProviderIdFromTargetId(targetId);
+    // Codex 的自管输入必须在同一 PTY 写入中发送粘贴结束标记和回车，
+    // 否则 Windows/输入法组合态下回车可能只表现为终端换行而未提交。
+    if (providerId !== "qoder") {
+      await window.codexConsole.writeTerminal(terminalId, `\x1b[200~${safeText}\x1b[201~\r`);
+    } else {
+      await writeBracketedPaste(terminalId, expandedText);
+      await wait(QODER_PASTE_SUBMIT_DELAY_MS);
+    }
     if (terminalIdRef.current !== terminalId) return;
-    await window.codexConsole.writeTerminal(terminalId, "\r");
+    if (providerId === "qoder") await window.codexConsole.writeTerminal(terminalId, "\r");
     setComposerText("");
     lastSubmittedTextRef.current = displayText;
     composerSubmittedRef.current = true;
@@ -223,8 +231,12 @@ export function EmbeddedTerminal({
     inputModeRef.current = nextMode;
     setInputMode(nextMode);
     window.setTimeout(() => {
-      if (nextMode === "composer") composerRef.current?.focus();
-      else xterm.terminalRef.current?.focus();
+      if (nextMode === "composer") {
+        const target = composerRef.current;
+        if (target && document.activeElement !== target) target.focus();
+      } else if (!document.activeElement?.classList.contains("xterm-helper-textarea")) {
+        xterm.terminalRef.current?.focus();
+      }
     }, 0);
   }
 
@@ -232,11 +244,6 @@ export function EmbeddedTerminal({
     if (composerVisibleRef.current) return;
     composerVisibleRef.current = true;
     setComposerVisible(true);
-    inputModeRef.current = "composer";
-    setInputMode("composer");
-    window.setTimeout(() => {
-      if (active) composerRef.current?.focus();
-    }, 0);
   }
 
   function insertComposerText(
@@ -334,14 +341,20 @@ export function EmbeddedTerminal({
 
   useEffect(() => {
     inputModeRef.current = inputMode;
+  }, [inputMode]);
+
+  useEffect(() => {
     if (!active) return;
-    window.setTimeout(() => {
-      if (inputMode === "composer" && composerVisible) composerRef.current?.focus();
-      else xterm.terminalRef.current?.focus();
+    const focusTimer = window.setTimeout(() => {
+      if (inputModeRef.current === "composer" && composerVisibleRef.current) {
+        const target = composerRef.current;
+        if (target && document.activeElement !== target) target.focus();
+      } else if (!document.activeElement?.classList.contains("xterm-helper-textarea")) {
+        xterm.terminalRef.current?.focus();
+      }
     }, 0);
-    // xterm refs 是稳定容器，不作为状态依赖。
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [active, inputMode, composerVisible, focusRequest]);
+    return () => window.clearTimeout(focusTimer);
+  }, [active, focusRequest]);
 
   useEffect(() => {
     lastSubmittedTextRef.current = lastSubmittedText;
@@ -481,15 +494,14 @@ export function EmbeddedTerminal({
 
   useEffect(() => {
     if (!active) return;
-    setTimeout(() => {
+    const fitTimer = window.setTimeout(() => {
       xterm.fitAddonRef.current?.fit();
       if (xterm.terminalIdRef.current) {
         void window.codexConsole.resizeTerminal(xterm.terminalIdRef.current, xterm.terminalRef.current!.cols, xterm.terminalRef.current!.rows);
       }
-      if (inputMode === "composer" && composerVisible) composerRef.current?.focus();
-      else xterm.terminalRef.current?.focus();
     }, 0);
-    // xterm refs 是稳定容器，不作为状态依赖。
+    return () => window.clearTimeout(fitTimer);
+    // 输入模式变化只需要重新计算终端尺寸，不应改变当前焦点。
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [active, inputMode, composerVisible]);
 
