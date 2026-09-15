@@ -76,6 +76,8 @@ export function EmbeddedTerminal({
   const onErrorRef = useRef(onError);
   const onVendorSwitchRef = useRef(onVendorSwitch);
   const onInputModeChangeRef = useRef(onInputModeChange);
+  const activeRef = useRef(active);
+  activeRef.current = active;
   const [, setStatus] = useState("正在启动 Codex...");
   const [inputMode, setInputMode] = useState<"composer" | "terminal">(initialInputMode);
   const [composerVisible, setComposerVisible] = useState(!sessionId);
@@ -91,6 +93,7 @@ export function EmbeddedTerminal({
 
   const xterm = useXtermHost({
     customKeyHandler: useCallback<XtermKeyHandler>((event) => {
+      if (!activeRef.current && event.type === "keydown") return false;
       if (event.type === "keydown" && inputModeRef.current === "terminal") {
         if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "c") {
           if (xterm.terminalRef.current?.hasSelection()) {
@@ -118,6 +121,7 @@ export function EmbeddedTerminal({
     onPaste: useCallback((text: string) => {
       showPasteDialog(text);
     }, [showPasteDialog]),
+    isInputEnabled: useCallback(() => activeRef.current, []),
     terminalIdRef
   });
 
@@ -129,6 +133,7 @@ export function EmbeddedTerminal({
   });
 
   function sendRawInterrupt() {
+    if (!activeRef.current) return;
     const terminalId = terminalIdRef.current;
     if (!terminalId) return;
     void window.codexConsole.writeTerminal(terminalId, "\x03");
@@ -354,6 +359,8 @@ export function EmbeddedTerminal({
       }
     }, 0);
     return () => window.clearTimeout(focusTimer);
+    // xterm refs 是稳定容器，焦点只由活动标签或显式焦点请求驱动。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [active, focusRequest]);
 
   useEffect(() => {

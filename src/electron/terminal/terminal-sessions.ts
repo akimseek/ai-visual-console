@@ -1,9 +1,11 @@
 import type { BrowserWindow } from "electron";
 import { createRequire } from "node:module";
+import { execFile } from "node:child_process";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { promisify } from "node:util";
 import type { AiProviderId, SystemTerminalStartRequest, TerminalStartParams, VendorRouteMode, VendorRouteUpdateResult } from "../types";
 import type { TerminalStatusEvent } from "../types";
 import {
@@ -59,6 +61,7 @@ const sessions = new Map<string, TerminalSession>();
 const pendingResumeKeys = new Set<string>();
 const activeResumeKeys = new Set<string>();
 const requireFromHere = createRequire(__filename);
+const execFileAsync = promisify(execFile);
 
 const codexTerminalProvider: TerminalProvider = {
   id: "codex",
@@ -439,6 +442,7 @@ async function buildCodexCommand(params: TerminalStartParams & { vendorRoute?: V
   const codexHome = params.codexHome?.trim();
   const cwd = params.cwd || path.join(os.homedir(), ".akim");
   if (process.platform === "win32") {
+    const codexFile = await resolveWindowsCodexCommand();
     const windowsCwd = toWindowsShellCwd(cwd);
     if (!params.sessionId) {
       await fs.mkdir(windowsCwd, { recursive: true });
@@ -449,7 +453,7 @@ async function buildCodexCommand(params: TerminalStartParams & { vendorRoute?: V
         ? ["-C", windowsCwd, ...extraArgs]
         : extraArgs;
     return {
-      file: "codex.cmd",
+      file: codexFile,
       args: buildCodexArgs(args, route),
       cwd: windowsCwd,
       env: buildCodexEnvironment(route, codexHome)
@@ -472,6 +476,63 @@ async function buildCodexCommand(params: TerminalStartParams & { vendorRoute?: V
     cwd,
     env: buildCodexEnvironment(route, codexHome)
   };
+}
+
+/**
+ * Electron launched from Explorer may inherit a stale PATH after Node/Codex
+ * was installed. Resolve the npm shim explicitly so a portable copy of the
+ * application works on another Windows machine as well.
+ */
+async function resolveWindowsCodexCommand() {
+  const commandNames = ["codex.cmd", "codex.exe"];
+  for (const commandName of commandNames) {
+    const fromWhere = await findWindowsCommand(commandName);
+    if (fromWhere) return fromWhere;
+  }
+
+  const candidates = new Set<string>();
+  const pathValue = process.env.Path || process.env.PATH || "";
+  for (const directory of pathValue.split(path.delimiter).filter(Boolean)) {
+    for (const commandName of commandNames) candidates.add(path.join(directory, commandName));
+  }
+  const appData = process.env.APPDATA || "";
+  const localAppData = process.env.LOCALAPPDATA || "";
+  for (const directory of [
+    appData && path.join(appData, "npm"),
+    localAppData && path.join(localAppData, "npm"),
+    process.env.ProgramFiles && path.join(process.env.ProgramFiles, "nodejs"),
+    process.env["ProgramFiles(x86)"] && path.join(process.env["ProgramFiles(x86)"], "nodejs")
+  ].filter(Boolean) as string[]) {
+    for (const commandName of commandNames) candidates.add(path.join(directory, commandName));
+  }
+
+  const nvmHome = process.env.NVM_HOME;
+  if (nvmHome && fsSync.existsSync(nvmHome)) {
+    for (const entry of fsSync.readdirSync(nvmHome, { withFileTypes: true })) {
+      if (!entry.isDirectory()) continue;
+      for (const commandName of commandNames) candidates.add(path.join(nvmHome, entry.name, commandName));
+    }
+  }
+
+  for (const candidate of candidates) {
+    if (fsSync.existsSync(candidate)) return candidate;
+  }
+  throw new Error("未找到 Codex CLI。请在新电脑安装 Codex CLI，并重启应用使 PATH 生效。");
+}
+
+async function findWindowsCommand(commandName: string) {
+  try {
+    const result = await execFileAsync("where.exe", [commandName], {
+      windowsHide: true,
+      timeout: 3000,
+      maxBuffer: 1024 * 1024,
+      encoding: "utf8"
+    });
+    const found = String(result.stdout).split(/\r?\n/).map((line) => line.trim()).find(Boolean);
+    return found || undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 async function buildGeminiCommand(params: TerminalStartParams & { vendorRoute?: VendorRoute }) {

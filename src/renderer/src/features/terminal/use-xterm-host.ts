@@ -20,6 +20,8 @@ export type UseXtermHostOptions = {
   onPaste?: (text: string) => void;
   /** 由宿主维护的 PTY 标识，供 resize、键盘输入和宿主业务逻辑共用。 */
   terminalIdRef?: MutableRefObject<string>;
+  /** 只有活动终端允许把 xterm 键盘数据写入 PTY。 */
+  isInputEnabled?: () => boolean;
 };
 
 // 提取两个终端组件（EmbeddedTerminal / SystemTerminal）共享的 xterm.js 基础设施：
@@ -31,7 +33,7 @@ export type UseXtermHostOptions = {
 //   - 处理 onReady / onExit 等业务回调
 //   - 注册 terminal:data / terminal:exit 监听
 export function useXtermHost(options: UseXtermHostOptions = {}) {
-  const { customKeyHandler, onPaste, terminalIdRef: providedTerminalIdRef } = options;
+  const { customKeyHandler, onPaste, terminalIdRef: providedTerminalIdRef, isInputEnabled } = options;
 
   const hostRef = useRef<HTMLDivElement | null>(null);
   const terminalRef = useRef<Terminal | null>(null);
@@ -53,6 +55,8 @@ export function useXtermHost(options: UseXtermHostOptions = {}) {
   customKeyHandlerRef.current = customKeyHandler;
   const onPasteRef = useRef(onPaste);
   onPasteRef.current = onPaste;
+  const isInputEnabledRef = useRef(isInputEnabled);
+  isInputEnabledRef.current = isInputEnabled;
 
   // 复制当前选中的文本
   const copyCurrentSelection = useCallback(() => {
@@ -174,7 +178,9 @@ export function useXtermHost(options: UseXtermHostOptions = {}) {
 
     // 终端输入转发
     const dataDisposable = terminal.onData((data) => {
-      if (terminalIdRef.current) void window.codexConsole.writeTerminal(terminalIdRef.current, data);
+      if (terminalIdRef.current && (isInputEnabledRef.current?.() ?? true)) {
+        void window.codexConsole.writeTerminal(terminalIdRef.current, data);
+      }
     });
 
     // 返回清理函数与共享工具

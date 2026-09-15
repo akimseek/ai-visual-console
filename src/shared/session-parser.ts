@@ -12,6 +12,7 @@ import type {
 export type SessionLine = {
   timestamp?: string;
   type?: string;
+  turn_id?: string;
   payload?: Record<string, unknown>;
 };
 

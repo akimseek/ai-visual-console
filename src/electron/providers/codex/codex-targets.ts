@@ -1,8 +1,10 @@
 import { spawn } from "node:child_process";
 import { once } from "node:events";
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { createInterface } from "node:readline";
 import type { AiMessage, CodexSession, CodexSessionFile, CodexTarget, SessionBatchMutationResult, SessionFileRef, SessionMessagePage, SessionMutationRef } from "../../types";
 import {
   deleteSession as deleteLocalSession,
@@ -78,9 +80,7 @@ const MAX_WSL_SESSION_READ_BYTES = 32 * 1024 * 1024;
 const WSL_DETAIL_READ_TIMEOUT_MIN_MS = 60_000;
 const WSL_DETAIL_READ_TIMEOUT_MAX_MS = 5 * 60_000;
 const WSL_DETAIL_READ_TIMEOUT_PER_MIB_MS = 2_000;
-// 截断消息之后的控制记录只为 codex resume 保留一轮上下文；无限保留会让分支逼近整文件大小，
-// 分支自身超过 WSL 读取上限后反而无法再打开。
-const MAX_BRANCH_TAIL_BYTES = 8 * 1024 * 1024;
+const CODEX_APP_SERVER_TIMEOUT_MS = 60_000;
 
 export async function listTargets(): Promise<CodexTarget[]> {
   return measure("targets.list", listTargetsInner);
@@ -335,20 +335,17 @@ export async function branchSession(targetId: string, sessionId: string, message
     }
 
     const session = await getSessionSummary(targetId, sessionId);
-    // 轻量会话摘要只读取文件首段，messageCount 可能是不完整的；分支偏移由详情页传入，
-    // 写入器会流式扫描原始 JSONL 并在绝对消息位置截断。
     const target = await resolveTarget(targetId);
     const effectiveTarget =
       target.kind === "wsl" && !target.codexHome
         ? { ...target, codexHome: await resolveWslCodexHome(target.distro!) }
         : target;
-    const branchId = crypto.randomUUID();
-    const branchPath = buildBranchSessionPath(effectiveTarget, session.filePath, branchId);
-    await writeBranchSession(effectiveTarget, session, messageLine, branchId, branchPath);
+    const selectedTurnId = await findBranchTurnId(effectiveTarget, session.filePath, messageLine);
+    const fork = await createBranchCodexThread(effectiveTarget, session.id, selectedTurnId);
 
     const branch = effectiveTarget.kind === "local"
-      ? await loadLocalSession(branchPath)
-      : await loadWslSession(effectiveTarget.distro!, branchPath);
+      ? await loadLocalSession(fork.filePath)
+      : await loadWslSession(effectiveTarget.distro!, fork.filePath);
     branch.metadata = await setSessionBranchMetadata(effectiveTarget.id, branch.id, {
       parentTargetId: targetId,
       parentSessionId: session.id,
@@ -623,190 +620,187 @@ async function resolveWslSessionFile(target: CodexTarget, sessionId: string, fil
   return filePath;
 }
 
-type SessionLineWriter = {
-  write: (line: string) => Promise<void>;
-  close: () => Promise<void>;
-  abort: () => Promise<void>;
-};
-
-async function writeBranchSession(
-  target: CodexTarget,
-  session: CodexSession,
-  messageLine: number,
-  branchId: string,
-  branchPath: string
-) {
-  const writer = target.kind === "local"
-    ? await createLocalSessionLineWriter(branchPath)
-    : await createWslSessionLineWriter(target.distro!, branchPath);
-  const metaTimestamp = new Date().toISOString();
-  let rewrittenMeta = false;
-  let selectedMessageWritten = false;
-  let tailBytes = 0;
-  let complete = false;
-
-  const writeLine = async (rawLine: string, lineNumber: number): Promise<boolean> => {
-    if (complete) return false;
-    if (!rawLine.trim()) return true;
+export async function findBranchTurnId(target: CodexTarget, filePath: string, messageLine: number) {
+  const storage = createSessionStorage(target);
+  const options = target.kind === "wsl" ? { timeoutMs: WSL_DETAIL_READ_TIMEOUT_MAX_MS } : undefined;
+  let activeTurnId = "";
+  let selectedTurnId = "";
+  let selectedMessage = false;
+  await storage.readLines(filePath, (rawLine, lineNumber) => {
     const item = safeJsonParse<SessionLine>(rawLine);
     if (!item) return true;
-
-    if (item.type === "session_meta") {
-      if (rewrittenMeta) return true;
-      rewrittenMeta = true;
-      const payload: Record<string, unknown> = {
-        ...(item.payload || {}),
-        id: branchId,
-        session_id: branchId,
-        timestamp: metaTimestamp,
-        cwd: session.cwd,
-        model: session.model,
-        cli_version: session.cliVersion
-      };
-      // 新版 Codex 会将带 paginated 标记的 rollout 视作已导入，忽略其中的截断历史。
-      // 首次打开分支时由 CLI 迁移该 rollout 并建立对应的分页历史。
-      delete payload.history_mode;
-      await writer.write(JSON.stringify({
-        timestamp: metaTimestamp,
-        type: "session_meta",
-        payload
-      }));
-      return true;
+    if (item.type === "event_msg" && item.payload?.type === "task_started") {
+      activeTurnId = stringValue(item.payload.turn_id);
     }
-
-    const message = extractMessage(item);
-    const isVisibleMessage = Boolean(message && shouldKeepMessage(message));
-    // 到达截断消息后，仍需保留该轮消息之后的 turn_context、事件和完成标记。
-    // Codex resume 依赖这些控制记录；不能在遇到第一条非 message JSONL 时提前结束。
-    // 只有下一条可见消息开始时才真正截断，避免把后续对话复制进分支。
-    if (selectedMessageWritten && isVisibleMessage) {
-      complete = true;
+    if (lineNumber === messageLine) {
+      const message = extractMessage(item);
+      if (!message || !shouldKeepMessage(message)) throw new Error("分支位置不是可见会话消息。");
+      selectedMessage = true;
+      selectedTurnId = activeTurnId;
       return false;
     }
-    // 截断消息之后的尾部记录按字节封顶：真实一轮的控制记录远小于该值，
-    // 超限说明源会话尾部是事件风暴，继续复制只会得到打不开的巨型分支。
-    if (selectedMessageWritten && !isVisibleMessage) {
-      tailBytes += Buffer.byteLength(rawLine, "utf8") + 1;
-      if (tailBytes > MAX_BRANCH_TAIL_BYTES) {
-        complete = true;
-        return false;
-      }
-    }
-    // Codex 以 payload.thread_id 归属恢复记录；分支必须将父线程标识改为新线程，
-    // 否则虽然 JSONL 中保留了历史消息，恢复时仍会被 CLI 过滤掉。
-    await writer.write(JSON.stringify(rewriteBranchRecord(item, session.id, branchId)));
-    if (lineNumber === messageLine) {
-      if (!isVisibleMessage) throw new Error("分支位置不是可见会话消息。");
-      selectedMessageWritten = true;
-    }
     return true;
+  }, 1, options);
+  if (!selectedMessage || !selectedTurnId) throw new Error("分支位置已失效，请重新打开会话详情后再试。");
+  return selectedTurnId;
+}
+
+type CodexForkResult = {
+  threadId: string;
+  filePath: string;
+};
+
+async function createBranchCodexThread(target: CodexTarget, sessionId: string, selectedTurnId: string): Promise<CodexForkResult> {
+  return withCodexAppServer(target, async (client) => {
+    await initializeCodexAppServer(client);
+    const fork = await client.request("thread/fork", {
+      threadId: sessionId,
+      // Paginated threads reject thread/rollback. lastTurnId performs the
+      // truncation atomically while creating the native fork.
+      lastTurnId: selectedTurnId
+    }) as {
+      thread?: { id?: string; path?: string | null };
+    };
+    const threadId = stringValue(fork.thread?.id);
+    const filePath = stringValue(fork.thread?.path);
+    if (!threadId || !filePath) throw new Error("Codex 未返回可恢复的分支线程。");
+    return { threadId, filePath };
+  });
+}
+
+type AppServerRequest = (method: string, params: Record<string, unknown>) => Promise<unknown>;
+type AppServerClient = {
+  request: AppServerRequest;
+  notify: (method: string) => Promise<void>;
+};
+
+async function initializeCodexAppServer(client: AppServerClient) {
+  await client.request("initialize", {
+    clientInfo: { name: "AI Visual Console", title: "AI Visual Console", version: "1.2.0" },
+    capabilities: { experimentalApi: false, requestAttestation: false }
+  });
+  await client.notify("initialized");
+}
+
+async function withCodexAppServer<T>(target: CodexTarget, action: (client: AppServerClient) => Promise<T>): Promise<T> {
+  const child = await startCodexAppServer(target);
+  const stderr: Buffer[] = [];
+  const pending = new Map<number, { resolve: (value: unknown) => void; reject: (error: Error) => void }>();
+  let nextId = 1;
+  let closed = false;
+  let timeoutError: Error | null = null;
+  const clearTimer = attachSpawnTimeout(child, (error) => {
+    timeoutError = error;
+    for (const item of pending.values()) item.reject(error);
+    pending.clear();
+  }, "调用 Codex 官方分支服务", CODEX_APP_SERVER_TIMEOUT_MS);
+  child.stderr.on("data", (chunk: Buffer) => stderr.push(chunk));
+  const lines = createInterface({ input: child.stdout, crlfDelay: Infinity });
+  lines.on("line", (line) => {
+    const message = safeJsonParse<{ id?: number; result?: unknown; error?: { message?: string } }>(line);
+    if (!message || typeof message.id !== "number") return;
+    const item = pending.get(message.id);
+    if (!item) return;
+    pending.delete(message.id);
+    if (message.error) item.reject(new Error(message.error.message || "Codex App Server 请求失败。"));
+    else item.resolve(message.result);
+  });
+  const closedPromise = new Promise<void>((resolve) => child.once("close", (code) => {
+    closed = true;
+    const detail = Buffer.concat(stderr).toString("utf8").trim();
+    const error = new Error(detail || `Codex App Server 已退出（退出码 ${code ?? "未知"}）。`);
+    for (const item of pending.values()) item.reject(error);
+    pending.clear();
+    resolve();
+  }));
+  child.on("error", (error) => {
+    for (const item of pending.values()) item.reject(error);
+    pending.clear();
+  });
+
+  const request: AppServerRequest = (method, params) => new Promise((resolve, reject) => {
+    if (closed || timeoutError) {
+      reject(timeoutError || new Error("Codex App Server 已关闭。"));
+      return;
+    }
+    const id = nextId;
+    nextId += 1;
+    pending.set(id, { resolve, reject });
+    const payload = `${JSON.stringify({ jsonrpc: "2.0", id, method, params })}\n`;
+    void writeAppServerRequest(child.stdin, payload).catch((error) => {
+      pending.delete(id);
+      reject(error);
+    });
+  });
+  const notify = async (method: string) => {
+    if (closed || timeoutError) throw timeoutError || new Error("Codex App Server 已关闭。");
+    await writeAppServerRequest(child.stdin, `${JSON.stringify({ jsonrpc: "2.0", method })}\n`);
   };
 
   try {
-    await createSessionStorage(target).readLines(session.filePath, writeLine);
-    if (!rewrittenMeta) throw new Error("创建分支失败：缺少 session_meta 记录。");
-    if (!selectedMessageWritten) throw new Error("分支位置已失效，请重新打开会话详情后再试。");
-    await writer.close();
-  } catch (error) {
-    await writer.abort();
-    throw error;
-  }
-}
-
-function rewriteBranchRecord(item: SessionLine, parentSessionId: string, branchId: string): SessionLine {
-  const payload = { ...(item.payload || {}) };
-  for (const key of ["thread_id", "session_id"] as const) {
-    if (payload[key] === parentSessionId) payload[key] = branchId;
-  }
-  return { ...item, payload };
-}
-
-async function createLocalSessionLineWriter(filePath: string): Promise<SessionLineWriter> {
-  const temporaryPath = `${filePath}.tmp-${process.pid}-${crypto.randomUUID()}`;
-  await fs.mkdir(path.dirname(filePath), { recursive: true });
-  const handle = await fs.open(temporaryPath, "w");
-  let closed = false;
-  return {
-    write: async (line) => {
-      if (closed) throw new Error("分支文件写入已关闭。");
-      await handle.write(`${line}\n`, undefined, "utf8");
-    },
-    close: async () => {
-      if (closed) return;
-      closed = true;
-      await handle.close();
-      await fs.rename(temporaryPath, filePath);
-    },
-    abort: async () => {
-      if (!closed) {
-        closed = true;
-        await handle.close().catch(() => undefined);
-      }
-      await fs.rm(temporaryPath, { force: true }).catch(() => undefined);
-    }
-  };
-}
-
-async function createWslSessionLineWriter(distro: string, filePath: string): Promise<SessionLineWriter> {
-  const wslExe = await getWslExe();
-  if (!wslExe) throw new Error("未找到 wsl.exe。");
-  const temporaryPath = `${filePath}.tmp-${process.pid}-${crypto.randomUUID()}`;
-  const script = `mkdir -p ${shellQuote(path.posix.dirname(filePath))} && cat > ${shellQuote(temporaryPath)}`;
-  const child = spawn(wslExe, ["-d", distro, "--", "bash", "-lc", script], {
-    windowsHide: true,
-    stdio: ["pipe", "ignore", "pipe"]
-  });
-  const stderr: Buffer[] = [];
-  let timeoutError: Error | null = null;
-  let writeError: Error | null = null;
-  const exit = new Promise<number | null>((resolve, reject) => {
-    child.on("error", reject);
-    child.on("close", resolve);
-  });
-  const clearTimer = attachSpawnTimeout(child, (error) => {
-    timeoutError = error;
-  }, `写入 ${filePath}`);
-  child.stderr.on("data", (chunk: Buffer) => stderr.push(chunk));
-  child.stdin.on("error", (error) => {
-    writeError = error;
-  });
-  let closed = false;
-
-  async function finish() {
-    child.stdin.end();
-    const code = await exit;
+    return await action({ request, notify });
+  } finally {
+    closed = true;
     clearTimer();
-    if (timeoutError) throw timeoutError;
-    if (writeError) throw writeError;
-    if (code !== 0) {
-      throw new Error(Buffer.concat(stderr).toString("utf8").trim() || `写入文件失败：${code}`);
+    lines.close();
+    child.stdin.end();
+    child.kill("SIGTERM");
+    await closedPromise.catch(() => undefined);
+  }
+}
+
+async function writeAppServerRequest(input: NodeJS.WritableStream, payload: string) {
+  if (!input.write(payload, "utf8")) await once(input, "drain");
+}
+
+async function startCodexAppServer(target: CodexTarget) {
+  if (target.kind === "wsl") {
+    const wslExe = await getWslExe();
+    if (!wslExe) throw new Error("未找到 wsl.exe。");
+    const codexHome = target.codexHome ? `export CODEX_HOME=${shellQuote(target.codexHome)}; ` : "";
+    return spawn(wslExe, ["-d", target.distro!, "--", "bash", "-ic", `${codexHome}exec codex app-server`], {
+      windowsHide: true,
+      stdio: ["pipe", "pipe", "pipe"]
+    });
+  }
+  if (process.platform === "win32") {
+    const codexCommand = resolveWindowsCodexAppServerCommand();
+    return spawn("cmd.exe", ["/d", "/s", "/c", `${quoteWindowsCmdArgument(codexCommand)} app-server`], {
+      windowsHide: true,
+      stdio: ["pipe", "pipe", "pipe"],
+      env: { ...process.env, ...(target.codexHome ? { CODEX_HOME: target.codexHome } : {}) }
+    });
+  }
+  return spawn("codex", ["app-server"], {
+    stdio: ["pipe", "pipe", "pipe"],
+    env: { ...process.env, ...(target.codexHome ? { CODEX_HOME: target.codexHome } : {}) }
+  });
+}
+
+function resolveWindowsCodexAppServerCommand() {
+  const commandNames = ["codex.cmd", "codex.exe"];
+  const candidates = [
+    process.env.APPDATA && path.join(process.env.APPDATA, "npm"),
+    process.env.LOCALAPPDATA && path.join(process.env.LOCALAPPDATA, "npm"),
+    process.env.NVM_SYMLINK,
+    process.env.ProgramFiles && path.join(process.env.ProgramFiles, "nodejs"),
+    process.env["ProgramFiles(x86)"] && path.join(process.env["ProgramFiles(x86)"], "nodejs")
+  ].filter((directory): directory is string => Boolean(directory));
+  for (const directory of candidates) {
+    for (const commandName of commandNames) {
+      const candidate = path.join(directory, commandName);
+      if (fsSync.existsSync(candidate)) return candidate;
     }
   }
+  return "codex.cmd";
+}
 
-  return {
-    write: async (line) => {
-      if (closed) throw new Error("分支文件写入已关闭。");
-      if (writeError) throw writeError;
-      if (!child.stdin.write(`${line}\n`, "utf8")) await once(child.stdin, "drain");
-      if (writeError) throw writeError;
-    },
-    close: async () => {
-      if (closed) return;
-      closed = true;
-      await finish();
-      await runWslShell(distro, `mv -f ${shellQuote(temporaryPath)} ${shellQuote(filePath)}`);
-    },
-    abort: async () => {
-      if (!closed) {
-        closed = true;
-        child.stdin.destroy();
-        child.kill("SIGKILL");
-      }
-      clearTimer();
-      await exit.catch(() => undefined);
-      await runWslShell(distro, `rm -f ${shellQuote(temporaryPath)}`).catch(() => undefined);
-    }
-  };
+function quoteWindowsCmdArgument(value: string) {
+  return `"${value.replace(/"/g, "\"\"")}"`;
+}
+
+function stringValue(value: unknown) {
+  return typeof value === "string" ? value : "";
 }
 
 function buildDuplicateSessionText(sourceText: string, duplicateId: string) {
