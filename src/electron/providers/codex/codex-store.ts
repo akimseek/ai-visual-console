@@ -152,6 +152,14 @@ export async function removeSessionsFromCache(cachePath: string, filePaths: stri
 export async function deleteSession(sessionId: string, filePathHint?: string) {
   const codexHome = getCodexHome();
   const sessionsRoot = path.join(codexHome, "sessions");
+  if (filePathHint && !(await pathExists(filePathHint))) {
+    const fallback = await findActiveSessionFile(sessionId).catch(() => null);
+    if (fallback) filePathHint = fallback;
+    else {
+      await removeSessionFromCache(getCachePath(), filePathHint);
+      return { stale: true };
+    }
+  }
   const source = await resolveLocalSource(sessionId, filePathHint, sessionsRoot, findActiveSessionFile);
   assertInsideDir(source, sessionsRoot, "拒绝将 sessions 目录之外的文件移动到回收站");
 
@@ -165,11 +173,20 @@ export async function deleteSession(sessionId: string, filePathHint?: string) {
 }
 
 export async function deleteSessions(sessions: SessionMutationRef[]) {
-  const processed: Array<SessionMutationRef & { movedTo: string }> = [];
+  const processed: Array<SessionMutationRef & { movedTo?: string; deleted?: string }> = [];
   try {
-    for (const session of sessions) {
+    for (let session of sessions) {
       const codexHome = getCodexHome();
       const sessionsRoot = path.join(codexHome, "sessions");
+      if (session.filePath && !(await pathExists(session.filePath))) {
+        const fallback = await findActiveSessionFile(session.id).catch(() => null);
+        if (fallback) session = { ...session, filePath: fallback };
+        else {
+          await removeSessionFromCache(getCachePath(), session.filePath);
+          processed.push({ ...session, deleted: session.filePath });
+          continue;
+        }
+      }
       const source = await resolveLocalSource(session.id, session.filePath, sessionsRoot, findActiveSessionFile);
       assertInsideDir(source, sessionsRoot, "拒绝将 sessions 目录之外的文件移动到回收站");
       const relative = path.relative(codexHome, source);
@@ -205,6 +222,14 @@ export async function restoreSession(sessionId: string) {
 export async function purgeSession(sessionId: string, filePathHint?: string) {
   const trashRoot = getTrashRoot();
   const trashSessionsRoot = path.join(trashRoot, "sessions");
+  if (filePathHint && !(await pathExists(filePathHint))) {
+    const fallback = await findTrashSessionFile(sessionId).catch(() => null);
+    if (fallback) filePathHint = fallback;
+    else {
+      await removeSessionFromCache(getTrashCachePath(), filePathHint);
+      return { deleted: filePathHint, stale: true };
+    }
+  }
   const source = await resolveLocalSource(sessionId, filePathHint, trashSessionsRoot, findTrashSessionFile);
   assertInsideDir(source, trashSessionsRoot, "拒绝删除回收站目录之外的文件");
 

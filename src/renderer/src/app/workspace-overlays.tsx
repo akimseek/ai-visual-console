@@ -19,6 +19,7 @@ export type TabContextMenuState = {
 
 type WorkspaceOverlaysProps = {
   detailDialogSession: AiSession | null;
+  detailTargetId?: string;
   selectedSessionDetails: AiSession | null;
   selectedSessionLoading: boolean;
   detailLoadError: string;
@@ -52,6 +53,7 @@ type WorkspaceOverlaysProps = {
 /** 工作区浮层展示层：集中详情弹框和两个右键菜单，业务动作由页面传入。 */
 export function WorkspaceOverlays({
   detailDialogSession,
+  detailTargetId,
   selectedSessionDetails,
   selectedSessionLoading,
   detailLoadError,
@@ -86,6 +88,7 @@ export function WorkspaceOverlays({
       {detailDialogSession && (
         <SessionDetailModal
           session={detailDialogSession}
+          targetId={detailTargetId}
           selectedSessionDetails={selectedSessionDetails}
           loading={selectedSessionLoading}
           loadError={detailLoadError}

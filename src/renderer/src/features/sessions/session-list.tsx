@@ -10,6 +10,7 @@ import { IconButton } from "../../components/icon-button";
 // 前提是父级传入的回调引用稳定（见 App.tsx 的 useStableCallback）。
 export const SessionList = memo(function SessionList({
   sessions,
+  targetId,
   loading,
   emptyMessage,
   activeSessionId,
@@ -21,6 +22,7 @@ export const SessionList = memo(function SessionList({
   onOpen
 }: {
   sessions: AiSession[];
+  targetId: string;
   loading: boolean;
   emptyMessage: string;
   activeSessionId?: string;
@@ -38,7 +40,7 @@ export const SessionList = memo(function SessionList({
       {!loading && sessions.length === 0 && <div className="empty-state">{emptyMessage}</div>}
       {sessions.map((session) => (
         <div
-          key={session.id}
+          key={`${targetId}:${session.id}:${session.filePath}`}
           className={`session-row ${activeSessionId === session.id || selectedId === session.id ? "active" : ""}`}
           title={session.title}
           onContextMenu={(event) => onContextMenu(event, session)}

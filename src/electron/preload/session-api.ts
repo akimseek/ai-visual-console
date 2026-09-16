@@ -5,6 +5,7 @@ import type {
   SessionExportFormat,
   SessionExportResult,
   SessionFileRef,
+  SessionDeleteResult,
   SessionMessagePage,
   SessionMetadata,
   SessionQuickAccess,
@@ -43,7 +44,7 @@ export function createSessionApi(ipc: IpcRenderer) {
     duplicateSession: (targetId: string, sessionId: string, title: string) =>
       invoke<AiSession>(ipc, "codex:duplicate-session", targetId, sessionId, title),
     deleteSession: (targetId: string, sessionId: string, ref?: SessionFileRef) =>
-      invoke<{ movedTo: string }>(ipc, "codex:delete-session", targetId, sessionId, ref),
+      invoke<SessionDeleteResult>(ipc, "codex:delete-session", targetId, sessionId, ref),
     deleteSessions: (targetId: string, sessions: SessionMutationRef[]) =>
       invoke<{ processed: Array<SessionMutationRef & { movedTo?: string; deleted?: string }> }>(ipc, "codex:delete-sessions", targetId, sessions),
     restoreSession: (targetId: string, sessionId: string) =>

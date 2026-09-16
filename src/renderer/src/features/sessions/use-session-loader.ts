@@ -39,13 +39,16 @@ export function useSessionLoader({
   return useCallback(async (nextTargetId = targetId, nextView = view, force = false) => {
     if (!nextTargetId) return;
     const cacheKey = sessionCacheKey(nextTargetId, nextView);
+    const affectsCurrentTarget = nextTargetId === targetId;
     if (!force && loadedViews[cacheKey]) return;
     const version = (versions.current.get(cacheKey) || 0) + 1;
     versions.current.set(cacheKey, version);
     const isCurrent = () => versions.current.get(cacheKey) === version;
 
-    setSessionLoading(true);
-    setError("");
+    if (affectsCurrentTarget) {
+      setSessionLoading(true);
+      setError("");
+    }
     let hasCachedSessions = false;
     if (!force) {
       const startedAt = performance.now();
@@ -58,8 +61,10 @@ export function useSessionLoader({
           const sessions = nextView === "active" ? preserveActiveSessions(cachedItems, nextTargetId) : cachedItems;
           setSessionCache((current) => ({ ...current, [cacheKey]: sessions }));
           setLoadedViews((current) => ({ ...current, [cacheKey]: true }));
-          setSelectedId((current) => (sessions.some((item) => item.id === current) ? current : ""));
-          setSessionLoading(false);
+          if (affectsCurrentTarget) {
+            setSelectedId((current) => (sessions.some((item) => item.id === current) ? current : ""));
+            setSessionLoading(false);
+          }
           return;
         }
       } catch (error) {
@@ -77,19 +82,25 @@ export function useSessionLoader({
       const sessions = nextView === "active" ? preserveActiveSessions(items, nextTargetId) : items;
       setSessionCache((current) => ({ ...current, [cacheKey]: sessions }));
       setLoadedViews((current) => ({ ...current, [cacheKey]: true }));
-      setSelectedId((current) => (sessions.some((item) => item.id === current) ? current : ""));
+      if (affectsCurrentTarget) {
+        setSelectedId((current) => (sessions.some((item) => item.id === current) ? current : ""));
+      }
       void logPerformance(`renderer.sessions.${nextView}.loaded.${nextTargetId}`, performance.now() - startedAt);
     } catch (error) {
       if (!isCurrent()) return;
       if (!hasCachedSessions) {
         setSessionCache((current) => ({ ...current, [cacheKey]: [] }));
         setLoadedViews((current) => ({ ...current, [cacheKey]: true }));
-        setSelectedId("");
-        setError(captureError(error, `loadSessions:${nextTargetId}`, "加载 AI 会话失败。"));
+        if (affectsCurrentTarget) {
+          setSelectedId("");
+          setError(captureError(error, `loadSessions:${nextTargetId}`, "加载 AI 会话失败。"));
+        } else {
+          captureError(error, `loadSessions:${nextTargetId}`);
+        }
       }
       void logPerformance(`renderer.sessions.${nextView}.loaded.${nextTargetId}`, performance.now() - startedAt, "error");
     } finally {
-      if (!hasCachedSessions && isCurrent()) setSessionLoading(false);
+      if (!hasCachedSessions && isCurrent() && affectsCurrentTarget) setSessionLoading(false);
     }
   }, [
     loadedViews,

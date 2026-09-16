@@ -32,6 +32,7 @@ export type {
   SessionBranchMetadata,
   SessionBranchParams,
   SessionBatchMutationResult,
+  SessionDeleteResult,
   SessionFileRef,
   SessionMutationRef,
   SessionModelStatus,

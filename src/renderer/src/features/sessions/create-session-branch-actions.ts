@@ -2,7 +2,7 @@ import type { Dispatch, SetStateAction } from "react";
 import type { BranchPanelState } from "./branch-panel";
 import type { ConversationTurn } from "./conversation";
 import { mergeSession } from "./session-format";
-import type { AiSession } from "../../types";
+import type { AiSession, AiTarget } from "../../types";
 
 export function createSessionBranchActions({
   targetId,
@@ -20,14 +20,14 @@ export function createSessionBranchActions({
     action: () => Promise<unknown>,
     options?: { errorAsNotice?: boolean }
   ) => Promise<void>;
-  loadActiveSessions: () => Promise<void>;
+  loadActiveSessions: (targetId?: string) => Promise<void>;
   setBranchPanel: Dispatch<SetStateAction<BranchPanelState | null>>;
-  openDerivedSession: (session: AiSession) => void;
+  openDerivedSession: (session: AiSession, sourceTargetId?: string, sourceTarget?: AiTarget) => void;
   setError: (message: string) => void;
   setNotice: (message: string) => void;
   clearPendingTerminalTab: () => void;
 }) {
-  async function branchFromTurn(session: AiSession, turn: ConversationTurn) {
+  async function branchFromTurn(session: AiSession, turn: ConversationTurn, sourceTargetId = targetId, sourceTarget?: AiTarget) {
     setError("");
     setNotice("");
     clearPendingTerminalTab();
@@ -35,14 +35,15 @@ export function createSessionBranchActions({
       await runWorkspaceAction("正在创建分支会话...", async () => {
         const messageLine = getBranchMessageLine(turn);
         if (messageLine <= 0) throw new Error("当前会话没有可保留的上下文。");
-        const branch = await window.codexConsole.branchSession({ targetId, sessionId: session.id, messageLine });
-        await loadActiveSessions();
+        const branch = await window.codexConsole.branchSession({ targetId: sourceTargetId, sessionId: session.id, messageLine });
+        if (branch.id === session.id) throw new Error("Codex 返回了与原会话相同的分支编号，已拒绝打开以避免覆盖原会话。");
+        await loadActiveSessions(sourceTargetId);
         setBranchPanel((current) =>
-          current?.sessionId === session.id
+          current?.targetId === sourceTargetId && current.sessionId === session.id
             ? { ...current, children: mergeSession(current.children, branch), loading: false }
             : current
         );
-        openDerivedSession(branch);
+        openDerivedSession(branch, sourceTargetId, sourceTarget);
       }, { errorAsNotice: true });
     } finally {
       clearPendingTerminalTab();

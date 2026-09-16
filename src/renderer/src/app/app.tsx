@@ -298,12 +298,15 @@ export function App() {
   });
   const {
     detailDialogSession,
+    detailTargetId,
+    detailTarget,
     setDetailDialogSession,
     selectedSessionDetails,
     setSelectedSessionDetails,
     selectedSessionLoading,
     setSelectedSessionLoading,
     detailLoadError,
+    openSessionDetail,
     retryDetailMessages,
     branchPanel,
     detailHasMore,
@@ -314,6 +317,7 @@ export function App() {
     resetSessionDetails
   } = useSessionDetails({
     targetId,
+    selectedTarget,
     activeSession,
     view,
     supportsBranch: Boolean(capabilities?.branch),
@@ -324,7 +328,8 @@ export function App() {
     setOpenTabs,
     setSelectedSessionDetails,
     setDetailDialogSession,
-    setBranchPanel
+    setBranchPanel,
+    detailTargetId
   });
   const activeTerminalId = activeTab ? terminalIdsByTabKey[activeTab.key] : undefined;
   const activeRouteProviderId = activeTab?.target.provider;
@@ -414,9 +419,11 @@ export function App() {
     activeTerminalInputState,
     canToggleTerminalInput,
     openSessionTabWithCwdCheck: sessionTabs.openSessionTabWithCwdCheck,
+    openSessionDetailDialog: openSessionDetail,
     selectedSession: selected,
     activeSession,
     selectedSessionDetails,
+    detailTargetId,
     applySessionSnapshot: sessionCacheOperations.applySessionSnapshot,
     loadSessions,
     loadTargets,
@@ -496,7 +503,7 @@ export function App() {
   const { branchFromTurn } = createSessionBranchActions({
     targetId,
     runWorkspaceAction,
-    loadActiveSessions: () => loadSessions(targetId, "active", true),
+    loadActiveSessions: (nextTargetId = targetId) => loadSessions(nextTargetId, "active", true),
     setBranchPanel,
     openDerivedSession: sessionTabs.openDerivedSession,
     setError,
@@ -651,6 +658,7 @@ export function App() {
     if (!targetId) return;
     const activeSessionForTarget = activeTab?.targetId === targetId ? activeTab.session : null;
     setSelectedId(activeSessionForTarget?.id || "");
+    setSelectedBatchIds([]);
     resetSessionDetails();
     // 目标切换只清理当前列表和详情状态；已打开终端保留其标签快照继续运行。
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -678,8 +686,9 @@ export function App() {
     const openSessions = openTabs
       .filter((tab) => tab.targetId === nextTargetId && tab.session)
       .map((tab) => tab.session as AiSession);
-    const selectedSession =
-      selectedSessionDetails && targetId === nextTargetId ? selectedSessionDetails : selected;
+    const selectedSession = targetId === nextTargetId
+      ? selectedSessionDetails || selected
+      : null;
     const merged = openSessions.reduce((next, session) => mergeSession(next, session), items);
     return selectedSession && selectedSession.id
       ? mergeSession(merged, selectedSession)
@@ -929,6 +938,7 @@ export function App() {
           onOpen={(result) => void openGlobalSearchResult(result)}
         /> : <SessionList
           sessions={filtered}
+          targetId={targetId}
           loading={sessionLoading || searchLoading}
           emptyMessage={searchQuery ? "未找到匹配会话。" : view === "trash" ? "回收站为空。" : "未找到会话。"}
           activeSessionId={activeSessionForSelectedTarget?.id}
@@ -978,6 +988,7 @@ export function App() {
 
         <WorkspaceOverlays
           detailDialogSession={detailDialogSession}
+          detailTargetId={detailTargetId}
           selectedSessionDetails={selectedSessionDetails}
           selectedSessionLoading={selectedSessionLoading}
           detailLoadError={detailLoadError}
@@ -988,8 +999,8 @@ export function App() {
           onLoadMore={loadMoreDetailMessages}
           onRetryDetail={retryDetailMessages}
           onCloseDetail={() => setDetailDialogSession(null)}
-          onOpenSession={workspaceActions.openSessionDetail}
-          onBranchFromTurn={(session, turn) => void branchFromTurn(session, turn)}
+          onOpenSession={(session) => openSessionDetail(session, detailTargetId, detailTarget)}
+          onBranchFromTurn={(session, turn) => void branchFromTurn(session, turn, detailTargetId, detailTarget)}
           contextMenu={contextMenu}
           supportsTrash={supportsTrash}
           supportsDuplicate={supportsDuplicate}

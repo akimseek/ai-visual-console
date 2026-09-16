@@ -39,6 +39,11 @@ export type SessionBatchMutationResult = {
   processed: Array<SessionMutationRef & { movedTo?: string; deleted?: string }>;
 };
 
+export type SessionDeleteResult = {
+  movedTo?: string;
+  stale?: boolean;
+};
+
 export type TokenUsage = {
   inputTokens?: number;
   cachedInputTokens?: number;

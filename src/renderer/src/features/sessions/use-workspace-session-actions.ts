@@ -29,9 +29,11 @@ export function useWorkspaceSessionActions(options: {
   activeTerminalInputState: TerminalInputState | null;
   canToggleTerminalInput: boolean;
   openSessionTabWithCwdCheck: (session: AiSession, openResumeWithDirectory: (session: AiSession, cwd: string) => void) => Promise<void>;
+  openSessionDetailDialog: (session: AiSession) => void;
   selectedSession: AiSession | null;
   activeSession: AiSession | null;
   selectedSessionDetails: AiSession | null;
+  detailTargetId?: string;
   applySessionSnapshot: (targetId: string, session: AiSession) => void;
   loadSessions: (targetId: string, view: SessionView, force?: boolean) => Promise<void>;
   loadTargets: (providerId: AiProviderId, options?: { showLoading?: boolean }) => Promise<void>;
@@ -62,9 +64,11 @@ export function useWorkspaceSessionActions(options: {
     activeTerminalInputState,
     canToggleTerminalInput,
     openSessionTabWithCwdCheck,
+    openSessionDetailDialog,
     selectedSession,
     activeSession,
     selectedSessionDetails,
+    detailTargetId,
     applySessionSnapshot,
     loadSessions,
     loadTargets,
@@ -92,8 +96,9 @@ export function useWorkspaceSessionActions(options: {
     await loadSessions(targetId, view, true);
     const session = selectedSessionDetails || activeSession || selectedSession;
     if (session) {
-      const refreshed = await refreshSessionSnapshot(targetId, session.id, session.filePath);
-      if (refreshed) applySessionSnapshot(targetId, refreshed);
+      const sessionTargetId = selectedSessionDetails && detailTargetId ? detailTargetId : targetId;
+      const refreshed = await refreshSessionSnapshot(sessionTargetId, session.id, session.filePath);
+      if (refreshed) applySessionSnapshot(sessionTargetId, refreshed);
     }
   }
 
@@ -128,7 +133,7 @@ export function useWorkspaceSessionActions(options: {
 
   function openSessionDetail(session: AiSession) {
     setSelectedId(session.id);
-    setDetailDialogSession(session);
+    openSessionDetailDialog(session);
     setError("");
     setNotice("");
   }

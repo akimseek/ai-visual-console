@@ -14,13 +14,15 @@ export function useSessionCacheOperations(options: {
   setSelectedSessionDetails: Dispatch<SetStateAction<AiSession | null>>;
   setDetailDialogSession: Dispatch<SetStateAction<AiSession | null>>;
   setBranchPanel: Dispatch<SetStateAction<BranchPanelState | null>>;
+  detailTargetId?: string;
 }) {
   const {
     setSessionCache,
     setOpenTabs,
     setSelectedSessionDetails,
     setDetailDialogSession,
-    setBranchPanel
+    setBranchPanel,
+    detailTargetId
   } = options;
 
   function updateCachedSessions(
@@ -51,13 +53,15 @@ export function useSessionCacheOperations(options: {
       const session = applySessionCustomTitle(tab.session, metadata);
       return { ...tab, session, title: historyTabTitle(session) };
     }));
-    setSelectedSessionDetails((current) => current?.id === sessionId ? applySessionCustomTitle(current, metadata) : current);
-    setDetailDialogSession((current) => current?.id === sessionId ? applySessionCustomTitle(current, metadata) : current);
-    setBranchPanel((current) => current ? {
-      ...current,
-      parent: current.parent?.id === sessionId ? applySessionCustomTitle(current.parent, metadata) : current.parent,
-      children: current.children.map(rename)
-    } : current);
+    if (detailTargetId === targetId) {
+      setSelectedSessionDetails((current) => current?.id === sessionId ? applySessionCustomTitle(current, metadata) : current);
+      setDetailDialogSession((current) => current?.id === sessionId ? applySessionCustomTitle(current, metadata) : current);
+      setBranchPanel((current) => current ? {
+        ...current,
+        parent: current.parent?.id === sessionId ? applySessionCustomTitle(current.parent, metadata) : current.parent,
+        children: current.children.map(rename)
+      } : current);
+    }
   }
 
   return { updateCachedSessions, applySessionSnapshot, applyCustomTitle };

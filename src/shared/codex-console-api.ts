@@ -40,6 +40,7 @@ import type {
   SessionExportFormat,
   SessionExportResult,
   SessionFileRef,
+  SessionDeleteResult,
   SessionMessagePage,
   SessionMetadata,
   SessionQuickAccess,
@@ -123,7 +124,7 @@ export type CodexConsoleApi = {
   exportSession: (targetId: string, sessionId: string, format: SessionExportFormat) => Promise<SessionExportResult | null>;
   branchSession: (params: SessionBranchParams) => Promise<AiSession>;
   duplicateSession: (targetId: string, sessionId: string, title: string) => Promise<AiSession>;
-  deleteSession: (targetId: string, sessionId: string, ref?: SessionFileRef) => Promise<{ movedTo: string }>;
+  deleteSession: (targetId: string, sessionId: string, ref?: SessionFileRef) => Promise<SessionDeleteResult>;
   deleteSessions: (targetId: string, sessions: SessionMutationRef[]) => Promise<SessionBatchMutationResult>;
   restoreSession: (targetId: string, sessionId: string) => Promise<{ restoredTo: string }>;
   purgeSession: (targetId: string, sessionId: string, ref?: SessionFileRef) => Promise<{ deleted: string }>;

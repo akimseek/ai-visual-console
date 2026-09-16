@@ -92,11 +92,27 @@ export async function listCachedTargets(): Promise<CodexTarget[]> {
 
 export async function listCachedSessions(targetId: string, view: "active" | "trash"): Promise<CodexSession[]> {
   if (targetId === "local") {
-    return applySessionMetadataList(targetId, await listCachedSessionsFromCache(view === "trash" ? getTrashCachePath() : getCachePath()));
+    const cachePath = view === "trash" ? getTrashCachePath() : getCachePath();
+    const cached = await listCachedSessionsFromCache(cachePath);
+    const existing = [] as CodexSession[];
+    for (const session of cached) {
+      if (await pathExists(session.filePath)) existing.push(session);
+      else await removeSessionFromCache(cachePath, session.filePath);
+    }
+    return applySessionMetadataList(targetId, existing);
   }
 
   const distro = getWslDistroFromProviderTarget("codex", targetId);
-  if (distro) return applySessionMetadataList(targetId, await listCachedSessionsFromCache(getWslCachePath(distro, view)));
+  if (distro) {
+    const cachePath = getWslCachePath(distro, view);
+    const cached = await listCachedSessionsFromCache(cachePath);
+    const existing = [] as CodexSession[];
+    for (const session of cached) {
+      if (await wslPathExists(distro, session.filePath)) existing.push(session);
+      else await removeSessionFromCache(cachePath, session.filePath);
+    }
+    return applySessionMetadataList(targetId, existing);
+  }
 
   return [];
 }
@@ -346,6 +362,9 @@ export async function branchSession(targetId: string, sessionId: string, message
     const branch = effectiveTarget.kind === "local"
       ? await loadLocalSession(fork.filePath)
       : await loadWslSession(effectiveTarget.distro!, fork.filePath);
+    if (branch.id !== fork.threadId || branch.id === session.id) {
+      throw new Error("Codex 返回的分支线程编号无效，已拒绝覆盖原会话。");
+    }
     branch.metadata = await setSessionBranchMetadata(effectiveTarget.id, branch.id, {
       parentTargetId: targetId,
       parentSessionId: session.id,
@@ -393,7 +412,14 @@ export async function deleteSession(targetId: string, sessionId: string, ref?: S
 
     const codexHome = target.codexHome || (await resolveWslCodexHome(target.distro!));
     const sessionsRoot = path.posix.join(codexHome, "sessions");
-    const source = ref?.filePath || (await findWslActiveSessionFile(targetId, sessionId));
+    let source = ref?.filePath || (await findWslActiveSessionFile(targetId, sessionId));
+    if (ref?.filePath && !(await wslPathExists(target.distro!, source))) {
+      source = await findWslActiveSessionFile(targetId, sessionId).catch(() => "");
+      if (!source) {
+        await removeSessionFromCache(getWslCachePath(target.distro!), ref.filePath!);
+        return { stale: true };
+      }
+    }
     if (!isInsidePosixDir(source, sessionsRoot)) {
       throw new Error("拒绝移动 sessions 目录之外的文件");
     }
@@ -420,8 +446,17 @@ export async function deleteSessions(targetId: string, sessions: SessionMutation
 
     const codexHome = target.codexHome || (await resolveWslCodexHome(target.distro!));
     const sessionsRoot = path.posix.join(codexHome, "sessions");
-    const entries = await Promise.all(sessions.map(async (session) => {
+    const entries: Array<SessionMutationRef & { filePath: string; movedTo?: string; deleted?: string }> = await Promise.all(sessions.map(async (session) => {
       const source = session.filePath || (await findWslActiveSessionFile(targetId, session.id));
+      if (session.filePath && !(await wslPathExists(target.distro!, source))) {
+        const fallback = await findWslActiveSessionFile(targetId, session.id).catch(() => "");
+        if (fallback) {
+          const relative = fallback.slice(codexHome.replace(/\/+$/, "").length + 1);
+          return { ...session, filePath: fallback, movedTo: path.posix.join(codexHome, ".visual-console-trash", relative) };
+        }
+        await removeSessionFromCache(getWslCachePath(target.distro!), source);
+        return { ...session, filePath: source, deleted: source, movedTo: "" };
+      }
       if (!isInsidePosixDir(source, sessionsRoot)) throw new Error("拒绝移动 sessions 目录之外的文件");
       await verifyWslSessionId(target.distro!, source, session.id);
       const relative = source.slice(codexHome.replace(/\/+$/, "").length + 1);
@@ -432,13 +467,14 @@ export async function deleteSessions(targetId: string, sessions: SessionMutation
       };
     }));
 
-    const script = entries
+    const movableEntries = entries.filter((entry): entry is SessionMutationRef & { filePath: string; movedTo: string } => Boolean(!entry.deleted && entry.movedTo));
+    const script = movableEntries
       .map((entry) => `mkdir -p ${shellQuote(path.posix.dirname(entry.movedTo))} && mv -- ${shellQuote(entry.filePath)} ${shellQuote(entry.movedTo)}`)
       .join("\n");
-    await runWslShell(target.distro!, script);
+    if (script) await runWslShell(target.distro!, script);
     await Promise.all([
-      removeSessionsFromCache(getWslCachePath(target.distro!), entries.map((entry) => entry.filePath)),
-      removeSessionsFromCache(getWslCachePath(target.distro!, "trash"), entries.map((entry) => entry.movedTo))
+      removeSessionsFromCache(getWslCachePath(target.distro!), movableEntries.map((entry) => entry.filePath)),
+      removeSessionsFromCache(getWslCachePath(target.distro!, "trash"), movableEntries.map((entry) => entry.movedTo))
     ]);
     return { processed: entries };
   });
@@ -480,7 +516,14 @@ export async function purgeSession(targetId: string, sessionId: string, ref?: Se
 
     const codexHome = target.codexHome || (await resolveWslCodexHome(target.distro!));
     const trashSessionsRoot = path.posix.join(codexHome, ".visual-console-trash", "sessions");
-    const source = ref?.filePath || (await findWslTrashSessionFile(targetId, sessionId));
+    let source = ref?.filePath || (await findWslTrashSessionFile(targetId, sessionId));
+    if (ref?.filePath && !(await wslPathExists(target.distro!, source))) {
+      source = await findWslTrashSessionFile(targetId, sessionId).catch(() => "");
+      if (!source) {
+        await removeSessionFromCache(getWslCachePath(target.distro!, "trash"), ref.filePath!);
+        return { deleted: ref.filePath, stale: true };
+      }
+    }
     if (!isInsidePosixDir(source, trashSessionsRoot)) {
       throw new Error("拒绝删除回收站目录之外的文件");
     }

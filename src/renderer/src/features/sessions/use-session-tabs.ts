@@ -66,30 +66,40 @@ export function useSessionTabs(options: {
     target: AiTarget,
     openResumeWithDirectory: (session: AiSession, cwd: string, target?: AiTarget) => void
   ) {
-    setSelectedId(session.id);
-    const sessionCwd = session.cwd?.trim();
+    let sessionToOpen = session;
+    if (session.filePath && !(await window.codexConsole.pathExists({ targetId: target.id, path: session.filePath }).catch(() => false))) {
+      const refreshed = await window.codexConsole.getSession(target.id, session.id).catch(() => null);
+      if (!refreshed) {
+        await loadSessions(target.id, "active", true);
+        setNotice("该会话文件已不存在，已刷新会话列表。");
+        return;
+      }
+      sessionToOpen = { ...session, ...refreshed };
+    }
+    setSelectedId(sessionToOpen.id);
+    const sessionCwd = sessionToOpen.cwd?.trim();
     if (sessionCwd) {
       const exists = await window.codexConsole.pathExists({ targetId: target.id, path: sessionCwd }).catch(() => false);
       if (!exists) {
-        openResumeWithDirectory(session, sessionCwd, target);
+        openResumeWithDirectory(sessionToOpen, sessionCwd, target);
         return;
       }
     }
 
-    const key = tabKey(target.id, session.id);
+    const key = tabKey(target.id, sessionToOpen.id);
     const requiresSessionCwd = target.provider === "qoder";
     activateTerminalTab({
       key,
       targetId: target.id,
       target,
-      session,
-      title: historyTabTitle(session),
+      session: sessionToOpen,
+      title: historyTabTitle(sessionToOpen),
       // Qoder 按项目目录定位 --resume 的历史文件，恢复时必须保留原始工作目录。
       cwd: requiresSessionCwd ? sessionCwd : undefined,
       codexHome: target.codexHome,
       useCodexCwdFlag: requiresSessionCwd
     });
-    void window.codexConsole.markSessionOpened(target.id, session.id)
+    void window.codexConsole.markSessionOpened(target.id, sessionToOpen.id)
       .then(() => onSessionOpened?.())
       .catch(() => undefined);
     setError("");
@@ -160,18 +170,18 @@ export function useSessionTabs(options: {
     setNotice("");
   }
 
-  function openDerivedSession(session: AiSession) {
-    if (!selectedTarget) return;
-    const key = tabKey(targetId, session.id);
+  function openDerivedSession(session: AiSession, sourceTargetId = targetId, sourceTarget = selectedTarget) {
+    if (!sourceTarget) return;
+    const key = tabKey(sourceTargetId, session.id);
     setView("active");
     setDetailDialogSession(null);
     activateTerminalTab({
       key,
-      targetId,
-      target: selectedTarget,
+      targetId: sourceTargetId,
+      target: sourceTarget,
       session,
       title: historyTabTitle(session),
-      codexHome: selectedTarget?.codexHome
+      codexHome: sourceTarget.codexHome
     }, true);
     setError("");
     setNotice("已创建新的分支会话。");

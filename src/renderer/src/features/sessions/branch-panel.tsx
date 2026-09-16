@@ -5,6 +5,7 @@ import { shortSessionId } from "./session-format";
 // 会话详情中的“分支关系”面板：展示来源会话与子分支，从 App.tsx 抽出为独立组件。
 
 export type BranchPanelState = {
+  targetId: string;
   sessionId: string;
   parent?: AiSession | null;
   children: AiSession[];
@@ -13,18 +14,21 @@ export type BranchPanelState = {
 
 export function BranchPanel({
   session,
+  targetId,
   state,
   onOpen
 }: {
   session: AiSession;
+  targetId?: string;
   state: BranchPanelState | null;
   onOpen: (session: AiSession) => void;
 }) {
   const branch = session.metadata?.branch;
   const hasParent = Boolean(branch?.parentSessionId);
-  const children = state?.sessionId === session.id ? state.children : [];
-  const parent = state?.sessionId === session.id ? state.parent : null;
-  const loading = state?.sessionId === session.id && state.loading;
+  const matches = state?.sessionId === session.id && (!targetId || state.targetId === targetId);
+  const children = matches ? state.children : [];
+  const parent = matches ? state.parent : null;
+  const loading = matches && state.loading;
 
   if (!hasParent && children.length === 0 && !loading) return null;
 

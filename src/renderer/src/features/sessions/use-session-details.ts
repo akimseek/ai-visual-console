@@ -1,11 +1,12 @@
 import { useEffect, useState } from "react";
 import type { BranchPanelState } from "./branch-panel";
-import type { AiSession } from "../../types";
+import type { AiSession, AiTarget } from "../../types";
 import type { SessionView } from "./use-session-loader";
 import { captureError } from "../../hooks/error-utils";
 
 type UseSessionDetailsOptions = {
   targetId: string;
+  selectedTarget?: AiTarget;
   activeSession: AiSession | null;
   view: SessionView;
   supportsBranch: boolean;
@@ -14,12 +15,15 @@ type UseSessionDetailsOptions = {
 
 export function useSessionDetails({
   targetId,
+  selectedTarget,
   activeSession,
   view,
   supportsBranch,
   notifyError
 }: UseSessionDetailsOptions) {
   const [detailDialogSession, setDetailDialogSession] = useState<AiSession | null>(null);
+  const [detailTargetId, setDetailTargetId] = useState("");
+  const [detailTarget, setDetailTarget] = useState<AiTarget | undefined>();
   const [selectedSessionDetails, setSelectedSessionDetails] = useState<AiSession | null>(null);
   const [selectedSessionLoading, setSelectedSessionLoading] = useState(false);
   const [detailLoadError, setDetailLoadError] = useState("");
@@ -52,7 +56,7 @@ export function useSessionDetails({
     setSelectedSessionLoading(true);
     setDetailLoadError("");
     void window.codexConsole
-      .getSessionMessagesPage(targetId, sessionToLoad.id, -1, 100)
+      .getSessionMessagesPage(detailTargetId, sessionToLoad.id, -1, 100)
       .then((page) => {
         if (cancelled) return;
         const session = { ...sessionToLoad, preview: page.messages, previewOffset: page.offset, messageCount: Math.max(sessionToLoad.messageCount, page.offset + page.messages.length) };
@@ -75,7 +79,7 @@ export function useSessionDetails({
     };
     // 详情仅请求首个消息页；进入终端和详情首屏都不读取完整 JSONL。
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [targetId, detailDialogSession?.id, detailRetryKey]);
+  }, [detailTargetId, detailDialogSession?.id, detailRetryKey]);
 
   useEffect(() => {
     if (detailDialogSession) return;
@@ -86,20 +90,22 @@ export function useSessionDetails({
 
   useEffect(() => {
     const session = selectedSessionDetails;
-    if (!detailDialogSession || !targetId || !session || view !== "active" || !supportsBranch) {
+    if (!detailDialogSession || !detailTargetId || !session || view !== "active" || !supportsBranch) {
       setBranchPanel(null);
       return;
     }
 
     let cancelled = false;
     setBranchPanel((current) => ({
+      targetId: detailTargetId,
       sessionId: session.id,
-      parent: current?.sessionId === session.id ? current.parent : null,
-      children: current?.sessionId === session.id ? current.children : [],
+      parent: current?.targetId === detailTargetId && current.sessionId === session.id ? current.parent : null,
+      children: current?.targetId === detailTargetId && current.sessionId === session.id ? current.children : [],
       loading: true
     }));
     const parentSessionId = session.metadata?.branch?.parentSessionId;
-    const parentTargetId = session.metadata?.branch?.parentTargetId || targetId;
+    // 分支关系只能在详情来源目标内解析；元数据中的旧目标标记可能来自早期跨环境回归。
+    const parentTargetId = detailTargetId;
     void Promise.all([
       parentSessionId
         ? window.codexConsole.getSessionSummary(parentTargetId, parentSessionId).catch((error) => {
@@ -107,19 +113,25 @@ export function useSessionDetails({
           return null;
         })
         : Promise.resolve(null),
-      window.codexConsole.listSessionChildren(targetId, session.id).catch((error) => {
+      window.codexConsole.listSessionChildren(detailTargetId, session.id).catch((error) => {
         captureError(error, `loadSessionChildren:${session.id}`);
         return [];
       })
     ]).then(([parent, children]) => {
-      if (!cancelled) setBranchPanel({ sessionId: session.id, parent, children, loading: false });
+      if (!cancelled) setBranchPanel({ targetId: detailTargetId, sessionId: session.id, parent, children, loading: false });
     });
     return () => {
       cancelled = true;
     };
     // 仅会话、父分支和能力变化时重新读取关系。
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [targetId, view, supportsBranch, detailDialogSession?.id, selectedSessionDetails?.id, selectedSessionDetails?.metadata?.branch?.parentSessionId]);
+  }, [detailTargetId, view, supportsBranch, detailDialogSession?.id, selectedSessionDetails?.id, selectedSessionDetails?.metadata?.branch?.parentSessionId]);
+
+  function openSessionDetail(session: AiSession, sourceTargetId = targetId, sourceTarget = selectedTarget) {
+    setDetailTargetId(sourceTargetId);
+    setDetailTarget(sourceTarget);
+    setDetailDialogSession(session);
+  }
 
   async function refreshSessionSnapshot(nextTargetId: string, sessionId: string, filePath?: string) {
     try {
@@ -135,6 +147,8 @@ export function useSessionDetails({
 
   function resetSessionDetails() {
     setDetailDialogSession(null);
+    setDetailTargetId("");
+    setDetailTarget(undefined);
     setSelectedSessionDetails(null);
     setSelectedSessionLoading(false);
     setBranchPanel(null);
@@ -148,7 +162,7 @@ export function useSessionDetails({
     setDetailLoadingMore(true);
     try {
       const offset = Math.max(0, (selectedSessionDetails.previewOffset || 0) - 100);
-      const page = await window.codexConsole.getSessionMessagesPage(targetId, detailDialogSession.id, offset, 100);
+      const page = await window.codexConsole.getSessionMessagesPage(detailTargetId, detailDialogSession.id, offset, 100);
       setSelectedSessionDetails((current) => current?.id === detailDialogSession.id
         ? { ...current, preview: [...page.messages, ...current.preview], previewOffset: page.offset }
         : current);
@@ -166,6 +180,9 @@ export function useSessionDetails({
 
   return {
     detailDialogSession,
+    detailTargetId,
+    detailTarget,
+    openSessionDetail,
     setDetailDialogSession,
     selectedSessionDetails,
     setSelectedSessionDetails,

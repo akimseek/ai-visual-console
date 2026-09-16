@@ -12,7 +12,7 @@ export function skillSourceName(skill: InstalledSkill) {
 }
 
 export function mergeSession(sessions: AiSession[], session: AiSession) {
-  if (sessions.some((item) => item.id === session.id)) return sessions;
+  if (sessions.some((item) => sameSession(item, session))) return sessions;
   return [session, ...sessions].sort((left, right) => {
     return sessionTimestamp(right) - sessionTimestamp(left);
   });
@@ -21,11 +21,16 @@ export function mergeSession(sessions: AiSession[], session: AiSession) {
 export function replaceCachedSession(sessions: AiSession[], session: AiSession) {
   let changed = false;
   const next = sessions.map((item) => {
-    if (item.id !== session.id) return item;
+    if (!sameSession(item, session)) return item;
     changed = true;
     return session;
   });
   return changed ? next : sessions;
+}
+
+// UUID 只在单一 Codex 目标内唯一；跨 Windows/WSL 导入时可能重复，文件路径用于保留两个目标的独立记录。
+function sameSession(left: AiSession, right: AiSession) {
+  return left.id === right.id && left.filePath === right.filePath;
 }
 
 export function localFilterSessions(sessions: AiSession[], query: string) {

@@ -33,6 +33,7 @@ function MessageText({ text }: { text: string }) {
 
 export function SessionDetailModal({
   session,
+  targetId,
   selectedSessionDetails,
   loading,
   loadError,
@@ -47,6 +48,7 @@ export function SessionDetailModal({
   onBranchFromTurn
 }: {
   session: AiSession;
+  targetId?: string;
   selectedSessionDetails: AiSession | null;
   loading: boolean;
   loadError: string;
@@ -132,7 +134,7 @@ export function SessionDetailModal({
             </div>
           ) : (
             <>
-              <BranchPanel session={detailSession} state={branchPanel} onOpen={onOpenSession} />
+              <BranchPanel session={detailSession} targetId={targetId} state={branchPanel} onOpen={onOpenSession} />
               <section className="session-detail-timeline" aria-label="会话时间线">
                 <div className="session-detail-timeline-heading">
                   <span>消息记录</span>
