@@ -8,10 +8,11 @@ import { setSessionCacheRoot } from "./codex-store";
 vi.mock("../session-metadata", () => ({
   applySessionMetadata: async (_targetId: string, session: unknown) => session,
   applySessionMetadataList: async (_targetId: string, sessions: unknown) => sessions,
+  deleteSessionMetadata: async () => undefined,
   setSessionBranchMetadata: async () => ({})
 }));
 
-import { findBranchTurnId, getSession, getSessionMessagesPage } from "./codex-targets";
+import { canonicalizeForkedSession, findBranchTurnId, getSession, getSessionMessagesPage } from "./codex-targets";
 
 const SESSION_ID = "11111111-2222-3333-4444-555555555555";
 let workDir = "";
@@ -62,6 +63,52 @@ describe("findBranchTurnId", () => {
 
     await expect(findBranchTurnId(target, source, 2)).rejects.toThrow("分支位置不是可见会话消息");
     await expect(findBranchTurnId(target, source, 99)).rejects.toThrow("分支位置已失效");
+  });
+});
+
+describe("canonicalizeForkedSession", () => {
+  it("以 App Server 返回的新线程 ID 为权威，不因 JSONL 暂时携带父 ID 而拒绝分支", () => {
+    const parent = {
+      id: SESSION_ID,
+      title: "父会话",
+      filePath: path.join(codexHome, "sessions", "2026", "06", `rollout-parent-${SESSION_ID}.jsonl`),
+      messageCount: 1,
+      preview: []
+    };
+    const branchId = "66666666-7777-8888-9999-aaaaaaaaaaaa";
+    const branchPath = path.join(codexHome, "sessions", "2026", "06", `rollout-branch-${branchId}.jsonl`);
+    const parsedBranch = { ...parent, title: "分支", filePath: branchPath };
+    const result = canonicalizeForkedSession(
+      { kind: "local", codexHome } as CodexTarget,
+      parent,
+      parsedBranch,
+      { threadId: branchId, filePath: branchPath }
+    );
+
+    expect(result.id).toBe(branchId);
+    expect(result.filePath).toBe(branchPath);
+  });
+
+  it("拒绝父子线程 ID 或文件路径相同", () => {
+    const parent = {
+      id: SESSION_ID,
+      title: "父会话",
+      filePath: path.join(codexHome, "sessions", "2026", "06", `rollout-parent-${SESSION_ID}.jsonl`),
+      messageCount: 1,
+      preview: []
+    };
+    expect(() => canonicalizeForkedSession(
+      { kind: "local", codexHome } as CodexTarget,
+      parent,
+      parent,
+      { threadId: SESSION_ID, filePath: path.join(codexHome, "sessions", "2026", "06", "rollout-other.jsonl") }
+    )).toThrow("分支会话编号无效");
+    expect(() => canonicalizeForkedSession(
+      { kind: "local", codexHome } as CodexTarget,
+      parent,
+      parent,
+      { threadId: "66666666-7777-8888-9999-aaaaaaaaaaaa", filePath: parent.filePath }
+    )).toThrow("分支文件与原会话相同");
   });
 });
 

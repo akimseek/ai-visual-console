@@ -12,8 +12,11 @@ export function skillSourceName(skill: InstalledSkill) {
 }
 
 export function mergeSession(sessions: AiSession[], session: AiSession) {
-  if (sessions.some((item) => sameSession(item, session))) return sessions;
-  return [session, ...sessions].sort((left, right) => {
+  const existingIndex = sessions.findIndex((item) => sameSession(item, session));
+  const next = existingIndex >= 0
+    ? sessions.map((item, index) => index === existingIndex ? session : item)
+    : [session, ...sessions];
+  return next.sort((left, right) => {
     return sessionTimestamp(right) - sessionTimestamp(left);
   });
 }
@@ -28,9 +31,10 @@ export function replaceCachedSession(sessions: AiSession[], session: AiSession) 
   return changed ? next : sessions;
 }
 
-// UUID 只在单一 Codex 目标内唯一；跨 Windows/WSL 导入时可能重复，文件路径用于保留两个目标的独立记录。
+// 缓存已按 targetId 隔离；同一目标内文件路径是稳定实体键，可兼容 fork 返回的新线程 ID
+// 与 JSONL session_meta 短暂不一致，并避免同一个文件在列表中出现两条记录。
 function sameSession(left: AiSession, right: AiSession) {
-  return left.id === right.id && left.filePath === right.filePath;
+  return left.filePath === right.filePath;
 }
 
 export function localFilterSessions(sessions: AiSession[], query: string) {

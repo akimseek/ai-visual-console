@@ -33,6 +33,7 @@ import {
 import {
   applySessionMetadata,
   applySessionMetadataList,
+  deleteSessionMetadata,
   findSessionIdsByParent,
   setSessionBranchMetadata
 } from "../session-metadata";
@@ -359,20 +360,26 @@ export async function branchSession(targetId: string, sessionId: string, message
     const selectedTurnId = await findBranchTurnId(effectiveTarget, session.filePath, messageLine);
     const fork = await createBranchCodexThread(effectiveTarget, session.id, selectedTurnId);
 
-    const branch = effectiveTarget.kind === "local"
-      ? await loadLocalSession(fork.filePath)
-      : await loadWslSession(effectiveTarget.distro!, fork.filePath);
-    if (branch.id !== fork.threadId || branch.id === session.id) {
-      throw new Error("Codex 返回的分支线程编号无效，已拒绝覆盖原会话。");
+    try {
+      const branch = effectiveTarget.kind === "local"
+        ? await loadLocalSession(fork.filePath)
+        : await loadWslSession(effectiveTarget.distro!, fork.filePath);
+      const forkedSession = canonicalizeForkedSession(effectiveTarget, session, branch, fork);
+      // App Server 返回的 thread.id 是新线程的权威身份。部分 Codex 版本在 fork
+      // 文件刚创建的短窗口内，JSONL session_meta 仍可能返回父线程 ID；这里仅
+      // 归一化内存对象，不改写 Codex 文件，也不影响父会话内容。
+      forkedSession.metadata = await setSessionBranchMetadata(effectiveTarget.id, forkedSession.id, {
+        parentTargetId: targetId,
+        parentSessionId: session.id,
+        parentMessageLine: messageLine,
+        createdBy: "branch"
+      });
+      await appendHistoryEntry(effectiveTarget, forkedSession);
+      return forkedSession;
+    } catch (error) {
+      await cleanupFailedFork(effectiveTarget, fork, session.filePath);
+      throw error;
     }
-    branch.metadata = await setSessionBranchMetadata(effectiveTarget.id, branch.id, {
-      parentTargetId: targetId,
-      parentSessionId: session.id,
-      parentMessageLine: messageLine,
-      createdBy: "branch"
-    });
-    await appendHistoryEntry(effectiveTarget, branch);
-    return branch;
   });
 }
 
@@ -692,6 +699,73 @@ type CodexForkResult = {
   threadId: string;
   filePath: string;
 };
+
+export function canonicalizeForkedSession(
+  target: CodexTarget,
+  parent: CodexSession,
+  parsedBranch: CodexSession,
+  fork: CodexForkResult
+) {
+  if (!fork.threadId || fork.threadId === parent.id) {
+    throw new Error("Codex 返回的分支会话编号无效，已停止打开分支。");
+  }
+
+  if (target.kind === "local") {
+    const sessionsRoot = path.join(target.codexHome || getCodexHome(), "sessions");
+    if (!isInsidePath(fork.filePath, sessionsRoot)) {
+      throw new Error("Codex 返回的分支文件不在当前会话目录内，已停止打开分支。");
+    }
+    if (path.resolve(fork.filePath) === path.resolve(parent.filePath)) {
+      throw new Error("Codex 返回的分支文件与原会话相同，已停止打开分支。");
+    }
+    return { ...parsedBranch, id: fork.threadId, filePath: fork.filePath };
+  }
+
+  const codexHome = target.codexHome || "";
+  const sessionsRoot = path.posix.join(codexHome, "sessions");
+  if (!isInsidePosixDir(fork.filePath, sessionsRoot)) {
+    throw new Error("Codex 返回的分支文件不在当前会话目录内，已停止打开分支。");
+  }
+  if (path.posix.normalize(fork.filePath) === path.posix.normalize(parent.filePath)) {
+    throw new Error("Codex 返回的分支文件与原会话相同，已停止打开分支。");
+  }
+  return { ...parsedBranch, id: fork.threadId, filePath: fork.filePath };
+}
+
+async function cleanupFailedFork(target: CodexTarget, fork: CodexForkResult, parentFilePath: string) {
+  if (!fork.filePath || !fork.threadId) return;
+
+  const storage = createSessionStorage(target);
+  const isParentPath = target.kind === "local"
+    ? path.resolve(fork.filePath) === path.resolve(parentFilePath)
+    : path.posix.normalize(fork.filePath) === path.posix.normalize(parentFilePath);
+  if (isParentPath) return;
+
+  const isActiveSessionPath = target.kind === "local"
+    ? isInsidePath(fork.filePath, path.join(target.codexHome || getCodexHome(), "sessions"))
+    : isInsidePosixDir(fork.filePath, path.posix.join(target.codexHome || "", "sessions"));
+  if (!isActiveSessionPath) return;
+
+  await removeForkFile(storage, fork.filePath);
+  if (target.kind === "local") {
+    await removeSessionFromCache(getCachePath(), fork.filePath);
+  } else {
+    await removeSessionFromCache(getWslCachePath(target.distro!), fork.filePath);
+  }
+  await deleteSessionMetadata(target.id, fork.threadId).catch(() => undefined);
+}
+
+async function removeForkFile(storage: ReturnType<typeof createSessionStorage>, filePath: string) {
+  // App Server 可能在响应 JSON-RPC 后才完成文件落盘；短暂重试避免失败分支
+  // 在清理窗口之后才出现，重新污染会话列表。
+  for (let attempt = 0; attempt < 6; attempt += 1) {
+    if (await storage.exists(filePath)) {
+      await storage.remove(filePath).catch(() => undefined);
+      if (!(await storage.exists(filePath))) return;
+    }
+    if (attempt < 5) await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+}
 
 async function createBranchCodexThread(target: CodexTarget, sessionId: string, selectedTurnId: string): Promise<CodexForkResult> {
   return withCodexAppServer(target, async (client) => {
