@@ -1,11 +1,7 @@
-import type { RefObject } from "react";
 import type { AiSession, ApiVendor, VendorRouteMode } from "../types";
-import { UsageDetailsPopover } from "../features/sessions/usage-details";
 import { VendorRoutePicker } from "./vendor-route-picker";
 
-type StatusText = { label: string; title: string };
-
-// 底部状态栏：会话编号 / 更新时间 / 工作目录 / 模型 / Token / 上下文，以及终端输入模式切换。
+// 底部状态栏：会话编号 / 更新时间 / 工作目录 / 当前供应商，以及终端输入模式切换。
 // 从 App.tsx 的内联 footer JSX 抽出为展示组件。
 export function StatusBar({
   session,
@@ -18,14 +14,6 @@ export function StatusBar({
   vendorRouteDisabled,
   onSelectVendor,
   onSetVendorMode,
-  model,
-  tokenUsage,
-  contextUsage,
-  contextLevel,
-  supportsUsage,
-  usageDetailsOpen,
-  usageDetailsRef,
-  onToggleUsageDetails,
   terminalInputMode,
   terminalInputButtonLabel,
   canToggleTerminalInput,
@@ -41,14 +29,6 @@ export function StatusBar({
   vendorRouteDisabled: boolean;
   onSelectVendor: (vendorId: string) => Promise<void>;
   onSetVendorMode: (mode: VendorRouteMode) => Promise<void>;
-  model: StatusText;
-  tokenUsage: StatusText;
-  contextUsage: StatusText;
-  contextLevel: string;
-  supportsUsage: boolean;
-  usageDetailsOpen: boolean;
-  usageDetailsRef: RefObject<HTMLDivElement | null>;
-  onToggleUsageDetails: () => void;
   terminalInputMode: "composer" | "terminal" | undefined;
   terminalInputButtonLabel: string;
   canToggleTerminalInput: boolean;
@@ -59,7 +39,7 @@ export function StatusBar({
       <div className="statusbar-left">
         <div className="status-item">
           <span>会话编号</span>
-          <code>{session?.id || "-"}</code>
+          <code title={session?.id || undefined}>{session?.id || "-"}</code>
         </div>
         <div className="status-item">
           <span>更新时间</span>
@@ -92,31 +72,6 @@ export function StatusBar({
         >
           {terminalInputButtonLabel}
         </button>
-        <div className="status-item">
-          <span>模型</span>
-          <strong title={model.title}>{model.label}</strong>
-        </div>
-        {supportsUsage && (
-          <div className="status-usage" ref={usageDetailsRef}>
-            <button
-              type="button"
-              className={`status-usage-trigger context-${contextLevel}`}
-              aria-haspopup="dialog"
-              aria-expanded={usageDetailsOpen}
-              onClick={onToggleUsageDetails}
-            >
-              <span className="status-item">
-                <span>Token</span>
-                <strong title={tokenUsage.title}>{tokenUsage.label}</strong>
-              </span>
-              <span className="status-item">
-                <span>上下文</span>
-                <strong title={contextUsage.title}>{contextUsage.label}</strong>
-              </span>
-            </button>
-            {usageDetailsOpen && <UsageDetailsPopover session={session} />}
-          </div>
-        )}
       </div>
     </footer>
   );

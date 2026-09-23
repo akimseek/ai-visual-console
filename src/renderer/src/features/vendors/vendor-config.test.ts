@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   buildVendorConfigTemplateFromExisting,
   buildVendorDraft,
+  applyDeepSeekClaudePreset,
   calculateVendorColumnWidths,
   renderVendorConfigPreview,
   toVendorConfigTemplate,
@@ -76,6 +77,13 @@ describe("validateVendorDraft", () => {
     expect(errors.name).toBe("供应商名称已存在。");
   });
 
+  it("相同名称可用于不同平台", () => {
+    const errors = validateVendorDraft({ ...DRAFT, providerId: "claude" }, [
+      { id: "other", providerId: "codex", name: "MyVendor", apiKey: "x", apiBaseUrl: "y", configs: [] } as never
+    ]);
+    expect(errors.name).toBeUndefined();
+  });
+
   it("合法草稿无错误", () => {
     expect(validateVendorDraft(DRAFT)).toEqual({});
   });
@@ -83,6 +91,17 @@ describe("validateVendorDraft", () => {
   it("费率最多保留两位小数且不能为负数", () => {
     expect(validateVendorDraft({ ...DRAFT, pricing: { inputPerMillionUsd: 1.234 } }).inputPrice).toContain("2 位");
     expect(validateVendorDraft({ ...DRAFT, pricing: { outputPerMillionUsd: -1 } }).outputPrice).toContain("非负数");
+  });
+});
+
+describe("applyDeepSeekClaudePreset", () => {
+  it("生成 Claude Code 兼容供应商草稿，不引入独立平台", () => {
+    const draft = buildVendorDraft({ ...DRAFT, providerId: "claude", name: "", apiBaseUrl: "" });
+    const preset = applyDeepSeekClaudePreset(draft);
+    expect(preset.providerId).toBe("claude");
+    expect(preset.name).toBe("DeepSeek");
+    expect(preset.apiBaseUrl).toBe("https://api.deepseek.com/anthropic");
+    expect(preset.configs[0].content).toContain("deepseek-chat");
   });
 });
 

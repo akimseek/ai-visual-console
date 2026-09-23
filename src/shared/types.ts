@@ -199,8 +199,10 @@ export type GatewayFailoverRule = {
   providerId?: AiProviderId;
   vendorId?: string;
   pattern: string;
+  statusCodes?: number[];
+  customResponseStatus?: number;
+  customResponseBody?: string;
   enabled: boolean;
-  priority: number;
   createdAt: string;
   updatedAt: string;
 };
@@ -210,9 +212,11 @@ export type GatewayFailoverRuleInput = {
   scope: GatewayFailoverRuleScope;
   providerId?: AiProviderId;
   vendorId?: string;
-  pattern: string;
+  pattern?: string;
+  statusCodes?: number[];
+  customResponseStatus?: number;
+  customResponseBody?: string;
   enabled?: boolean;
-  priority?: number;
 };
 
 export type VendorBalanceProtocol = "generic" | "new-api";
@@ -502,6 +506,7 @@ export type AppCommand =
   | "about";
 
 export type GatewayPortStatus = {
+  enabled: boolean;
   configuredPort: number;
   activePort: number;
   configuredFailureThreshold: number;
@@ -511,6 +516,11 @@ export type GatewayPortStatus = {
 
 export type GatewayPortUpdateResult = GatewayPortStatus & {
   applied: boolean;
+};
+
+export type GatewayExternalApiStatus = {
+  enabled: boolean;
+  tokenConfigured: boolean;
 };
 
 export type CodexSessionFile = {

@@ -48,14 +48,14 @@ const sqliteMock = vi.hoisted(() => {
       if (sql.startsWith("SELECT * FROM api_vendors WHERE id = ?")) {
         return this.state.vendors.find((vendor) => vendor.id === params[0]);
       }
-      if (sql.startsWith("SELECT id FROM api_vendors WHERE name_norm = ? AND id <> ?")) {
-        return this.state.vendors.find((vendor) => vendor.name_norm === params[0] && vendor.id !== params[1]);
+      if (sql.startsWith("SELECT id FROM api_vendors WHERE provider_id = ? AND name_norm = ? AND id <> ?")) {
+        return this.state.vendors.find((vendor) => vendor.provider_id === params[0] && vendor.name_norm === params[1] && vendor.id !== params[2]);
       }
-      if (sql.startsWith("SELECT id FROM api_vendors WHERE sort = ? AND id <> ?")) {
-        return this.state.vendors.find((vendor) => vendor.sort === params[0] && vendor.id !== params[1]);
+      if (sql.startsWith("SELECT id FROM api_vendors WHERE provider_id = ? AND sort = ? AND id <> ?")) {
+        return this.state.vendors.find((vendor) => vendor.provider_id === params[0] && vendor.sort === params[1] && vendor.id !== params[2]);
       }
-      if (sql.startsWith("SELECT MAX(sort) AS max_sort FROM api_vendors")) {
-        return { max_sort: this.state.vendors.reduce((max, vendor) => Math.max(max, Number(vendor.sort) || 0), 0) || null };
+      if (sql.startsWith("SELECT MAX(sort) AS max_sort FROM api_vendors WHERE provider_id = ?")) {
+        return { max_sort: this.state.vendors.filter((vendor) => vendor.provider_id === params[0]).reduce((max, vendor) => Math.max(max, Number(vendor.sort) || 0), 0) || null };
       }
       if (sql.startsWith("SELECT model_query_json, balance_query_json FROM api_vendor_query_configs WHERE vendor_id = ?")) {
         return this.state.queryConfigs.find((config) => config.vendor_id === params[0]);
@@ -243,6 +243,18 @@ describe("saveApiVendor 校验与规范化", () => {
     expect(first.sort).toBe(4);
     expect(second.sort).toBe(5);
     await expect(saveApiVendor(vendorInput({ name: "重复排序", sort: 4 }))).rejects.toThrow("排序值 4 已被占用");
+  });
+
+  it("名称和排序仅在同一平台内唯一", async () => {
+    await saveApiVendor(vendorInput({ name: "共享名称", providerId: "codex", sort: 1 }));
+    const claude = await saveApiVendor(vendorInput({
+      name: "共享名称",
+      providerId: "claude",
+      sort: 1,
+      configs: [{ providerId: "claude", enabled: true, targetPath: "~/.claude/settings.json", content: "{}" }]
+    }));
+    expect(claude.sort).toBe(1);
+    await expect(saveApiVendor(vendorInput({ name: "重名", providerId: "codex", sort: 1 }))).rejects.toThrow("排序值 1 已被占用");
   });
 });
 

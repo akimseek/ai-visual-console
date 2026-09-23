@@ -3,11 +3,13 @@ import type { ChangeEvent, PointerEvent, ReactNode } from "react";
 import { Pencil, Plus, RefreshCw, ShieldAlert, Trash2, X } from "lucide-react";
 import type { AiProviderId, AiTarget, ApiVendor, ApiVendorConfigTemplate, GatewayFailoverRule, GatewayFailoverRuleInput, GatewayFailoverRuleScope, VendorBalanceQueryConfig, VendorModelQueryConfig } from "../../types";
 import { formatDate } from "../../lib/format";
-import { GATEWAY_FAILOVER_DEFAULT_PATTERNS, PAGINATION_DEFAULT_PAGE_SIZE } from "../../../../shared/constants";
+import { GATEWAY_FAILOVER_DEFAULT_PATTERNS, GATEWAY_FAILOVER_DEFAULT_STATUS_CODES, PAGINATION_DEFAULT_PAGE_SIZE } from "../../../../shared/constants";
+import { matchesGatewayFailoverCondition } from "../../../../shared/gateway-failover";
 import { IconButton } from "../../components/icon-button";
 import { Pagination } from "../../components/pagination";
 import {
   buildVendorDraft,
+  applyDeepSeekClaudePreset,
   renderVendorConfigPreview,
   toVendorConfigTemplate,
   visibleVendorConfigs,
@@ -63,7 +65,7 @@ export function VendorManagerDialog({
   target?: AiTarget;
   onDraftChange: (draft: ApiVendorDraft) => void;
   onFieldErrorClear: (field: VendorFieldName) => void;
-  onNew: () => void;
+  onNew: (providerId: AiProviderId) => void;
   onEdit: (vendor: ApiVendor) => void;
   onProviderChange: (providerId: AiProviderId) => void;
   onSave: () => void;
@@ -83,6 +85,7 @@ export function VendorManagerDialog({
 }) {
   const [deleteCandidate, setDeleteCandidate] = useState<ApiVendor | null>(null);
   const [currentPage, setCurrentPage] = useState(1);
+  const [providerFilter, setProviderFilter] = useState<AiProviderId | "all">("all");
   const [pageSize, setPageSize] = useState(VENDOR_PAGE_SIZE);
   const [columnWidths, setColumnWidths] = useState<number[]>(() => calculateVendorColumnWidths([], 0));
   const [modelQueryText, setModelQueryText] = useState("");
@@ -92,14 +95,18 @@ export function VendorManagerDialog({
   const [ruleProvider, setRuleProvider] = useState<AiProviderId>(target?.provider || "codex");
   const [ruleVendor, setRuleVendor] = useState("");
   const [rulePattern, setRulePattern] = useState("");
-  const [rulePriority, setRulePriority] = useState(100);
+  const [ruleStatusCodesText, setRuleStatusCodesText] = useState("");
+  const [ruleCustomResponseStatusText, setRuleCustomResponseStatusText] = useState("");
+  const [ruleCustomResponseBody, setRuleCustomResponseBody] = useState("");
   const [ruleTestText, setRuleTestText] = useState("");
+  const [ruleTestStatusCodeText, setRuleTestStatusCodeText] = useState("");
   const [failoverRulesOpen, setFailoverRulesOpen] = useState(false);
   const tableContainerRef = useRef<HTMLDivElement | null>(null);
   const tableRef = useRef<HTMLTableElement | null>(null);
   const resizeRef = useRef<{ index: number; startX: number; startWidths: number[] } | null>(null);
   const manualResizeRef = useRef(false);
-  const totalPages = Math.max(1, Math.ceil(vendors.length / pageSize));
+  const filteredVendors = providerFilter === "all" ? vendors : vendors.filter((vendor) => vendor.providerId === providerFilter);
+  const totalPages = Math.max(1, Math.ceil(filteredVendors.length / pageSize));
 
   useEffect(() => {
     if (mode === "list") setCurrentPage(1);
@@ -154,7 +161,7 @@ export function VendorManagerDialog({
 
   const visibleConfigs = visibleVendorConfigs(draft);
   const deleteCandidateExists = deleteCandidate && vendors.some((vendor) => vendor.id === deleteCandidate.id);
-  const pagedVendors = vendors.slice(
+  const pagedVendors = filteredVendors.slice(
     (currentPage - 1) * pageSize,
     currentPage * pageSize
   );
@@ -195,27 +202,45 @@ export function VendorManagerDialog({
 
   function saveRule() {
     const pattern = rulePattern.trim();
-    if (!pattern || failoverRulesBusy) return;
+    const parsedStatusCodes = parseGatewayFailoverStatusCodes(ruleStatusCodesText);
+    const parsedCustomResponse = parseGatewayFailoverCustomResponse(ruleCustomResponseStatusText, ruleCustomResponseBody);
+    if (failoverRulesBusy || parsedStatusCodes.error || parsedCustomResponse.error || (!pattern && parsedStatusCodes.statusCodes.length === 0)) return;
     onSaveFailoverRule({
       scope: ruleScope,
       providerId: ruleScope === "global" ? undefined : ruleProvider,
       vendorId: ruleScope === "vendor" ? ruleVendor || undefined : undefined,
       pattern,
-      priority: rulePriority
+      statusCodes: parsedStatusCodes.statusCodes,
+      customResponseStatus: parsedCustomResponse.status,
+      customResponseBody: parsedCustomResponse.body
     });
     setRulePattern("");
+    setRuleStatusCodesText("");
+    setRuleCustomResponseStatusText("");
+    setRuleCustomResponseBody("");
   }
 
   const testProvider = ruleScope === "global" ? (target?.provider || "codex") : ruleProvider;
-  const testPatterns = [
-    ...GATEWAY_FAILOVER_DEFAULT_PATTERNS,
-    ...failoverRules
-      .filter((rule) => rule.enabled && (rule.scope === "global"
-        || (rule.scope === "provider" && rule.providerId === testProvider)
-        || (rule.scope === "vendor" && rule.providerId === testProvider && rule.vendorId === ruleVendor)))
-      .map((rule) => rule.pattern)
-  ];
-  const ruleTestMatched = ruleTestText.trim() && testPatterns.some((pattern) => ruleTestText.toLocaleLowerCase().includes(pattern.toLocaleLowerCase()));
+  const parsedRuleStatusCodes = parseGatewayFailoverStatusCodes(ruleStatusCodesText);
+  const parsedRuleCustomResponse = parseGatewayFailoverCustomResponse(ruleCustomResponseStatusText, ruleCustomResponseBody);
+  const parsedTestStatusCode = Number(ruleTestStatusCodeText);
+  const testStatusCode = Number.isInteger(parsedTestStatusCode) && parsedTestStatusCode >= 400 && parsedTestStatusCode <= 599
+    ? parsedTestStatusCode
+    : undefined;
+  const applicableRules = failoverRules.filter((rule) => rule.enabled && (rule.scope === "global"
+    || (rule.scope === "provider" && rule.providerId === testProvider)
+    || (rule.scope === "vendor" && rule.providerId === testProvider && rule.vendorId === ruleVendor)));
+  const defaultRuleMatched = GATEWAY_FAILOVER_DEFAULT_STATUS_CODES.some((statusCode) => statusCode === testStatusCode)
+    || GATEWAY_FAILOVER_DEFAULT_PATTERNS.some((pattern) => ruleTestText.toLocaleLowerCase().includes(pattern.toLocaleLowerCase()));
+  const savedRuleMatched = applicableRules.some((rule) => matchesGatewayFailoverCondition(rule, testStatusCode, ruleTestText));
+  const draftRuleMatched = !parsedRuleStatusCodes.error && matchesGatewayFailoverCondition(
+    { pattern: rulePattern, statusCodes: parsedRuleStatusCodes.statusCodes },
+    testStatusCode,
+    ruleTestText
+  );
+  const ruleTestMatched = defaultRuleMatched || savedRuleMatched || draftRuleMatched;
+  const ruleTestCustomResponseStatus = applicableRules.find((rule) => matchesGatewayFailoverCondition(rule, testStatusCode, ruleTestText) && rule.customResponseStatus !== undefined)?.customResponseStatus
+    || (draftRuleMatched ? parsedRuleCustomResponse.status : undefined);
 
   function moveColumnResize(event: PointerEvent<HTMLSpanElement>) {
     const resize = resizeRef.current;
@@ -257,12 +282,19 @@ export function VendorManagerDialog({
         {mode === "list" ? (
           <div className="vendor-list-page">
             <div className="vendor-list-toolbar">
-              <div>
+              <div className="vendor-list-count">
                 <strong>历史供应商</strong>
-                <span>{vendors.length} 个</span>
+                <span>{filteredVendors.length} 个</span>
+                <label className="vendor-provider-filter">
+                  <span>平台</span>
+                  <select value={providerFilter} onChange={(event) => { setProviderFilter(event.target.value as AiProviderId | "all"); setCurrentPage(1); }}>
+                    <option value="all">全部平台</option>
+                    {(["codex", "claude", "gemini", "qoder"] as AiProviderId[]).map((item) => <option key={item} value={item}>{providerLabel(item)}</option>)}
+                  </select>
+                </label>
               </div>
               <div className="vendor-list-toolbar-actions">
-                <button type="button" className="ui-button ui-button-primary" onClick={() => { setCurrentPage(1); onNew(); }} disabled={Boolean(busy)}>
+                <button type="button" className="ui-button ui-button-primary" onClick={() => { setCurrentPage(1); onNew(providerFilter === "all" ? target?.provider || "codex" : providerFilter); }} disabled={Boolean(busy)}>
                   <Plus aria-hidden="true" size={15} strokeWidth={2} />
                   新增供应商
                 </button>
@@ -278,7 +310,7 @@ export function VendorManagerDialog({
             </div>
             {toast && <div className={`vendor-list-toast ${toast.tone}`}>{toast.message}</div>}
             <div ref={tableContainerRef} className="vendor-list-table">
-              {vendors.length === 0 ? (
+              {filteredVendors.length === 0 ? (
                 <div className="vendor-empty">暂无供应商。</div>
               ) : (
                 <table
@@ -372,7 +404,7 @@ export function VendorManagerDialog({
             </div>
             {vendors.length > 0 && (
               <Pagination
-                total={vendors.length}
+                total={filteredVendors.length}
                 page={currentPage}
                 pageSize={pageSize}
                 onPageChange={setCurrentPage}
@@ -412,9 +444,9 @@ export function VendorManagerDialog({
         ) : (
           <div className="vendor-editor">
             <div className="vendor-target-summary">
-              <span>目标环境</span>
-              <strong>{target?.label || "当前运行环境"}</strong>
-              <small>Gateway 直接读取 SQLite，配置文件仅作兼容模板</small>
+              <span>供应商平台</span>
+              <strong>{providerLabel(draft.providerId)}</strong>
+              <small>供应商保存在应用数据库；维护记录无需选择 CLI 目标。</small>
             </div>
             <div className="vendor-provider-picker">
               <span>模型厂商</span>
@@ -430,6 +462,18 @@ export function VendorManagerDialog({
                   </button>
                 ))}
               </div>
+              {draft.providerId === "claude" && !draft.id && (
+                <div className="vendor-deepseek-preset">
+                  <button
+                    type="button"
+                    className="ui-button ui-button-secondary"
+                    onClick={() => onDraftChange(applyDeepSeekClaudePreset(draft))}
+                  >
+                    使用 DeepSeek 预设
+                  </button>
+                  <small>仅用于 Claude Code；当前不兼容 Codex Responses API。</small>
+                </div>
+              )}
             </div>
             <div className="vendor-form-grid">
               <label className="required">
@@ -591,15 +635,24 @@ export function VendorManagerDialog({
             providerId={ruleProvider}
             vendorId={ruleVendor}
             pattern={rulePattern}
-            priority={rulePriority}
+            statusCodesText={ruleStatusCodesText}
+            statusCodeError={parsedRuleStatusCodes.error || ""}
+            customResponseStatusText={ruleCustomResponseStatusText}
+            customResponseBody={ruleCustomResponseBody}
+            customResponseError={parsedRuleCustomResponse.error || ""}
             testText={ruleTestText}
+            testStatusCodeText={ruleTestStatusCodeText}
             testMatched={Boolean(ruleTestMatched)}
+            testCustomResponseStatus={ruleTestCustomResponseStatus}
             onScopeChange={setRuleScope}
             onProviderChange={setRuleProvider}
             onVendorChange={setRuleVendor}
             onPatternChange={setRulePattern}
-            onPriorityChange={setRulePriority}
+            onStatusCodesTextChange={setRuleStatusCodesText}
+            onCustomResponseStatusTextChange={setRuleCustomResponseStatusText}
+            onCustomResponseBodyChange={setRuleCustomResponseBody}
             onTestTextChange={setRuleTestText}
+            onTestStatusCodeTextChange={setRuleTestStatusCodeText}
             onSave={saveRule}
             onDelete={onDeleteFailoverRule}
             onToggle={onToggleFailoverRule}
@@ -623,6 +676,32 @@ function parsePriceInput(value: string) {
   return Number.isFinite(parsed) ? parsed : undefined;
 }
 
+function parseGatewayFailoverStatusCodes(value: string) {
+  if (!value.trim()) return { statusCodes: [] as number[] };
+  const parts = value.split(/[\s,，]+/).filter(Boolean);
+  const statusCodes = parts.map(Number);
+  if (statusCodes.some((statusCode) => !Number.isInteger(statusCode) || statusCode < 400 || statusCode > 599)) {
+    return { statusCodes: [] as number[], error: "状态码需为 400 到 599 之间的整数，可用逗号分隔。" };
+  }
+  return { statusCodes: [...new Set(statusCodes)].sort((left, right) => left - right) };
+}
+
+function parseGatewayFailoverCustomResponse(statusText: string, body: string) {
+  const hasStatus = Boolean(statusText.trim());
+  const hasBody = Boolean(body.trim());
+  if (!hasStatus && !hasBody) return { status: undefined, body: undefined };
+  if (!hasStatus || !hasBody) return { error: "自定义返回状态码和内容必须同时配置。" };
+  const status = Number(statusText.trim());
+  if (!Number.isInteger(status) || status < 100 || status > 599) return { error: "自定义返回状态码需为 100 到 599 之间的整数。" };
+  try {
+    JSON.parse(body);
+  } catch {
+    return { error: "自定义返回内容必须是合法 JSON。" };
+  }
+  if (new TextEncoder().encode(body).byteLength > 32 * 1024) return { error: "自定义返回内容不能超过 32 KB。" };
+  return { status, body };
+}
+
 function GatewayFailoverRulesPanel({
   vendors,
   rules,
@@ -631,15 +710,24 @@ function GatewayFailoverRulesPanel({
   providerId,
   vendorId,
   pattern,
-  priority,
+  statusCodesText,
+  statusCodeError,
+  customResponseStatusText,
+  customResponseBody,
+  customResponseError,
   testText,
+  testStatusCodeText,
   testMatched,
+  testCustomResponseStatus,
   onScopeChange,
   onProviderChange,
   onVendorChange,
   onPatternChange,
-  onPriorityChange,
+  onStatusCodesTextChange,
+  onCustomResponseStatusTextChange,
+  onCustomResponseBodyChange,
   onTestTextChange,
+  onTestStatusCodeTextChange,
   onSave,
   onDelete,
   onToggle
@@ -651,15 +739,24 @@ function GatewayFailoverRulesPanel({
   providerId: AiProviderId;
   vendorId: string;
   pattern: string;
-  priority: number;
+  statusCodesText: string;
+  statusCodeError: string;
+  customResponseStatusText: string;
+  customResponseBody: string;
+  customResponseError: string;
   testText: string;
+  testStatusCodeText: string;
   testMatched: boolean;
+  testCustomResponseStatus?: number;
   onScopeChange: (scope: GatewayFailoverRuleScope) => void;
   onProviderChange: (providerId: AiProviderId) => void;
   onVendorChange: (vendorId: string) => void;
   onPatternChange: (pattern: string) => void;
-  onPriorityChange: (priority: number) => void;
+  onStatusCodesTextChange: (statusCodes: string) => void;
+  onCustomResponseStatusTextChange: (status: string) => void;
+  onCustomResponseBodyChange: (body: string) => void;
   onTestTextChange: (text: string) => void;
+  onTestStatusCodeTextChange: (statusCode: string) => void;
   onSave: () => void;
   onDelete: (ruleId: string) => void;
   onToggle: (ruleId: string, enabled: boolean) => void;
@@ -669,12 +766,13 @@ function GatewayFailoverRulesPanel({
       <div className="vendor-failover-rules-heading">
         <div>
           <strong id="vendor-failover-rules-title">Gateway 故障识别规则</strong>
-          <small>内置规则始终生效；自定义规则用于识别供应商返回的容量、限流和临时不可用提示。</small>
+          <small>内置状态码与错误文本规则始终生效；自定义规则中状态码和错误文本同时填写时需同时匹配。</small>
         </div>
         <span>{rules.length} 条自定义规则</span>
       </div>
       <div className="vendor-failover-defaults">
         <span>内置规则</span>
+        <code>HTTP {GATEWAY_FAILOVER_DEFAULT_STATUS_CODES.join(", ")}</code>
         {GATEWAY_FAILOVER_DEFAULT_PATTERNS.map((item) => <code key={item}>{item}</code>)}
       </div>
       {rules.length > 0 && (
@@ -690,9 +788,9 @@ function GatewayFailoverRulesPanel({
                 onClick={() => onToggle(rule.id, !rule.enabled)}
                 disabled={busy}
               ><span /></button>
-              <code title={rule.pattern}>{rule.pattern}</code>
+              <code title={formatRuleConditions(rule)}>{formatRuleConditions(rule)}</code>
               <span>{formatRuleScope(rule, vendors)}</span>
-              <span>优先级 {rule.priority}</span>
+              {rule.customResponseStatus !== undefined && <span>返回 HTTP {rule.customResponseStatus}</span>}
               <IconButton icon={Trash2} label={`删除规则 ${rule.pattern}`} onClick={() => onDelete(rule.id)} disabled={busy} />
             </div>
           ))}
@@ -721,24 +819,38 @@ function GatewayFailoverRulesPanel({
           </select>
         </label>}
         <label className="vendor-failover-pattern-field">
-          <span>匹配文本</span>
-          <input value={pattern} maxLength={200} placeholder="例如：quota exhausted" onChange={(event) => onPatternChange(event.target.value)} />
+          <span>错误信息包含</span>
+          <input value={pattern} maxLength={200} placeholder="例如：credit insufficient balance" onChange={(event) => onPatternChange(event.target.value)} />
         </label>
         <label>
-          <span>优先级</span>
-          <input type="number" min={0} max={1000} step={1} value={priority} onChange={(event) => onPriorityChange(Math.max(0, Math.min(1000, Number(event.target.value) || 0)))} />
+          <span>HTTP 状态码</span>
+          <input value={statusCodesText} inputMode="numeric" aria-invalid={Boolean(statusCodeError)} placeholder="例如：400, 429" onChange={(event) => onStatusCodesTextChange(event.target.value)} />
+          {statusCodeError && <small className="form-field-error">{statusCodeError}</small>}
         </label>
-        <button type="button" className="ui-button ui-button-secondary" onClick={onSave} disabled={busy || !pattern.trim() || (scope === "vendor" && !vendorId)}>
+        <label>
+          <span>自定义返回状态码（可选）</span>
+          <input value={customResponseStatusText} inputMode="numeric" aria-invalid={Boolean(customResponseError)} placeholder="例如：503" onChange={(event) => onCustomResponseStatusTextChange(event.target.value)} />
+        </label>
+        <label className="vendor-failover-custom-response-field">
+          <span>自定义返回内容（JSON，可选）</span>
+          <textarea value={customResponseBody} rows={3} aria-invalid={Boolean(customResponseError)} placeholder={'例如：{"error":"provider unavailable"}'} onChange={(event) => onCustomResponseBodyChange(event.target.value)} />
+          {customResponseError && <small className="form-field-error">{customResponseError}</small>}
+        </label>
+        <button type="button" className="ui-button ui-button-secondary" onClick={onSave} disabled={busy || (!pattern.trim() && parseGatewayFailoverStatusCodes(statusCodesText).statusCodes.length === 0) || Boolean(parseGatewayFailoverStatusCodes(statusCodesText).error) || Boolean(parseGatewayFailoverCustomResponse(customResponseStatusText, customResponseBody).error) || (scope === "vendor" && !vendorId)}>
           <Plus aria-hidden="true" size={14} />
           添加规则
         </button>
       </div>
       <div className="vendor-failover-rule-test">
         <label>
-          <span>规则预览</span>
-          <input value={testText} placeholder="粘贴一段供应商错误文本进行测试" onChange={(event) => onTestTextChange(event.target.value)} />
+          <span>HTTP 状态码</span>
+          <input type="number" min={400} max={599} value={testStatusCodeText} placeholder="例如：400" onChange={(event) => onTestStatusCodeTextChange(event.target.value)} />
         </label>
-        {testText.trim() && <small className={testMatched ? "matched" : "not-matched"}>{testMatched ? "将触发故障切换" : "不会触发故障切换"}</small>}
+        <label>
+          <span>错误信息</span>
+          <input value={testText} placeholder="粘贴供应商返回的错误信息" onChange={(event) => onTestTextChange(event.target.value)} />
+        </label>
+        {(testText.trim() || testStatusCodeText.trim()) && <small className={testMatched ? "matched" : "not-matched"}>{testMatched ? `将触发故障切换${testCustomResponseStatus ? `；最终失败时返回 HTTP ${testCustomResponseStatus}` : "；未配置自定义响应"}` : "不会触发故障切换"}</small>}
       </div>
     </section>
   );
@@ -748,6 +860,10 @@ function formatRuleScope(rule: GatewayFailoverRule, vendors: ApiVendor[]) {
   if (rule.scope === "global") return "全局";
   if (rule.scope === "provider") return providerLabel(rule.providerId!);
   return vendors.find((vendor) => vendor.id === rule.vendorId)?.name || "已删除供应商";
+}
+
+function formatRuleConditions(rule: GatewayFailoverRule) {
+  return [rule.statusCodes?.length ? `HTTP ${rule.statusCodes.join(", ")}` : "", rule.pattern].filter(Boolean).join(" · ");
 }
 
 function parseSortInput(value: string) {

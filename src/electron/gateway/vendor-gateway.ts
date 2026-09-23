@@ -6,11 +6,11 @@ import { performance } from "node:perf_hooks";
 import type { AiProviderId, ApiVendor, VendorRouteMode, VendorRouteUpdate, VendorRouteUpdateResult } from "../types";
 import type { BrowserWindow } from "electron";
 import { getGatewayVendorSnapshot } from "./vendor-registry";
-import { getGatewayFailureThreshold, getGatewayPort } from "../core/settings";
+import { getGatewayEnabled, getGatewayExternalApiEnabled, getGatewayExternalApiTokenHash, getGatewayFailureThreshold, getGatewayPort } from "../core/settings";
 import { detectWslGatewayHost } from "../core/wsl";
 import { logGatewayEvent, recordGatewayRequest } from "./gateway-log";
 import { chooseNextVendor, chooseVendor, hydrateGatewayVendorHealth, isCircuitOpen, recordGatewayVendorFailure, recordGatewayVendorSuccess } from "./gateway-resilience";
-import { matchesGatewayFailoverError } from "./gateway-failover-rules";
+import { getGatewayFailoverCustomResponse, matchesGatewayFailoverError } from "./gateway-failover-rules";
 import { recordGatewayRequest as persistGatewayRequest } from "./gateway-request-store";
 import { mergeGatewayUsage, parseGatewayUsage, parseUsageFromChunk } from "./gateway-usage";
 import { GATEWAY_ERROR_MESSAGES, GATEWAY_FAILOVER_DEFAULT_PATTERNS, GATEWAY_REQUEST_LIMITS } from "../../shared/constants";
@@ -39,6 +39,7 @@ export type VendorRouteSwitchResult = {
 
 type MutableVendorRoute = VendorRoute & {
   createdAt: number;
+  external?: boolean;
   window?: BrowserWindow;
   terminalId?: string;
   // 终端句柄绑定前若已发生故障切换，暂存原因，绑定后补发给渲染层。
@@ -49,9 +50,11 @@ let gatewayServer: ReturnType<typeof createServer> | null = null;
 let gatewayAddress = "";
 let gatewayStartPromise: Promise<void> | null = null;
 const routes = new Map<string, MutableVendorRoute>();
+const externalRoutes = new Map<AiProviderId, MutableVendorRoute>();
 const wslBaseUrlCache = new Map<string, { host: string; port: number }>();
 
 export async function ensureVendorGateway() {
+  if (!await getGatewayEnabled()) throw new Error("本地 Gateway 已关闭，请先在网关设置中启用。");
   if (gatewayServer?.listening && gatewayAddress) return gatewayAddress;
   if (gatewayStartPromise) {
     await gatewayStartPromise;
@@ -151,6 +154,12 @@ export async function createVendorRoute(providerId: AiProviderId, vendorId?: str
   return route;
 }
 
+export async function startVendorGatewayIfEnabled() {
+  if (!await getGatewayEnabled()) return getVendorGatewayPort();
+  await ensureVendorGateway();
+  return getVendorGatewayPort();
+}
+
 export async function switchVendorRoute(routeId: string, providerId: AiProviderId, vendorId: string): Promise<VendorRouteSwitchResult> {
   return setVendorRoute(routeId, providerId, { vendorId, mode: routes.get(routeId)?.mode || "dynamic" });
 }
@@ -195,7 +204,9 @@ export function destroyVendorRoute(routeId: string) {
 }
 
 export async function stopVendorGateway() {
+  await gatewayStartPromise?.catch(() => undefined);
   routes.clear();
+  externalRoutes.clear();
   invalidateWslGatewayCache();
   const server = gatewayServer;
   gatewayServer = null;
@@ -223,6 +234,30 @@ function findRoute(pathname: string) {
   return route;
 }
 
+function findExternalRoute(pathname: string) {
+  const segments = pathname.split("/").filter(Boolean);
+  if (segments[0] !== "external" || !isAiProviderId(segments[1])) return undefined;
+  return { providerId: segments[1], prefix: `/external/${segments[1]}` };
+}
+
+function getExternalVendorRoute(providerId: AiProviderId) {
+  let route = externalRoutes.get(providerId);
+  if (!route) {
+    route = {
+      routeId: `external-${providerId}`,
+      providerId,
+      vendorId: "",
+      mode: "dynamic",
+      localToken: "",
+      baseUrl: "",
+      createdAt: Date.now(),
+      external: true
+    };
+    externalRoutes.set(providerId, route);
+  }
+  return route;
+}
+
 async function handleGatewayRequest(request: IncomingMessage, response: ServerResponse) {
   const startedAt = performance.now();
   const controller = new AbortController();
@@ -244,6 +279,7 @@ async function handleGatewayRequest(request: IncomingMessage, response: ServerRe
   const usage: import("../types").GatewayUsage = {};
   let inputPricePerMillion: number | undefined;
   let outputPricePerMillion: number | undefined;
+  let loggedPath = request.url || "/";
 
   // 客户端断开（CLI 被 Ctrl+C / 标签关闭）→ 取消上游 fetch，止血并避免继续计费。
   // 注意：request 的 readable 侧在正常请求结束（body 读尽）时也会触发 close，不能据此判断断开；
@@ -256,16 +292,35 @@ async function handleGatewayRequest(request: IncomingMessage, response: ServerRe
 
   try {
     const parsed = new URL(request.url || "/", "http://127.0.0.1");
-    const route = findRoute(parsed.pathname);
-    if (!route) {
+    if (parsed.pathname.startsWith("/external/")) loggedPath = sanitizeExternalRequestPath(parsed);
+    let route = findRoute(parsed.pathname);
+    let routePathPrefix = route ? routePrefix(route) : "";
+    const externalRoute = route ? undefined : findExternalRoute(parsed.pathname);
+    if (!route && !externalRoute) {
       respondJson(response, 404, { error: GATEWAY_ERROR_MESSAGES.routeNotFound });
       outcome = "ok";
       return;
     }
+    if (externalRoute) {
+      if (!await getGatewayExternalApiEnabled()) {
+        respondJson(response, 503, { error: GATEWAY_ERROR_MESSAGES.externalApiDisabled });
+        outcome = "ok";
+        return;
+      }
+      const tokenHash = await getGatewayExternalApiTokenHash();
+      if (!tokenHash || !hasExternalAccessToken(request, parsed, tokenHash)) {
+        respondJson(response, 401, { error: GATEWAY_ERROR_MESSAGES.unauthorized });
+        outcome = "ok";
+        return;
+      }
+      routePathPrefix = externalRoute.prefix;
+      route = getExternalVendorRoute(externalRoute.providerId);
+    }
+    if (!route) throw new Error("Gateway route resolution failed.");
     routeId = route.routeId;
     providerId = route.providerId;
     routeWindow = route.window;
-    if (!hasRouteToken(request, route.localToken)) {
+    if (!route.external && !hasRouteToken(request, route.localToken)) {
       respondJson(response, 401, { error: GATEWAY_ERROR_MESSAGES.unauthorized });
       outcome = "ok";
       return;
@@ -301,7 +356,7 @@ async function handleGatewayRequest(request: IncomingMessage, response: ServerRe
 
     // 流式请求体：先按声明值拦截超大请求，再零缓冲透传给上游。
     const hasBody = request.method !== "GET" && request.method !== "HEAD";
-    const suffix = parsed.pathname.slice(routePrefix(route).length) || "/";
+    const suffix = parsed.pathname.slice(routePathPrefix.length) || "/";
     const declaredLength = Number(request.headers["content-length"] || 0);
     let bufferedBody: Buffer | undefined;
     if (hasBody && declaredLength > 0 && declaredLength <= GATEWAY_REQUEST_LIMITS.retryBufferBytes) {
@@ -324,6 +379,7 @@ async function handleGatewayRequest(request: IncomingMessage, response: ServerRe
       : 1;
     let upstream: Response | undefined;
     let upstreamBody: ReadableStream<Uint8Array> | null | undefined;
+    let customFailureResponse: { status: number; body: string } | undefined;
     let attemptVendor = vendor;
     let failuresOnVendor = 0;
     const attemptedVendorIds = new Set<string>();
@@ -349,7 +405,7 @@ async function handleGatewayRequest(request: IncomingMessage, response: ServerRe
     };
     for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
       if (!attemptVendor?.apiKey) break;
-      const attemptUrl = joinUpstreamUrl(attemptVendor.apiBaseUrl, suffix, parsed.search);
+      const attemptUrl = joinUpstreamUrl(attemptVendor.apiBaseUrl, suffix, route.external ? externalUpstreamSearch(parsed) : parsed.search);
       if (gatewayAddress && attemptUrl.startsWith(gatewayAddress)) {
         throw new Error(GATEWAY_ERROR_MESSAGES.localGatewayUpstream);
       }
@@ -374,7 +430,7 @@ async function handleGatewayRequest(request: IncomingMessage, response: ServerRe
         }
         throw error;
       }
-      const inspectedBody = await probeUpstreamBody(upstream.body, route.providerId, attemptVendor.id);
+      const inspectedBody = await probeUpstreamBody(upstream.body, route.providerId, attemptVendor.id, upstream.status);
       upstreamBody = inspectedBody.body;
       const responseError = inspectedBody.errorMessage;
       upstreamStatus = upstream.status;
@@ -386,9 +442,13 @@ async function handleGatewayRequest(request: IncomingMessage, response: ServerRe
         if (upstream.status < 400) errorCode = "UPSTREAM_RESPONSE_ERROR";
         errorMessage = responseError;
       }
-      const retryableResponseError = await matchesGatewayFailoverError(responseError, route.providerId, attemptVendor.id);
-      const retryableResponse = isRetryableStatus(upstream.status)
-        || (upstream.status < 400 && retryableResponseError);
+      const retryableResponse = await matchesGatewayFailoverError(responseError, route.providerId, attemptVendor.id, upstream.status);
+      if (retryableResponse && !customFailureResponse) {
+        const rule = await getGatewayFailoverCustomResponse(responseError, route.providerId, attemptVendor.id, upstream.status);
+        if (rule?.customResponseStatus !== undefined && rule.customResponseBody !== undefined) {
+          customFailureResponse = { status: rule.customResponseStatus, body: rule.customResponseBody };
+        }
+      }
       if (attempt < maxAttempts - 1 && retryableResponse) {
         await recordGatewayVendorFailure(attemptVendor, responseError || `HTTP ${upstream.status}`);
         failuresOnVendor += 1;
@@ -413,6 +473,16 @@ async function handleGatewayRequest(request: IncomingMessage, response: ServerRe
       break;
     }
     if (!upstream) throw new Error(GATEWAY_ERROR_MESSAGES.noAvailableVendor);
+    if (customFailureResponse && (upstream.status >= 400 || errorCode === "UPSTREAM_RESPONSE_ERROR")) {
+      await upstreamBody?.cancel().catch(() => undefined);
+      response.statusCode = customFailureResponse.status;
+      response.setHeader("content-type", "application/json; charset=utf-8");
+      upstreamStatus = customFailureResponse.status;
+      bytesOut = Buffer.byteLength(customFailureResponse.body, "utf8");
+      response.end(customFailureResponse.body);
+      outcome = "error";
+      return;
+    }
     response.statusCode = upstream.status;
     upstream.headers.forEach((value, key) => {
       if (key === "content-length" || key === "transfer-encoding" || key === "connection") return;
@@ -476,7 +546,7 @@ async function handleGatewayRequest(request: IncomingMessage, response: ServerRe
       provider: providerId,
       vendorId,
       method: request.method || "GET",
-      path: request.url || "/",
+      path: loggedPath,
       upstreamStatus,
       errorCode,
       error: errorMessage,
@@ -491,7 +561,7 @@ async function handleGatewayRequest(request: IncomingMessage, response: ServerRe
       providerId: providerId as AiProviderId,
       vendorId,
       method: request.method || "GET",
-      path: request.url || "/",
+      path: loggedPath,
       model,
       upstreamStatus,
       outcome,
@@ -556,7 +626,7 @@ function isBuiltinGatewayFailoverError(message: string) {
  * 读取响应首个完整事件用于识别 HTTP 200 携带的上游错误，同时把已读字节接回流。
  * 达到事件边界后立即放行，避免正常 SSE 首 token 被无意义地阻塞；无边界响应最多探测 64KB。
  */
-async function probeUpstreamBody(body: ReadableStream<Uint8Array> | null, providerId: AiProviderId, vendorId: string) {
+async function probeUpstreamBody(body: ReadableStream<Uint8Array> | null, providerId: AiProviderId, vendorId: string, statusCode: number) {
   if (!body) return { body: null, errorMessage: undefined };
   const reader = body.getReader();
   const chunks: Uint8Array[] = [];
@@ -570,7 +640,7 @@ async function probeUpstreamBody(body: ReadableStream<Uint8Array> | null, provid
     total += value.byteLength;
     const text = Buffer.concat(chunks.map((chunk) => Buffer.from(chunk))).toString("utf8");
     errorMessage = extractGatewayResponseError(text);
-    if (!errorMessage && !hasStructuredGatewayPayload(text) && await matchesGatewayFailoverError(text, providerId, vendorId)) {
+    if (!errorMessage && !hasStructuredGatewayPayload(text) && await matchesGatewayFailoverError(text, providerId, vendorId, statusCode)) {
       errorMessage = text.replace(/[\r\n\t]+/g, " ").trim().slice(0, 500);
     }
     if (errorMessage || text.includes("\n\n") || total >= RESPONSE_PROBE_MAX_BYTES) break;
@@ -668,19 +738,6 @@ function byteCountingTransform(onByte: (bytes: number, chunk: Buffer) => void) {
   });
 }
 
-async function readRequestBody(request: IncomingMessage, maxBytes: number, onChunk: (bytes: number) => void) {
-  const chunks: Buffer[] = [];
-  let total = 0;
-  for await (const chunk of request) {
-    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
-    total += buffer.byteLength;
-    onChunk(buffer.byteLength);
-    if (total > maxBytes) throw new Error("请求体超过本地 Gateway 限制。");
-    chunks.push(buffer);
-  }
-  return Buffer.concat(chunks);
-}
-
 function tryParseJson(value: string) {
   try {
     return JSON.parse(value) as unknown;
@@ -693,8 +750,17 @@ function isRetryableMethod(method?: string) {
   return method === "POST" || method === "PUT" || method === "PATCH";
 }
 
-function isRetryableStatus(status: number) {
-  return [401, 403, 404, 408, 425, 429, 500, 502, 503, 504].includes(status);
+async function readRequestBody(request: IncomingMessage, maxBytes: number, onChunk: (bytes: number) => void) {
+  const chunks: Buffer[] = [];
+  let total = 0;
+  for await (const chunk of request) {
+    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    total += buffer.byteLength;
+    onChunk(buffer.byteLength);
+    if (total > maxBytes) throw new Error("请求体超过本地 Gateway 限制。");
+    chunks.push(buffer);
+  }
+  return Buffer.concat(chunks);
 }
 
 function isRetryableFetchError(error: unknown, controller: AbortController, timeoutSignal: AbortSignal) {
@@ -723,6 +789,7 @@ function isConfiguredRouteVendor(vendor: ApiVendor | undefined, providerId: AiPr
 }
 
 function notifyVendorRouteChange(route: MutableVendorRoute, reason: "manual" | "candidate-pool" | "failure") {
+  if (route.external) return;
   if (!route.terminalId) {
     route.pendingSwitchReason = reason;
     return;
@@ -752,6 +819,37 @@ function hasRouteToken(request: IncomingMessage, token: string) {
     const expected = Buffer.from(token);
     return actual.length === expected.length && crypto.timingSafeEqual(actual, expected);
   });
+}
+
+function hasExternalAccessToken(request: IncomingMessage, parsed: URL, expectedHash: string) {
+  const authorization = request.headers.authorization || "";
+  const bearer = authorization.match(/^Bearer\s+(.+)$/i)?.[1];
+  const candidates = [bearer, request.headers["x-api-key"], request.headers["x-goog-api-key"], ...parsed.searchParams.getAll("key")]
+    .flatMap((value) => Array.isArray(value) ? value : [value])
+    .filter((value): value is string => typeof value === "string" && value.length > 0 && value.length <= 1024);
+  const expected = Buffer.from(expectedHash, "hex");
+  if (expected.length !== 32) return false;
+  return candidates.some((value) => {
+    const actual = crypto.createHash("sha256").update(value).digest();
+    return crypto.timingSafeEqual(actual, expected);
+  });
+}
+
+function sanitizeExternalRequestPath(parsed: URL) {
+  const sanitized = new URL(parsed);
+  sanitized.searchParams.delete("key");
+  return `${sanitized.pathname}${sanitized.search}`;
+}
+
+function externalUpstreamSearch(parsed: URL) {
+  const sanitized = new URLSearchParams(parsed.searchParams);
+  sanitized.delete("key");
+  const value = sanitized.toString();
+  return value ? `?${value}` : "";
+}
+
+function isAiProviderId(value: string | undefined): value is AiProviderId {
+  return value === "codex" || value === "claude" || value === "gemini" || value === "qoder";
 }
 
 function buildUpstreamHeaders(request: IncomingMessage, vendor: ApiVendor) {

@@ -26,6 +26,7 @@ import { useStableCallback } from "../hooks/use-stable-callback";
 import { SidebarControls } from "../components/sidebar-controls";
 import { NoticeToast } from "../components/notice-toast";
 import { SidebarHeader } from "../components/sidebar-header";
+import { ExitConfirmationDialog } from "../components/exit-confirmation-dialog";
 import { renderCompressionPrompt } from "../features/settings/compression-prompt";
 import { sessionCacheKey, useSessionLoader, type SessionView } from "../features/sessions/use-session-loader";
 import { useSessionWorkspaceState } from "../features/sessions/use-session-workspace-state";
@@ -89,18 +90,32 @@ export function App() {
   const terminalTabsRef = useRef<HTMLDivElement | null>(null);
   const [providerStatusOpen, setProviderStatusOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
-  const [usageDetailsOpen, setUsageDetailsOpen] = useState(false);
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
   const [workbenchOpen, setWorkbenchOpen] = useState(false);
   const [favoriteOpen, setFavoriteOpen] = useState(false);
   const [gatewayLogCleanupOpen, setGatewayLogCleanupOpen] = useState(false);
+  const [exitConfirmationOpen, setExitConfirmationOpen] = useState(false);
+  const [exitConfirmationBusy, setExitConfirmationBusy] = useState(false);
   const terminalTabSyncSignatureRef = useRef("");
   const { openAppMenu, setOpenAppMenu } = useAppMenuState();
-  const usageDetailsRef = useRef<HTMLDivElement | null>(null);
 
   const { notice, setNotice } = useAppNotice();
   const sessionQuickAccess = useSessionQuickAccess();
   const executeAppCommand = useAppCommands(setError);
+
+  useEffect(() => window.codexConsole.onExitConfirmationRequested(() => setExitConfirmationOpen(true)), []);
+
+  async function chooseExitAction(choice: "minimize" | "quit" | "cancel") {
+    setExitConfirmationBusy(true);
+    try {
+      await window.codexConsole.chooseExitAction(choice);
+      setExitConfirmationOpen(false);
+    } catch (exitError: unknown) {
+      setError(exitError instanceof Error ? exitError.message : String(exitError));
+    } finally {
+      setExitConfirmationBusy(false);
+    }
+  }
 
   const gatewayPort = useGatewayPortDialog({ setNotice });
   const {
@@ -568,17 +583,14 @@ export function App() {
   const statusModel = formatModelStatus(statusSession);
   const statusTokenUsage = formatTokenUsage(statusSession);
   const statusContextUsage = formatContextUsage(statusSession);
-  const statusContextLevel = getContextLevel(statusSession?.usage?.contextPercent);
   const supportsSkills = Boolean(capabilities?.skills);
   const supportsBranch = Boolean(capabilities?.branch);
-  const supportsUsage = Boolean(capabilities?.usage);
   const supportsTrash = Boolean(capabilities?.trash);
   const supportsBatchActions = Boolean(capabilities?.batchActions);
   const supportsCustomCwd = Boolean(capabilities?.customCwd);
   const supportsExport = Boolean(capabilities?.export);
   const supportsSessionSettings = Boolean(capabilities?.sessionSettings);
   const supportsDuplicate = Boolean(capabilities?.duplicate);
-  const supportsVendorManagement = Boolean(capabilities?.vendorManagement);
   const workspaceOverlayMessage =
     workspaceBusyMessage ||
     (sessionLoading ? "正在加载会话..." : "");
@@ -630,29 +642,6 @@ export function App() {
   // 目标同步必须由活动标签变化单独驱动，不能受缓存写入后的重渲染重复触发。
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeTab?.key, activeTab?.target.id, activeTab?.session?.id, activeTab?.session?.updatedAt, view]);
-
-  useEffect(() => {
-    if (!usageDetailsOpen) return;
-
-    const closeOnOutsidePointer = (event: PointerEvent) => {
-      if (usageDetailsRef.current?.contains(event.target as Node)) return;
-      setUsageDetailsOpen(false);
-    };
-    const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setUsageDetailsOpen(false);
-    };
-
-    document.addEventListener("pointerdown", closeOnOutsidePointer);
-    document.addEventListener("keydown", closeOnEscape);
-    return () => {
-      document.removeEventListener("pointerdown", closeOnOutsidePointer);
-      document.removeEventListener("keydown", closeOnEscape);
-    };
-  }, [usageDetailsOpen]);
-
-  useEffect(() => {
-    setUsageDetailsOpen(false);
-  }, [statusSession?.id, supportsUsage]);
 
   useEffect(() => {
     if (!targetId) return;
@@ -798,7 +787,6 @@ export function App() {
     supportsSkills,
     supportsSessionSettings,
     supportsExport,
-    supportsVendorManagement,
     hasTarget: Boolean(targetId),
     isWslTarget: selectedTarget?.kind === "wsl",
     hasActiveSession: Boolean(activeSession),
@@ -857,6 +845,7 @@ export function App() {
           onTargetChange={setTargetId}
           onOpenStatus={() => setProviderStatusOpen(true)}
           onRefresh={() => void workspaceActions.refreshCurrentView()}
+          gatewayStatus={gatewayPort.status}
         />
 
         <SidebarControls
@@ -1038,14 +1027,6 @@ export function App() {
         vendorRouteDisabled={vendorRouteDisabled}
         onSelectVendor={(vendorId) => updateActiveVendorRoute(vendorId, activeVendorMode, "vendor")}
         onSetVendorMode={(mode) => updateActiveVendorRoute(undefined, mode, "mode")}
-        model={statusModel}
-        tokenUsage={statusTokenUsage}
-        contextUsage={statusContextUsage}
-        contextLevel={statusContextLevel}
-        supportsUsage={supportsUsage}
-        usageDetailsOpen={usageDetailsOpen}
-        usageDetailsRef={usageDetailsRef}
-        onToggleUsageDetails={() => setUsageDetailsOpen((open) => !open)}
         terminalInputMode={activeTerminalInputState?.mode}
         terminalInputButtonLabel={terminalInputButtonLabel}
         canToggleTerminalInput={canToggleTerminalInput}
@@ -1107,7 +1088,7 @@ export function App() {
         target={selectedTarget}
         onDraftChange={setVendorDraft}
         onFieldErrorClear={(field) => setVendorFieldErrors((current) => ({ ...current, [field]: undefined }))}
-        onNew={() => void editVendorDraft()}
+        onNew={(providerId) => void editVendorDraft(undefined, providerId)}
         onEdit={(vendor) => void editVendorDraft(vendor)}
         onProviderChange={(nextProviderId) => void changeVendorDraftProvider(nextProviderId)}
         onSave={() => void saveVendorDraft()}
@@ -1155,15 +1136,28 @@ export function App() {
         circuitFailureThresholdDraft={gatewayPort.circuitFailureThresholdDraft}
         circuitDurationDraft={gatewayPort.circuitDurationDraft}
         status={gatewayPort.status}
+        externalApiStatus={gatewayPort.externalApiStatus}
+        externalApiToken={gatewayPort.externalApiToken}
         error={gatewayPort.error}
         busy={gatewayPort.busy}
         onChange={gatewayPort.setPortDraft}
         onFailureThresholdChange={gatewayPort.setFailureThresholdDraft}
         onCircuitFailureThresholdChange={gatewayPort.setCircuitFailureThresholdDraft}
         onCircuitDurationChange={gatewayPort.setCircuitDurationDraft}
-        onClose={() => gatewayPort.setOpen(false)}
+        onSetEnabled={(enabled) => void gatewayPort.updateGatewayEnabled(enabled)}
+        onSetExternalApiEnabled={(enabled) => void gatewayPort.updateExternalApiEnabled(enabled)}
+        onRotateExternalApiToken={() => void gatewayPort.rotateExternalApiToken()}
+        onCopyExternalApiToken={() => void gatewayPort.copyExternalApiToken()}
+        onClose={gatewayPort.closeGatewayPortDialog}
         onSave={() => void gatewayPort.saveGatewayPort()}
       />
+      {exitConfirmationOpen && (
+        <ExitConfirmationDialog
+          busy={exitConfirmationBusy}
+          onChoose={(choice) => void chooseExitAction(choice)}
+          onClose={() => void chooseExitAction("cancel")}
+        />
+      )}
       {gatewayLogCleanupOpen && (
         <GatewayLogCleanupDialog
           vendors={vendors}
@@ -1223,14 +1217,6 @@ export function App() {
     </div>
 	  );
 	}
-
-function getContextLevel(percent?: number) {
-  if (typeof percent !== "number") return "unknown";
-  if (percent >= 90) return "danger";
-  if (percent >= 80) return "warning";
-  if (percent >= 60) return "notice";
-  return "ok";
-}
 
 function logPerformance(label: string, durationMs: number, status?: string) {
   return window.codexConsole.logPerformance(label, durationMs, status);

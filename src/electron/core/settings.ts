@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { createHash, randomBytes } from "node:crypto";
 import type { CodexTarget, CompressionPrompt, CompressionPromptInput, WorkspacePreset, WorkspacePresetInput } from "../types";
 import {
   deleteCompressionPromptRecord,
@@ -14,6 +15,9 @@ import {
 type AppSettings = {
   wslCodexHomes?: Record<string, string>;
   gatewayPort?: number;
+  gatewayEnabled?: boolean;
+  gatewayExternalApiEnabled?: boolean;
+  gatewayExternalApiTokenHash?: string;
   gatewayFailureThreshold?: number;
   gatewayCircuitFailureThreshold?: number;
   gatewayCircuitDurationSeconds?: number;
@@ -61,6 +65,46 @@ export function setSettingsPath(filePath: string) {
 export async function getGatewayPort() {
   const settings = await readSettings();
   return normalizeGatewayPort(settings.gatewayPort);
+}
+
+export async function getGatewayEnabled() {
+  const settings = await readSettings();
+  return settings.gatewayEnabled !== false;
+}
+
+export async function setGatewayEnabled(enabled: boolean) {
+  await updateSettings((settings) => ({ ...settings, gatewayEnabled: enabled }));
+  return enabled;
+}
+
+export async function getGatewayExternalApiStatus() {
+  const settings = await readSettings();
+  return {
+    enabled: settings.gatewayExternalApiEnabled === true,
+    tokenConfigured: Boolean(settings.gatewayExternalApiTokenHash)
+  };
+}
+
+export async function getGatewayExternalApiEnabled() {
+  const settings = await readSettings();
+  return settings.gatewayExternalApiEnabled === true;
+}
+
+export async function setGatewayExternalApiEnabled(enabled: boolean) {
+  await updateSettings((settings) => ({ ...settings, gatewayExternalApiEnabled: enabled }));
+  return enabled;
+}
+
+export async function getGatewayExternalApiTokenHash() {
+  const settings = await readSettings();
+  return settings.gatewayExternalApiTokenHash || "";
+}
+
+export async function rotateGatewayExternalApiToken() {
+  const token = randomBytes(32).toString("base64url");
+  const tokenHash = createHash("sha256").update(token).digest("hex");
+  await updateSettings((settings) => ({ ...settings, gatewayExternalApiTokenHash: tokenHash }));
+  return token;
 }
 
 export async function setGatewayPort(port: number) {

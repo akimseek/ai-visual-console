@@ -14,12 +14,14 @@ import type {
   WorkspacePreset,
   WorkspacePresetInput
 } from "../types";
-import { invoke } from "./ipc-bridge";
+import { invoke, subscribe } from "./ipc-bridge";
 
 // 应用级命令、CLI 环境、工作区预设和压缩提示 API。
 export function createAppApi(ipc: IpcRenderer) {
   return {
     appCommand: (command: AppCommand) => invoke<void>(ipc, "app:command", command),
+    chooseExitAction: (choice: "minimize" | "quit" | "cancel") => invoke<void>(ipc, "app:exit-choice", choice),
+    onExitConfirmationRequested: (handler: () => void) => subscribe(ipc, "app:request-exit", handler),
     listProviders: () => invoke<AiProviderSummary[]>(ipc, "ai:list-providers"),
     checkCliEnvironment: (request: CliEnvironmentRequest) =>
       invoke<CliEnvironmentStatus>(ipc, "cli:check-environment", request),

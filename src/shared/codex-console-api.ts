@@ -27,6 +27,7 @@ import type {
   GatewayLogCleanupSelection,
   GatewayPortStatus,
   GatewayPortUpdateResult,
+  GatewayExternalApiStatus,
   GatewayRecentFailure,
   GatewayRequestRecordedEvent,
   GatewayUsageSummary,
@@ -63,10 +64,16 @@ import type {
 // 渲染进程与 preload 共用的 API 契约；这里只描述公开能力，不包含 Electron 运行时类型。
 export type CodexConsoleApi = {
   appCommand: (command: AppCommand) => Promise<void>;
+  chooseExitAction: (choice: "minimize" | "quit" | "cancel") => Promise<void>;
+  onExitConfirmationRequested: (handler: () => void) => () => void;
   listProviders: () => Promise<AiProviderSummary[]>;
   checkCliEnvironment: (request: CliEnvironmentRequest) => Promise<CliEnvironmentStatus>;
   installCli: (request: CliInstallRequest) => Promise<CliInstallResult>;
   getGatewayPort: () => Promise<GatewayPortStatus>;
+  setGatewayEnabled: (enabled: boolean) => Promise<GatewayPortStatus>;
+  getGatewayExternalApiStatus: () => Promise<GatewayExternalApiStatus>;
+  setGatewayExternalApiEnabled: (enabled: boolean) => Promise<GatewayExternalApiStatus>;
+  rotateGatewayExternalApiToken: () => Promise<string>;
   setGatewayPort: (
     port: number,
     failureThreshold: number,
@@ -101,7 +108,8 @@ export type CodexConsoleApi = {
     vendorId?: string,
     outcome?: GatewayFailureOutcomeFilter,
     periodStart?: string,
-    periodEnd?: string
+    periodEnd?: string,
+    providerId?: AiProviderId | ""
   ) => Promise<GatewayFailureDiagnosticsPage>;
   listModels: (targetId: string) => Promise<VendorModel[]>;
   listCompressionPrompts: () => Promise<CompressionPrompt[]>;

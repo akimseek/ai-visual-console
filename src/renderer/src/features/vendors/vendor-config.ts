@@ -122,7 +122,7 @@ export function validateVendorDraft(draft: ApiVendorDraft, existingVendors: ApiV
   const errors: VendorFieldErrors = {};
   const name = draft.name.trim();
   if (!name) errors.name = "请输入供应商名称。";
-  else if (existingVendors.some((vendor) => vendor.id !== draft.id && sameVendorName(vendor.name, name))) {
+  else if (existingVendors.some((vendor) => vendor.providerId === draft.providerId && vendor.id !== draft.id && sameVendorName(vendor.name, name))) {
     errors.name = "供应商名称已存在。";
   }
   if (!draft.apiBaseUrl.trim()) errors.apiBaseUrl = "请输入 API 请求地址。";
@@ -209,6 +209,28 @@ function defaultVendorConfigs(): ApiVendorConfigTemplate[] {
       }, null, 2)
     }
   ];
+}
+
+export function applyDeepSeekClaudePreset(draft: ApiVendorDraft): ApiVendorDraft {
+  if (draft.providerId !== "claude") return draft;
+  return buildVendorDraft({
+    ...draft,
+    name: "DeepSeek",
+    apiBaseUrl: "https://api.deepseek.com/anthropic",
+    configs: draft.configs.map((config) => config.targetPath.endsWith("settings.json")
+      ? {
+        ...config,
+        content: JSON.stringify({
+          env: {
+            ANTHROPIC_BASE_URL: "{{BASE_URL}}",
+            ANTHROPIC_AUTH_TOKEN: "{{API_KEY}}",
+            ANTHROPIC_MODEL: "deepseek-chat"
+          },
+          theme: "dark"
+        }, null, 2)
+      }
+      : config)
+  });
 }
 
 export function renderVendorConfigPreview(config: ApiVendorConfigTemplate, draft: ApiVendorDraft) {

@@ -1,5 +1,5 @@
-import { useState } from "react";
-import type { GatewayPortStatus } from "../../types";
+import { useEffect, useState } from "react";
+import type { GatewayExternalApiStatus, GatewayPortStatus } from "../../types";
 import { captureError } from "../../hooks/error-utils";
 import type { NoticeState } from "../../hooks/use-app-notice";
 
@@ -13,14 +13,27 @@ export function useGatewayPortDialog({ setNotice }: { setNotice: SetNotice }) {
   const [circuitFailureThresholdDraft, setCircuitFailureThresholdDraft] = useState("3");
   const [circuitDurationDraft, setCircuitDurationDraft] = useState("60");
   const [status, setStatus] = useState<GatewayPortStatus | null>(null);
+  const [externalApiStatus, setExternalApiStatus] = useState<GatewayExternalApiStatus | null>(null);
+  const [externalApiToken, setExternalApiToken] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    void window.codexConsole.getGatewayPort()
+      .then(setStatus)
+      .catch((loadError: unknown) => setError(captureError(loadError, "getGatewayPort", "读取 Gateway 状态失败。")));
+  }, []);
 
   async function openGatewayPortDialog() {
     setError("");
     try {
-      const next = await window.codexConsole.getGatewayPort();
+      const [next, externalApi] = await Promise.all([
+        window.codexConsole.getGatewayPort(),
+        window.codexConsole.getGatewayExternalApiStatus()
+      ]);
       setStatus(next);
+      setExternalApiStatus(externalApi);
+      setExternalApiToken("");
       setPortDraft(String(next.configuredPort));
       setFailureThresholdDraft(String(next.configuredFailureThreshold));
       setCircuitFailureThresholdDraft(String(next.configuredCircuitFailureThreshold));
@@ -73,6 +86,59 @@ export function useGatewayPortDialog({ setNotice }: { setNotice: SetNotice }) {
     }
   }
 
+  async function updateGatewayEnabled(enabled: boolean) {
+    setBusy(true);
+    setError("");
+    try {
+      setStatus(await window.codexConsole.setGatewayEnabled(enabled));
+    } catch (toggleError) {
+      setError(captureError(toggleError, "setGatewayEnabled", enabled ? "启用本地网关失败。" : "关闭本地网关失败。"));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function updateExternalApiEnabled(enabled: boolean) {
+    setBusy(true);
+    setError("");
+    try {
+      setExternalApiStatus(await window.codexConsole.setGatewayExternalApiEnabled(enabled));
+    } catch (toggleError) {
+      setError(captureError(toggleError, "setGatewayExternalApiEnabled", enabled ? "启用外部 API 失败。" : "关闭外部 API 失败。"));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function rotateExternalApiToken() {
+    setBusy(true);
+    setError("");
+    try {
+      const token = await window.codexConsole.rotateGatewayExternalApiToken();
+      setExternalApiToken(token);
+      setExternalApiStatus(await window.codexConsole.getGatewayExternalApiStatus());
+    } catch (rotateError) {
+      setError(captureError(rotateError, "rotateGatewayExternalApiToken", "生成外部访问令牌失败。"));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function copyExternalApiToken() {
+    if (!externalApiToken) return;
+    try {
+      await window.codexConsole.copyText(externalApiToken);
+      setNotice("外部访问令牌已复制。");
+    } catch (copyError) {
+      setError(captureError(copyError, "copyText", "复制外部访问令牌失败。"));
+    }
+  }
+
+  function closeGatewayPortDialog() {
+    setExternalApiToken("");
+    setOpen(false);
+  }
+
   return {
     open,
     setOpen,
@@ -85,9 +151,16 @@ export function useGatewayPortDialog({ setNotice }: { setNotice: SetNotice }) {
     circuitDurationDraft,
     setCircuitDurationDraft,
     status,
+    externalApiStatus,
+    externalApiToken,
     error,
     busy,
     openGatewayPortDialog,
     saveGatewayPort,
+    updateGatewayEnabled,
+    updateExternalApiEnabled,
+    rotateExternalApiToken,
+    copyExternalApiToken,
+    closeGatewayPortDialog,
   };
 }

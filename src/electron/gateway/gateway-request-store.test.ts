@@ -67,6 +67,20 @@ describe("recent gateway failures", () => {
     expect(mocks.prepare).toHaveBeenNthCalledWith(1, expect.stringContaining("created_at <= ?"));
   });
 
+  it("按平台筛选异常诊断记录", async () => {
+    const countGet = vi.fn(() => ({ total: 1 }));
+    const rowsAll = vi.fn(() => []);
+    mocks.prepare
+      .mockReturnValueOnce({ get: countGet })
+      .mockReturnValueOnce({ all: rowsAll });
+
+    await getGatewayFailureDiagnosticsPage(1, 10, "", "", "", "", "claude");
+
+    expect(mocks.prepare).toHaveBeenNthCalledWith(1, expect.stringContaining("provider_id = ?"));
+    expect(countGet).toHaveBeenCalledWith("claude");
+    expect(rowsAll).toHaveBeenCalledWith("claude", 10, 0);
+  });
+
   it("deletes request records without touching vendor health", async () => {
     const run = vi.fn(() => ({ changes: 4, lastInsertRowid: 0 }));
     const database = {

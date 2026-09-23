@@ -1,5 +1,5 @@
-import type { AiProviderId, AiProviderSummary, AiTarget } from "../types";
-import { CircleHelp, RefreshCw } from "lucide-react";
+import type { AiProviderId, AiProviderSummary, AiTarget, GatewayPortStatus } from "../types";
+import { CircleHelp, RefreshCw, Router } from "lucide-react";
 import { IconButton } from "./icon-button";
 
 // 侧栏头部：标题、平台状态/刷新按钮、平台与目标选择器。从 App.tsx 的内联 JSX 抽出为展示组件。
@@ -11,7 +11,8 @@ export function SidebarHeader({
   targetId,
   onTargetChange,
   onOpenStatus,
-  onRefresh
+  onRefresh,
+  gatewayStatus
 }: {
   providers: AiProviderSummary[];
   providerId: AiProviderId | "";
@@ -21,12 +22,20 @@ export function SidebarHeader({
   onTargetChange: (id: string) => void;
   onOpenStatus: () => void;
   onRefresh: () => void;
+  gatewayStatus: GatewayPortStatus | null;
 }) {
   return (
     <>
       <header className="sidebar-header">
-        <div>
+        <div className="sidebar-brand">
           <h1>AI 控制台</h1>
+          {gatewayStatus?.enabled && gatewayStatus.activePort > 0 && (
+            <span className="sidebar-gateway-status" title="本地 Gateway 正在运行">
+              <Router aria-hidden="true" size={13} strokeWidth={1.9} />
+              <span>网关</span>
+              <code>{gatewayStatus.activePort}</code>
+            </span>
+          )}
         </div>
         <div className="sidebar-actions">
           <IconButton icon={CircleHelp} label="平台状态" disabled={!providerId} onClick={onOpenStatus} />
@@ -50,7 +59,7 @@ export function SidebarHeader({
         <span>目标</span>
         <select value={targetId} disabled={!providerId || targets.length === 0} onChange={(event) => onTargetChange(event.target.value)}>
           {!providerId && <option value="">请先选择平台</option>}
-          {providerId && targets.length === 0 && <option value="">暂无可用目标</option>}
+          {providerId && <option value="">{targets.length > 0 ? "请选择目标" : "暂无可用目标"}</option>}
           {targets.map((target) => (
             <option key={target.id} value={target.id}>
               {target.label}

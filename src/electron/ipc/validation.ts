@@ -9,6 +9,7 @@ import type {
   WorkspacePresetInput
 } from "../types";
 import type { GatewayFailoverRuleInput } from "../../shared/types";
+import { GATEWAY_FAILOVER_RULE_LIMITS } from "../../shared/constants";
 
 const sessionRequestQueue = new Map<string, Promise<unknown>>();
 
@@ -121,14 +122,38 @@ export function requireGatewayFailoverRuleInput(value: unknown): GatewayFailover
   const scope = input.scope;
   if (scope !== "global" && scope !== "provider" && scope !== "vendor") throw new Error("Gateway 故障规则作用域无效。");
   if (input.enabled !== undefined && typeof input.enabled !== "boolean") throw new Error("参数无效：enabled");
+  if (input.pattern !== undefined && typeof input.pattern !== "string") throw new Error("参数无效：pattern");
+  if (input.statusCodes !== undefined && (!Array.isArray(input.statusCodes)
+    || input.statusCodes.some((statusCode) => typeof statusCode !== "number" || !Number.isInteger(statusCode) || statusCode < 400 || statusCode > 599))) {
+    throw new Error("HTTP 状态码必须是 400 到 599 之间的整数列表。");
+  }
+  if (input.customResponseStatus !== undefined
+    && (typeof input.customResponseStatus !== "number" || !Number.isInteger(input.customResponseStatus) || input.customResponseStatus < 100 || input.customResponseStatus > 599)) {
+    throw new Error("自定义返回状态码必须是 100 到 599 之间的整数。");
+  }
+  if (input.customResponseBody !== undefined) {
+    if (typeof input.customResponseBody !== "string") throw new Error("参数无效：customResponseBody");
+    if (input.customResponseBody.trim() && Buffer.byteLength(input.customResponseBody, "utf8") > GATEWAY_FAILOVER_RULE_LIMITS.maxCustomResponseBodyBytes) {
+      throw new Error(`自定义返回内容不能超过 ${GATEWAY_FAILOVER_RULE_LIMITS.maxCustomResponseBodyBytes / 1024} KB。`);
+    }
+    if (input.customResponseBody.trim()) {
+      try {
+        JSON.parse(input.customResponseBody);
+      } catch {
+        throw new Error("自定义返回内容必须是合法 JSON。");
+      }
+    }
+  }
   return {
     id: typeof input.id === "string" && input.id.trim() ? input.id.trim() : undefined,
     scope,
     providerId: input.providerId === undefined ? undefined : requireProviderId(input.providerId),
     vendorId: typeof input.vendorId === "string" && input.vendorId.trim() ? input.vendorId.trim() : undefined,
-    pattern: requireString(input.pattern, "pattern"),
-    enabled: input.enabled !== false,
-    priority: input.priority === undefined ? undefined : requireNonNegativeInteger(input.priority, "priority")
+    pattern: typeof input.pattern === "string" ? input.pattern : "",
+    statusCodes: input.statusCodes as number[] | undefined,
+    customResponseStatus: input.customResponseStatus as number | undefined,
+    customResponseBody: typeof input.customResponseBody === "string" && input.customResponseBody.trim() ? input.customResponseBody : undefined,
+    enabled: input.enabled !== false
   };
 }
 

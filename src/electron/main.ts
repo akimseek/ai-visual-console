@@ -1,4 +1,4 @@
-import { app, BrowserWindow, Menu, Tray, dialog, session, shell } from "electron";
+import { app, BrowserWindow, Menu, Tray, session, shell } from "electron";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { setSessionCacheRoot, setSessionDatabasePath } from "./providers/codex/codex-store";
@@ -9,7 +9,7 @@ import {
 import {
   setVendorDatabasePath
 } from "./vendors/vendor-manager";
-import { stopVendorGateway } from "./gateway/vendor-gateway";
+import { startVendorGatewayIfEnabled, stopVendorGateway } from "./gateway/vendor-gateway";
 import { flushGatewayLogs, setGatewayLogPath } from "./gateway/gateway-log";
 import { stopAllTerminalSessions } from "./terminal/terminal-sessions";
 import { setPerformanceLogPath, writePerformanceLog } from "./core/performance";
@@ -158,35 +158,30 @@ function ensureApplicationTray(window: BrowserWindow) {
   applicationTray.on("click", restoreApplicationWindow);
 }
 
-async function requestExitConfirmation(window: BrowserWindow | null) {
+function requestExitConfirmation(window: BrowserWindow | null) {
   if (exitPromptOpen || exitRequested) return;
   exitPromptOpen = true;
-  try {
-    const options: Electron.MessageBoxOptions = {
-      type: "question",
-      title: "退出 AI 可视化控制台",
-      message: "请选择关闭方式",
-      detail: "最小化到托盘后，应用仍会在后台运行；直接退出会关闭所有终端和 Gateway。",
-      buttons: ["最小化到托盘", "直接退出", "取消"],
-      defaultId: 0,
-      cancelId: 2,
-      noLink: true
-    };
-    const result = window && !window.isDestroyed()
-      ? await dialog.showMessageBox(window, options)
-      : await dialog.showMessageBox(options);
-    if (result.response === 0) {
-      if (window && !window.isDestroyed()) {
-        ensureApplicationTray(window);
-        window.hide();
-      }
-    } else if (result.response === 1) {
-      exitRequested = true;
-      app.quit();
-    }
-  } finally {
-    exitPromptOpen = false;
+  applicationWindow = window && !window.isDestroyed() ? window : applicationWindow;
+  if (applicationWindow && !applicationWindow.isDestroyed()) {
+    applicationWindow.show();
+    applicationWindow.focus();
+    applicationWindow.webContents.send("app:request-exit");
   }
+}
+
+function resolveExitConfirmation(window: BrowserWindow | null, choice: "minimize" | "quit" | "cancel") {
+  exitPromptOpen = false;
+  if (choice === "cancel") return;
+  const target = window && !window.isDestroyed() ? window : applicationWindow;
+  if (choice === "minimize") {
+    if (target && !target.isDestroyed()) {
+      ensureApplicationTray(target);
+      target.hide();
+    }
+    return;
+  }
+  exitRequested = true;
+  app.quit();
 }
 
 // 仅本应用自身页面是受信任来源：dev 走 Vite，prod 走打包后的 file://。
@@ -230,7 +225,7 @@ function applyContentSecurityPolicy() {
   });
 }
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
   const applicationDataDir = getApplicationDataDir();
   const applicationDatabasePath = path.join(applicationDataDir, "app.db");
   setupApplicationMenu();
@@ -242,11 +237,14 @@ app.whenReady().then(() => {
   setVendorDatabasePath(applicationDatabasePath, path.join(applicationDataDir, "vendor-backups"));
   setPerformanceLogPath(path.join(getLogDir(), "performance.log"));
   setGatewayLogPath(getLogDir());
+  await startVendorGatewayIfEnabled().catch((error: unknown) => {
+    void writePerformanceLog("gateway.start.failed", 0, String(error));
+  });
   void writePerformanceLog("app.ready", 0);
   void writePerformanceLog("app.whenReady", performance.now() - processStartedAt);
 
   // 初始化 IPC 模块依赖。
-  initAppCommandIpc({ getLogDir, getVersion: () => app.getVersion() });
+  initAppCommandIpc({ getLogDir, getVersion: () => app.getVersion(), requestExit: requestExitConfirmation, resolveExit: resolveExitConfirmation });
 
   // 注册各业务域的 IPC 处理器。
   registerCliIpcHandlers();

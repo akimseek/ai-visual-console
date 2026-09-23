@@ -28,15 +28,18 @@ export const GATEWAY_FAILOVER_DEFAULT_PATTERNS = [
   "temporarily unavailable"
 ] as const;
 
+export const GATEWAY_FAILOVER_DEFAULT_STATUS_CODES = [401, 403, 404, 408, 425, 429, 500, 502, 503, 504] as const;
+
 export const GATEWAY_FAILOVER_RULE_LIMITS = {
   maxPatternLength: 200,
   maxRuleCount: 100,
-  maxPriority: 1000
+  maxCustomResponseBodyBytes: 32 * 1024
 } as const;
 
 export const GATEWAY_ERROR_MESSAGES = {
   routeNotFound: "gateway route not found",
   unauthorized: "gateway unauthorized",
+  externalApiDisabled: "gateway external API is disabled",
   vendorUnavailable: "gateway vendor unavailable",
   localGatewayUpstream: "供应商地址不能指向本地 Gateway。",
   noAvailableVendor: "没有可用的供应商。",

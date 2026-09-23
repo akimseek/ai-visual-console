@@ -22,7 +22,6 @@ export function createAppMenus({
   supportsSkills,
   supportsSessionSettings,
   supportsExport,
-  supportsVendorManagement,
   hasTarget,
   isWslTarget,
   hasActiveSession,
@@ -31,7 +30,6 @@ export function createAppMenus({
   supportsSkills: boolean;
   supportsSessionSettings: boolean;
   supportsExport: boolean;
-  supportsVendorManagement: boolean;
   hasTarget: boolean;
   isWslTarget: boolean;
   hasActiveSession: boolean;
@@ -45,7 +43,7 @@ export function createAppMenus({
       items: [
         { label: "管理 skill", icon: Wrench, disabled: !supportsSkills || !hasTarget, action: actions.manageSkills },
         { label: "设置会话", icon: Settings, disabled: !supportsSessionSettings || !isWslTarget, action: actions.openSessionSettings },
-        { label: "设置", icon: Settings, action: actions.openGatewayPortSettings },
+        { label: "网关", icon: Settings, action: actions.openGatewayPortSettings },
         { separator: true, label: "" },
         {
           label: "导出",
@@ -65,7 +63,7 @@ export function createAppMenus({
       id: "toolbox",
       label: "工具箱",
       items: [
-        { label: "供应商管理", icon: Landmark, disabled: !supportsVendorManagement || !hasTarget, action: actions.manageVendors },
+        { label: "供应商管理", icon: Landmark, action: actions.manageVendors },
         { label: "压缩提示", icon: SlidersHorizontal, action: actions.manageCompressionPrompts }
       ]
     },

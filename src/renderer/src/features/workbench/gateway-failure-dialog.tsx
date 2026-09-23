@@ -1,13 +1,12 @@
 import { RefreshCw } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import type { ApiVendor, GatewayFailureDiagnostic } from "../../types";
+import type { AiProviderId, ApiVendor, GatewayFailureDiagnostic } from "../../types";
 import { Dialog } from "../../components/dialog";
 import { IconButton } from "../../components/icon-button";
 import { Pagination } from "../../components/pagination";
 import { captureError } from "../../hooks/error-utils";
 import type { GatewayFailureOutcomeFilter } from "../../types";
 import { formatGatewayFailure } from "./use-workbench-usage";
-import { useVendorData } from "../vendors/vendor-context";
 import { PAGINATION_DEFAULT_PAGE_SIZE } from "../../../../shared/constants";
 
 export type FailureDatePreset = "all" | "today" | "7d" | "30d" | "custom";
@@ -32,7 +31,8 @@ export function getGatewayFailureDateRange(preset: FailureDatePreset, from: stri
 }
 
 export function GatewayFailureDialog({ onClose }: { onClose: () => void }) {
-  const vendors = useVendorData();
+  const [vendors, setVendors] = useState<ApiVendor[]>([]);
+  const [providerFilter, setProviderFilter] = useState<AiProviderId | "">("");
   const [items, setItems] = useState<GatewayFailureDiagnostic[]>([]);
   const [page, setPage] = useState(1);
   const [total, setTotal] = useState(0);
@@ -44,7 +44,18 @@ export function GatewayFailureDialog({ onClose }: { onClose: () => void }) {
   const [pageSize, setPageSize] = useState(PAGINATION_DEFAULT_PAGE_SIZE);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [vendorsError, setVendorsError] = useState("");
   const dateRange = useMemo(() => getGatewayFailureDateRange(datePreset, customFrom, customTo), [datePreset, customFrom, customTo]);
+  const filteredVendors = useMemo(
+    () => providerFilter ? vendors.filter((vendor) => vendor.providerId === providerFilter) : vendors,
+    [providerFilter, vendors]
+  );
+
+  useEffect(() => {
+    void window.codexConsole.listApiVendors()
+      .then(setVendors)
+      .catch((cause: unknown) => setVendorsError(captureError(cause, "gatewayFailureVendors", "加载供应商列表失败。")));
+  }, []);
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -57,7 +68,7 @@ export function GatewayFailureDialog({ onClose }: { onClose: () => void }) {
       return;
     }
     try {
-      const result = await window.codexConsole.getGatewayFailureDiagnostics(page, pageSize, vendorFilter, outcomeFilter, dateRange.periodStart, dateRange.periodEnd);
+      const result = await window.codexConsole.getGatewayFailureDiagnostics(page, pageSize, vendorFilter, outcomeFilter, dateRange.periodStart, dateRange.periodEnd, providerFilter);
       setItems(result.items);
       setTotal(result.total);
     } catch (cause: unknown) {
@@ -65,7 +76,13 @@ export function GatewayFailureDialog({ onClose }: { onClose: () => void }) {
     } finally {
       setLoading(false);
     }
-  }, [page, pageSize, vendorFilter, outcomeFilter, dateRange]);
+  }, [page, pageSize, vendorFilter, outcomeFilter, dateRange, providerFilter]);
+
+  function updateProviderFilter(value: AiProviderId | "") {
+    setProviderFilter(value);
+    setVendorFilter("");
+    setPage(1);
+  }
 
   function updateVendorFilter(value: string) {
     setVendorFilter(value);
@@ -90,9 +107,16 @@ export function GatewayFailureDialog({ onClose }: { onClose: () => void }) {
     <Dialog title="Gateway 异常诊断" onClose={onClose} className="gateway-failure-dialog">
       <div className="gateway-failure-dialog-toolbar">
         <div className="gateway-failure-dialog-filters" aria-label="异常记录筛选">
+          <select aria-label="按平台筛选" value={providerFilter} onChange={(event) => updateProviderFilter(event.target.value as AiProviderId | "")}>
+            <option value="">全部平台</option>
+            <option value="codex">Codex</option>
+            <option value="claude">Claude Code</option>
+            <option value="gemini">Gemini</option>
+            <option value="qoder">Qoder CN</option>
+          </select>
           <select aria-label="按供应商筛选" value={vendorFilter} onChange={(event) => updateVendorFilter(event.target.value)}>
             <option value="">全部供应商</option>
-            {vendors.map((vendor) => <option key={vendor.id} value={vendor.id}>{vendor.name}</option>)}
+            {filteredVendors.map((vendor) => <option key={vendor.id} value={vendor.id}>{vendor.name}</option>)}
           </select>
           <select aria-label="按异常类型筛选" value={outcomeFilter} onChange={(event) => updateOutcomeFilter(event.target.value as GatewayFailureOutcomeFilter)}>
             <option value="">全部类型</option>
@@ -114,6 +138,7 @@ export function GatewayFailureDialog({ onClose }: { onClose: () => void }) {
         </div>
         <IconButton icon={RefreshCw} label="刷新异常记录" onClick={() => void refresh()} disabled={loading} className={loading ? "is-spinning" : ""} />
       </div>
+      {vendorsError && <p className="gateway-failure-dialog-error" role="status">{vendorsError}</p>}
       {error && <p className="gateway-failure-dialog-error" role="status">{error}</p>}
       {loading && items.length === 0 ? <p className="gateway-failure-dialog-empty">正在读取异常记录...</p> : items.length === 0 ? <p className="gateway-failure-dialog-empty">暂无 Gateway 异常记录。</p> : (
         <div className={`gateway-failure-dialog-table-wrap${loading ? " is-loading" : ""}`} aria-busy={loading}>

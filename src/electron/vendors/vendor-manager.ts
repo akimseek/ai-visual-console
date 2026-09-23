@@ -115,12 +115,14 @@ export async function saveApiVendor(input: ApiVendorInput): Promise<ApiVendor> {
       ? db.prepare("SELECT * FROM api_vendors WHERE id = ?").get(normalized.id) as VendorRow | undefined
       : undefined;
     const existingVendor = existing ? rowToVendor(db, existing) : undefined;
-    const duplicate = db.prepare("SELECT id FROM api_vendors WHERE name_norm = ? AND id <> ?")
-      .get(normalizeVendorName(normalized.name), existing?.id || "") as { id: string } | undefined;
+    const duplicate = db.prepare("SELECT id FROM api_vendors WHERE provider_id = ? AND name_norm = ? AND id <> ?")
+      .get(normalized.providerId, normalizeVendorName(normalized.name), existing?.id || "") as { id: string } | undefined;
     if (duplicate) throw new Error(`供应商名称已存在：${normalized.name}`);
-    const requestedSort = existing ? (normalized.sort ?? existing.sort) : (normalized.sort ?? nextVendorSort(db));
-    const duplicateSort = db.prepare("SELECT id FROM api_vendors WHERE sort = ? AND id <> ?")
-      .get(requestedSort, existing?.id || "") as { id: string } | undefined;
+    const requestedSort = existing && existing.provider_id === normalized.providerId
+      ? (normalized.sort ?? existing.sort)
+      : (normalized.sort ?? nextVendorSort(db, normalized.providerId));
+    const duplicateSort = db.prepare("SELECT id FROM api_vendors WHERE provider_id = ? AND sort = ? AND id <> ?")
+      .get(normalized.providerId, requestedSort, existing?.id || "") as { id: string } | undefined;
     if (duplicateSort) throw new Error(`排序值 ${requestedSort} 已被占用。`);
     const next: ApiVendor = {
       id: existing?.id || crypto.randomUUID(),
@@ -372,8 +374,8 @@ function hasQueryValues(value: Record<string, unknown>) {
   return Object.values(value).some((item) => item !== undefined && item !== null && item !== "");
 }
 
-function nextVendorSort(db: SqliteDatabase) {
-  const row = db.prepare("SELECT MAX(sort) AS max_sort FROM api_vendors").get() as { max_sort?: number | null } | undefined;
+function nextVendorSort(db: SqliteDatabase, providerId: ApiVendor["providerId"]) {
+  const row = db.prepare("SELECT MAX(sort) AS max_sort FROM api_vendors WHERE provider_id = ?").get(providerId) as { max_sort?: number | null } | undefined;
   return (typeof row?.max_sort === "number" ? row.max_sort : 0) + 1;
 }
 
@@ -548,12 +550,6 @@ function initializeVendorDb(db: SqliteDatabase) {
       last_enabled_at TEXT
     );
 
-    CREATE UNIQUE INDEX IF NOT EXISTS idx_api_vendors_name_norm
-      ON api_vendors(name_norm);
-
-    CREATE UNIQUE INDEX IF NOT EXISTS idx_api_vendors_sort
-      ON api_vendors(sort);
-
     CREATE TABLE IF NOT EXISTS api_vendor_configs (
       id TEXT PRIMARY KEY,
       vendor_id TEXT NOT NULL,
@@ -575,6 +571,14 @@ function initializeVendorDb(db: SqliteDatabase) {
       balance_query_json TEXT,
       FOREIGN KEY (vendor_id) REFERENCES api_vendors(id) ON DELETE CASCADE
     );
+  `);
+  db.exec(`
+    DROP INDEX IF EXISTS idx_api_vendors_name_norm;
+    DROP INDEX IF EXISTS idx_api_vendors_sort;
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_api_vendors_provider_name_norm
+      ON api_vendors(provider_id, name_norm);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_api_vendors_provider_sort
+      ON api_vendors(provider_id, sort);
   `);
 }
 

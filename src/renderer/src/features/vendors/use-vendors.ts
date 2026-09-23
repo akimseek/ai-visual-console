@@ -15,7 +15,7 @@ import {
 type VendorToast = { message: string; tone: "success" | "error" } | null;
 
 // 供应商管理的全部状态与副作用，从 App.tsx 抽出为自定义 Hook。
-// 仅依赖外部的 selectedTarget / targetId / providerId 三个值。
+// 供应商 CRUD 与当前目标解耦；只有预览 CLI 配置时才读取目标路径。
 export function useVendors({
   selectedTarget,
   targetId,
@@ -71,7 +71,7 @@ export function useVendors({
     try {
       const saved = await window.codexConsole.saveGatewayFailoverRule(input);
       setFailoverRules((current) => [...current.filter((rule) => rule.id !== saved.id), saved]
-        .sort((left, right) => left.priority - right.priority || left.updatedAt.localeCompare(right.updatedAt)));
+        .sort((left, right) => left.createdAt.localeCompare(right.createdAt) || left.id.localeCompare(right.id)));
     } catch (error: unknown) {
       setVendorError(captureError(error, "saveFailoverRule"));
     } finally {
@@ -107,7 +107,7 @@ export function useVendors({
     if (showBusy) setVendorBusy("正在加载供应商...");
     setVendorError("");
     try {
-      const list = await window.codexConsole.listApiVendors(selectedTarget?.id || targetId);
+      const list = await window.codexConsole.listApiVendors();
       setVendors(list);
       setVendorDraft((current) => current.id ? current : list[0] ? vendorToDraft(list[0]) : current);
     } catch (error: unknown) {
@@ -131,7 +131,7 @@ export function useVendors({
     setVendorMessage("");
     try {
       const saved = await window.codexConsole.saveApiVendor(prepareVendorDraftForSave(vendorDraft));
-      const list = await window.codexConsole.listApiVendors(selectedTarget?.id || targetId);
+      const list = await window.codexConsole.listApiVendors();
       setVendors(list);
       setVendorDraft(vendorToDraft(list.find((vendor) => vendor.id === saved.id) || saved));
       setVendorManagerMode("list");
@@ -144,11 +144,11 @@ export function useVendors({
     }
   }
 
-  async function editVendorDraft(vendor?: ApiVendor) {
+  async function editVendorDraft(vendor?: ApiVendor, requestedProviderId?: AiProviderId) {
     setVendorMessage("");
     setVendorError("");
     setVendorFieldErrors({});
-    const currentProviderId = selectedTarget?.provider || providerId || "codex";
+    const currentProviderId = requestedProviderId || selectedTarget?.provider || providerId || "codex";
     const base = vendor
       ? vendorToDraft(vendor)
       : buildVendorDraft({
@@ -158,7 +158,7 @@ export function useVendors({
         apiBaseUrl: "",
         pricing: {},
         enabled: true,
-        sort: vendors.reduce((max, item) => Math.max(max, item.sort), 0) + 1,
+        sort: vendors.filter((item) => item.providerId === currentProviderId).reduce((max, item) => Math.max(max, item.sort), 0) + 1,
         configs: []
       });
     setVendorDraft(base);
@@ -208,7 +208,7 @@ export function useVendors({
     setVendorToast(null);
     try {
       await window.codexConsole.deleteApiVendor(vendorId);
-      const list = await window.codexConsole.listApiVendors(selectedTarget?.id || targetId);
+      const list = await window.codexConsole.listApiVendors();
       setVendors(list);
       setVendorDraft(list[0] ? vendorToDraft(list[0]) : createEmptyVendorDraft());
       setVendorManagerMode("list");

@@ -2,14 +2,19 @@ import { ipcMain } from "electron";
 import {
   getGatewayCircuitDurationSeconds,
   getGatewayCircuitFailureThreshold,
+  getGatewayEnabled,
+  getGatewayExternalApiStatus,
   getGatewayFailureThreshold,
   getGatewayPort,
   setGatewayCircuitDurationSeconds,
   setGatewayCircuitFailureThreshold,
+  setGatewayEnabled,
+  setGatewayExternalApiEnabled,
   setGatewayFailureThreshold,
-  setGatewayPort
+  setGatewayPort,
+  rotateGatewayExternalApiToken
 } from "../core/settings";
-import { getVendorGatewayPort, invalidateWslGatewayCache } from "../gateway/vendor-gateway";
+import { getVendorGatewayPort, invalidateWslGatewayCache, startVendorGatewayIfEnabled, stopVendorGateway } from "../gateway/vendor-gateway";
 import {
   requireGatewayCircuitDurationSeconds,
   requireGatewayCircuitFailureThreshold,
@@ -30,13 +35,42 @@ import {
 } from "../gateway/gateway-failover-rules";
 
 export function registerGatewayIpcHandlers() {
+  ipcMain.handle("gateway:get-external-api-status", () => getGatewayExternalApiStatus());
+  ipcMain.handle("gateway:set-external-api-enabled", async (_event, enabled: unknown) => {
+    const checkedEnabled = requireBoolean(enabled, "enabled");
+    if (checkedEnabled && !await getGatewayEnabled()) throw new Error("请先开启本地 Gateway，再启用外部 API。");
+    if (checkedEnabled && !(await getGatewayExternalApiStatus()).tokenConfigured) throw new Error("请先生成外部 API 访问令牌。");
+    await setGatewayExternalApiEnabled(checkedEnabled);
+    return getGatewayExternalApiStatus();
+  });
+  ipcMain.handle("gateway:rotate-external-api-token", () => rotateGatewayExternalApiToken());
   ipcMain.handle("gateway:get-port", async () => ({
+    enabled: await getGatewayEnabled(),
     configuredPort: await getGatewayPort(),
     activePort: getVendorGatewayPort(),
     configuredFailureThreshold: await getGatewayFailureThreshold(),
     configuredCircuitFailureThreshold: await getGatewayCircuitFailureThreshold(),
     configuredCircuitDurationSeconds: await getGatewayCircuitDurationSeconds()
   }));
+  ipcMain.handle("gateway:set-enabled", async (_event, enabled: unknown) => {
+    const checkedEnabled = requireBoolean(enabled, "enabled");
+    await setGatewayEnabled(checkedEnabled);
+    try {
+      if (checkedEnabled) await startVendorGatewayIfEnabled();
+      else await stopVendorGateway();
+    } catch (error) {
+      if (checkedEnabled) await setGatewayEnabled(false);
+      throw error;
+    }
+    return {
+      enabled: checkedEnabled,
+      configuredPort: await getGatewayPort(),
+      activePort: getVendorGatewayPort(),
+      configuredFailureThreshold: await getGatewayFailureThreshold(),
+      configuredCircuitFailureThreshold: await getGatewayCircuitFailureThreshold(),
+      configuredCircuitDurationSeconds: await getGatewayCircuitDurationSeconds()
+    };
+  });
   ipcMain.handle("gateway:set-port", async (
     _event,
     port: unknown,
@@ -56,12 +90,13 @@ export function registerGatewayIpcHandlers() {
     invalidateWslGatewayCache();
     const activePort = getVendorGatewayPort();
     return {
+      enabled: await getGatewayEnabled(),
       configuredPort,
       activePort,
       configuredFailureThreshold,
       configuredCircuitFailureThreshold,
       configuredCircuitDurationSeconds,
-      applied: activePort === 0 || activePort === configuredPort
+      applied: activePort === 0 || configuredPort === 0 || activePort === configuredPort
     };
   });
   ipcMain.handle("gateway:get-vendor-health", () => listGatewayVendorHealth());
@@ -143,14 +178,15 @@ export function registerGatewayIpcHandlers() {
     return getGatewayUsageReport(periodStart, periodEnd);
   });
   ipcMain.handle("gateway:get-recent-failures", () => getRecentGatewayFailures());
-  ipcMain.handle("gateway:get-failure-diagnostics", (_event, page: unknown, pageSize: unknown, vendorId: unknown, outcome: unknown, periodStart: unknown, periodEnd: unknown) => {
+  ipcMain.handle("gateway:get-failure-diagnostics", (_event, page: unknown, pageSize: unknown, vendorId: unknown, outcome: unknown, periodStart: unknown, periodEnd: unknown, providerId: unknown) => {
     const requestedPage = typeof page === "number" && Number.isFinite(page) ? page : 1;
     const requestedPageSize = typeof pageSize === "number" && Number.isFinite(pageSize) ? pageSize : 10;
     const requestedVendorId = typeof vendorId === "string" ? vendorId : "";
     const requestedOutcome = outcome === "error" || outcome === "timeout" ? outcome : "";
     const requestedPeriodStart = typeof periodStart === "string" ? periodStart : "";
     const requestedPeriodEnd = typeof periodEnd === "string" ? periodEnd : "";
-    return getGatewayFailureDiagnosticsPage(requestedPage, requestedPageSize, requestedVendorId, requestedOutcome, requestedPeriodStart, requestedPeriodEnd);
+    const requestedProviderId = providerId === "codex" || providerId === "claude" || providerId === "gemini" || providerId === "qoder" ? providerId : "";
+    return getGatewayFailureDiagnosticsPage(requestedPage, requestedPageSize, requestedVendorId, requestedOutcome, requestedPeriodStart, requestedPeriodEnd, requestedProviderId);
   });
 }
 

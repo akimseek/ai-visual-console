@@ -34,7 +34,6 @@ export function useProviderTargets({ setError, logPerformance }: UseProviderTarg
       const pendingTargetId = pendingTargetIdRef.current;
       const nextTargetId = items.find((target) => target.id === pendingTargetId)?.id
         || items.find((target) => target.id === current)?.id
-        || items[0]?.id
         || "";
       if (nextTargetId && nextTargetId === pendingTargetId) pendingTargetIdRef.current = "";
       return nextTargetId;
@@ -115,6 +114,14 @@ export function useProviderTargets({ setError, logPerformance }: UseProviderTarg
     setTargetId(target.id);
   }, []);
 
+  const changeProvider = useCallback((nextProviderId: AiProviderId | "") => {
+    pendingTargetIdRef.current = "";
+    providerIdRef.current = nextProviderId;
+    setTargets([]);
+    setTargetId("");
+    setProviderId(nextProviderId);
+  }, []);
+
   // 终端标签切换只能使用标签已有的目标快照。此路径刻意不读取缓存、
   // 不探测 CLI/WSL，也不安排延迟刷新；显式刷新仍走 loadTargets。
   const syncTerminalTabTarget = useCallback((target: AiTarget) => {
@@ -132,7 +139,7 @@ export function useProviderTargets({ setError, logPerformance }: UseProviderTarg
   return {
     providers,
     providerId,
-    setProviderId,
+    setProviderId: changeProvider,
     targets,
     targetId,
     setTargetId,

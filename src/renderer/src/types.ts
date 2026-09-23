@@ -20,6 +20,7 @@ export type {
   CliInstallResult,
   GatewayPortStatus,
   GatewayPortUpdateResult,
+  GatewayExternalApiStatus,
   AiSession,
   AiSessionFile,
   AiTarget,

@@ -10,6 +10,7 @@ import type {
   GatewayLogCleanupSelection,
   GatewayPortStatus,
   GatewayPortUpdateResult,
+  GatewayExternalApiStatus,
   GatewayRecentFailure,
   GatewayRequestRecordedEvent,
   GatewayUsageReport,
@@ -23,6 +24,10 @@ import { invoke, subscribe } from "./ipc-bridge";
 export function createGatewayApi(ipc: IpcRenderer) {
   return {
     getGatewayPort: () => invoke<GatewayPortStatus>(ipc, "gateway:get-port"),
+    setGatewayEnabled: (enabled: boolean) => invoke<GatewayPortStatus>(ipc, "gateway:set-enabled", enabled),
+    getGatewayExternalApiStatus: () => invoke<GatewayExternalApiStatus>(ipc, "gateway:get-external-api-status"),
+    setGatewayExternalApiEnabled: (enabled: boolean) => invoke<GatewayExternalApiStatus>(ipc, "gateway:set-external-api-enabled", enabled),
+    rotateGatewayExternalApiToken: () => invoke<string>(ipc, "gateway:rotate-external-api-token"),
     setGatewayPort: (
       port: number,
       failureThreshold: number,
@@ -61,7 +66,8 @@ export function createGatewayApi(ipc: IpcRenderer) {
       vendorId?: string,
       outcome?: GatewayFailureOutcomeFilter,
       periodStart?: string,
-      periodEnd?: string
+      periodEnd?: string,
+      providerId?: import("../../shared/types").AiProviderId | ""
     ) => invoke<GatewayFailureDiagnosticsPage>(
       ipc,
       "gateway:get-failure-diagnostics",
@@ -70,7 +76,8 @@ export function createGatewayApi(ipc: IpcRenderer) {
       vendorId,
       outcome,
       periodStart,
-      periodEnd
+      periodEnd,
+      providerId
     ),
     onGatewayVendorSwitched: (handler: (event: GatewayVendorSwitchEvent) => void) =>
       subscribe(ipc, "gateway:vendor-switched", handler),

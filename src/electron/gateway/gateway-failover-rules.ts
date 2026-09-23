@@ -5,7 +5,8 @@ import type {
   GatewayFailoverRuleInput,
   GatewayFailoverRuleScope
 } from "../../shared/types";
-import { GATEWAY_FAILOVER_DEFAULT_PATTERNS, GATEWAY_FAILOVER_RULE_LIMITS } from "../../shared/constants";
+import { GATEWAY_FAILOVER_DEFAULT_PATTERNS, GATEWAY_FAILOVER_DEFAULT_STATUS_CODES, GATEWAY_FAILOVER_RULE_LIMITS } from "../../shared/constants";
+import { matchesGatewayFailoverCondition } from "../../shared/gateway-failover";
 import { readAppDatabase, updateAppDatabase, type SqliteDatabase } from "../core/app-database";
 
 type RuleRow = {
@@ -14,8 +15,10 @@ type RuleRow = {
   provider_id: AiProviderId | null;
   vendor_id: string | null;
   pattern: string;
+  status_codes: string;
+  custom_response_status: number | null;
+  custom_response_body: string | null;
   enabled: number;
-  priority: number;
   created_at: string;
   updated_at: string;
 };
@@ -42,14 +45,32 @@ function initializeSchema(db: SqliteDatabase) {
       scope TEXT NOT NULL,
       provider_id TEXT,
       vendor_id TEXT,
-      pattern TEXT NOT NULL,
+      pattern TEXT NOT NULL DEFAULT '',
+      status_codes TEXT NOT NULL DEFAULT '',
+      custom_response_status INTEGER,
+      custom_response_body TEXT,
       enabled INTEGER NOT NULL DEFAULT 1,
-      priority INTEGER NOT NULL DEFAULT 100,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
     );
+  `);
+  const columns = db.prepare("PRAGMA table_info(gateway_failover_rules)").all() as Array<{ name?: string }>;
+  if (!columns.some((column) => column.name === "status_codes")) {
+    db.exec("ALTER TABLE gateway_failover_rules ADD COLUMN status_codes TEXT NOT NULL DEFAULT ''");
+  }
+  if (!columns.some((column) => column.name === "custom_response_status")) {
+    db.exec("ALTER TABLE gateway_failover_rules ADD COLUMN custom_response_status INTEGER");
+  }
+  if (!columns.some((column) => column.name === "custom_response_body")) {
+    db.exec("ALTER TABLE gateway_failover_rules ADD COLUMN custom_response_body TEXT");
+  }
+  if (columns.some((column) => column.name === "priority")) {
+    db.exec("DROP INDEX IF EXISTS idx_gateway_failover_rules_scope");
+    db.exec("ALTER TABLE gateway_failover_rules DROP COLUMN priority");
+  }
+  db.exec(`
     CREATE INDEX IF NOT EXISTS idx_gateway_failover_rules_scope
-      ON gateway_failover_rules(scope, provider_id, vendor_id, enabled, priority);
+      ON gateway_failover_rules(scope, provider_id, vendor_id, enabled);
   `);
 }
 
@@ -77,22 +98,26 @@ export async function saveGatewayFailoverRule(input: GatewayFailoverRuleInput) {
       ...(normalized.providerId ? { providerId: normalized.providerId } : {}),
       ...(normalized.vendorId ? { vendorId: normalized.vendorId } : {}),
       pattern: normalized.pattern,
+      ...(normalized.statusCodes.length ? { statusCodes: normalized.statusCodes } : {}),
+      ...(normalized.customResponseStatus !== undefined ? { customResponseStatus: normalized.customResponseStatus } : {}),
+      ...(normalized.customResponseBody !== undefined ? { customResponseBody: normalized.customResponseBody } : {}),
       enabled: normalized.enabled,
-      priority: normalized.priority,
       createdAt: existing?.created_at || now,
       updatedAt: now
     };
     db.prepare(`
       INSERT INTO gateway_failover_rules
-        (id, scope, provider_id, vendor_id, pattern, enabled, priority, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        (id, scope, provider_id, vendor_id, pattern, status_codes, custom_response_status, custom_response_body, enabled, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(id) DO UPDATE SET
         scope = excluded.scope,
         provider_id = excluded.provider_id,
         vendor_id = excluded.vendor_id,
         pattern = excluded.pattern,
+        status_codes = excluded.status_codes,
+        custom_response_status = excluded.custom_response_status,
+        custom_response_body = excluded.custom_response_body,
         enabled = excluded.enabled,
-        priority = excluded.priority,
         updated_at = excluded.updated_at
     `).run(
       saved.id,
@@ -100,8 +125,10 @@ export async function saveGatewayFailoverRule(input: GatewayFailoverRuleInput) {
       saved.providerId || null,
       saved.vendorId || null,
       saved.pattern,
+      JSON.stringify(normalized.statusCodes),
+      saved.customResponseStatus ?? null,
+      saved.customResponseBody ?? null,
       saved.enabled ? 1 : 0,
-      saved.priority,
       saved.createdAt,
       saved.updatedAt
     );
@@ -139,18 +166,26 @@ export async function setGatewayFailoverRuleEnabled(ruleId: string, enabled: boo
 export async function getEffectiveGatewayFailoverRules(providerId: AiProviderId, vendorId?: string) {
   const custom = await getGatewayFailoverRuleSnapshot();
   return [
-    ...GATEWAY_FAILOVER_DEFAULT_PATTERNS.map((pattern, index) => ({ pattern, priority: index })),
+    ...GATEWAY_FAILOVER_DEFAULT_PATTERNS.map((pattern) => ({ pattern })),
+    ...GATEWAY_FAILOVER_DEFAULT_STATUS_CODES.map((statusCode) => ({ statusCodes: [statusCode] })),
     ...custom
       .filter((rule) => rule.enabled && isRuleInScope(rule, providerId, vendorId))
-      .map((rule) => ({ pattern: rule.pattern, priority: rule.priority }))
-  ].sort((left, right) => left.priority - right.priority);
+      .map((rule) => ({ pattern: rule.pattern, statusCodes: rule.statusCodes }))
+  ];
 }
 
-export async function matchesGatewayFailoverError(message: string | undefined, providerId: AiProviderId, vendorId?: string) {
-  if (!message?.trim()) return false;
-  const normalized = message.toLocaleLowerCase();
+export async function matchesGatewayFailoverError(message: string | undefined, providerId: AiProviderId, vendorId?: string, statusCode?: number) {
   const rules = await getEffectiveGatewayFailoverRules(providerId, vendorId);
-  return rules.some((rule) => normalized.includes(rule.pattern.toLocaleLowerCase()));
+  return rules.some((rule) => matchesGatewayFailoverCondition(rule, statusCode, message));
+}
+
+export async function getGatewayFailoverCustomResponse(message: string | undefined, providerId: AiProviderId, vendorId?: string, statusCode?: number) {
+  const rules = await getGatewayFailoverRuleSnapshot();
+  return rules.find((rule) => rule.enabled
+    && isRuleInScope(rule, providerId, vendorId)
+    && matchesGatewayFailoverCondition(rule, statusCode, message)
+    && rule.customResponseStatus !== undefined
+    && rule.customResponseBody !== undefined);
 }
 
 export function invalidateGatewayFailoverRuleSnapshot() {
@@ -163,7 +198,7 @@ async function getGatewayFailoverRuleSnapshot() {
   if (!loading || loadingVersion !== snapshotVersion) {
     const version = snapshotVersion;
     const request = ensureGatewayFailoverRuleSchema().then(() => readAppDatabase((db) => {
-      const rows = db.prepare("SELECT * FROM gateway_failover_rules ORDER BY priority ASC, updated_at ASC").all() as RuleRow[];
+      const rows = db.prepare("SELECT * FROM gateway_failover_rules ORDER BY created_at ASC, id ASC").all() as RuleRow[];
       return rows.map(rowToRule);
     })).catch(() => []);
     const current = request.then((rules) => {
@@ -185,8 +220,10 @@ function rowToRule(row: RuleRow): GatewayFailoverRule {
     ...(row.provider_id ? { providerId: row.provider_id } : {}),
     ...(row.vendor_id ? { vendorId: row.vendor_id } : {}),
     pattern: row.pattern,
+    ...(parseStatusCodes(row.status_codes).length ? { statusCodes: parseStatusCodes(row.status_codes) } : {}),
+    ...(row.custom_response_status !== null && row.custom_response_status !== undefined ? { customResponseStatus: row.custom_response_status } : {}),
+    ...(row.custom_response_body !== null && row.custom_response_body !== undefined ? { customResponseBody: row.custom_response_body } : {}),
     enabled: row.enabled === 1,
-    priority: row.priority,
     createdAt: row.created_at,
     updatedAt: row.updated_at
   };
@@ -195,29 +232,61 @@ function rowToRule(row: RuleRow): GatewayFailoverRule {
 function normalizeRuleInput(input: GatewayFailoverRuleInput) {
   const scope = input.scope;
   if (scope !== "global" && scope !== "provider" && scope !== "vendor") throw new Error("Gateway 故障规则作用域无效。");
-  const pattern = input.pattern.trim().replace(/[\r\n\t]+/g, " ");
-  if (!pattern) throw new Error("Gateway 故障规则不能为空。");
+  const pattern = (input.pattern || "").trim().replace(/[\r\n\t]+/g, " ");
+  const statusCodes = [...new Set(input.statusCodes || [])].sort((left, right) => left - right);
+  if (!pattern && statusCodes.length === 0) throw new Error("请至少配置错误文本或 HTTP 状态码。");
   if (pattern.length > GATEWAY_FAILOVER_RULE_LIMITS.maxPatternLength) {
     throw new Error(`Gateway 故障规则不能超过 ${GATEWAY_FAILOVER_RULE_LIMITS.maxPatternLength} 个字符。`);
+  }
+  if (statusCodes.some((statusCode) => !Number.isInteger(statusCode) || statusCode < 400 || statusCode > 599)) {
+    throw new Error("HTTP 状态码必须是 400 到 599 之间的整数。");
+  }
+  const customResponseStatus = input.customResponseStatus;
+  const customResponseBody = input.customResponseBody;
+  const hasCustomStatus = customResponseStatus !== undefined;
+  const hasCustomBody = typeof customResponseBody === "string" && customResponseBody.trim().length > 0;
+  if (hasCustomStatus !== hasCustomBody) throw new Error("自定义返回状态码和内容必须同时配置。");
+  if (hasCustomStatus && (!Number.isInteger(customResponseStatus) || customResponseStatus! < 100 || customResponseStatus! > 599)) {
+    throw new Error("自定义返回状态码必须是 100 到 599 之间的整数。");
+  }
+  if (hasCustomBody) {
+    if (Buffer.byteLength(customResponseBody!, "utf8") > GATEWAY_FAILOVER_RULE_LIMITS.maxCustomResponseBodyBytes) {
+      throw new Error(`自定义返回内容不能超过 ${GATEWAY_FAILOVER_RULE_LIMITS.maxCustomResponseBodyBytes / 1024} KB。`);
+    }
+    try {
+      JSON.parse(customResponseBody!);
+    } catch {
+      throw new Error("自定义返回内容必须是合法 JSON。");
+    }
   }
   const providerId = input.providerId;
   if (scope !== "global" && !providerId) throw new Error("Provider 级和供应商级规则必须指定 Provider。");
   if (scope === "vendor" && !input.vendorId?.trim()) throw new Error("供应商级规则必须指定供应商。");
   if (scope === "global" && (providerId || input.vendorId)) throw new Error("全局规则不能指定 Provider 或供应商。");
   if (scope === "provider" && input.vendorId) throw new Error("Provider 级规则不能指定供应商。");
-  const priority = input.priority ?? 100;
-  if (!Number.isInteger(priority) || priority < 0 || priority > GATEWAY_FAILOVER_RULE_LIMITS.maxPriority) {
-    throw new Error(`规则优先级必须是 0 到 ${GATEWAY_FAILOVER_RULE_LIMITS.maxPriority} 之间的整数。`);
-  }
   return {
     id: input.id?.trim() || undefined,
     scope,
     providerId,
     vendorId: input.vendorId?.trim() || undefined,
     pattern,
-    enabled: input.enabled !== false,
-    priority
+    statusCodes,
+    customResponseStatus: hasCustomStatus ? customResponseStatus : undefined,
+    customResponseBody: hasCustomBody ? customResponseBody : undefined,
+    enabled: input.enabled !== false
   };
+}
+
+function parseStatusCodes(value: string | null | undefined) {
+  if (!value) return [];
+  try {
+    const parsed: unknown = JSON.parse(value);
+    return Array.isArray(parsed)
+      ? parsed.filter((statusCode): statusCode is number => typeof statusCode === "number" && Number.isInteger(statusCode) && statusCode >= 400 && statusCode <= 599)
+      : [];
+  } catch {
+    return [];
+  }
 }
 
 function isRuleInScope(rule: GatewayFailoverRule, providerId: AiProviderId, vendorId?: string) {

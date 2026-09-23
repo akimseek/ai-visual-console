@@ -266,13 +266,17 @@ export async function getGatewayFailureDiagnostics(): Promise<GatewayFailureDiag
   return listGatewayFailureDiagnostics(3);
 }
 
-export async function getGatewayFailureDiagnosticsPage(page = 1, pageSize = PAGINATION_DEFAULT_PAGE_SIZE, vendorId = "", outcome: GatewayFailureOutcomeFilter = "", periodStart = "", periodEnd = ""): Promise<GatewayFailureDiagnosticsPage> {
+export async function getGatewayFailureDiagnosticsPage(page = 1, pageSize = PAGINATION_DEFAULT_PAGE_SIZE, vendorId = "", outcome: GatewayFailureOutcomeFilter = "", periodStart = "", periodEnd = "", providerId: AiProviderId | "" = ""): Promise<GatewayFailureDiagnosticsPage> {
   await ensureSchema();
   const safePage = Math.max(1, Math.floor(page));
   const safePageSize = Math.min(PAGINATION_MAX_PAGE_SIZE, Math.max(1, Math.floor(pageSize)));
   return readAppDatabase((db) => {
     const filters = ["outcome IN ('error', 'timeout')"];
     const filterParams: string[] = [];
+    if (providerId) {
+      filters.push("provider_id = ?");
+      filterParams.push(providerId);
+    }
     if (vendorId.trim()) {
       filters.push("vendor_id = ?");
       filterParams.push(vendorId.trim());
