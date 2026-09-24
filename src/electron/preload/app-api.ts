@@ -8,29 +8,23 @@ import type {
   CliEnvironmentStatus,
   CliInstallRequest,
   CliInstallResult,
-  CompressionPrompt,
-  CompressionPromptInput,
   VendorModel,
   WorkspacePreset,
   WorkspacePresetInput
 } from "../types";
 import { invoke, subscribe } from "./ipc-bridge";
 
-// 应用级命令、CLI 环境、工作区预设和压缩提示 API。
+// 应用级命令、版本信息、CLI 环境和工作区预设 API。
 export function createAppApi(ipc: IpcRenderer) {
   return {
     appCommand: (command: AppCommand) => invoke<void>(ipc, "app:command", command),
+    getAppVersion: () => invoke<string>(ipc, "app:get-version"),
     chooseExitAction: (choice: "minimize" | "quit" | "cancel") => invoke<void>(ipc, "app:exit-choice", choice),
     onExitConfirmationRequested: (handler: () => void) => subscribe(ipc, "app:request-exit", handler),
     listProviders: () => invoke<AiProviderSummary[]>(ipc, "ai:list-providers"),
     checkCliEnvironment: (request: CliEnvironmentRequest) =>
       invoke<CliEnvironmentStatus>(ipc, "cli:check-environment", request),
     installCli: (request: CliInstallRequest) => invoke<CliInstallResult>(ipc, "cli:install", request),
-    listCompressionPrompts: () => invoke<CompressionPrompt[]>(ipc, "compression-prompt:list"),
-    saveCompressionPrompt: (input: CompressionPromptInput) =>
-      invoke<CompressionPrompt>(ipc, "compression-prompt:save", input),
-    deleteCompressionPrompt: (promptId: string) =>
-      invoke<{ deleted: boolean }>(ipc, "compression-prompt:delete", promptId),
     listModels: (targetId: string) => invoke<VendorModel[]>(ipc, "models:list", targetId),
     listCachedTargets: (providerId?: AiProviderId) =>
       invoke<AiTarget[]>(ipc, "codex:list-cached-targets", providerId),

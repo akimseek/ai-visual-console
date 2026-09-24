@@ -15,7 +15,6 @@ import { useTabVendors } from "../features/vendors/use-tab-vendors";
 import { AppMenuBar } from "./app-menu-bar";
 import { CommandPalette } from "./command-palette";
 import { useVendors } from "../features/vendors/use-vendors";
-import { useCompressionPrompts } from "../features/settings/use-compression-prompts";
 import { useCliInstaller } from "../hooks/use-cli-installer";
 import { useSkills } from "../features/skills/use-skills";
 import { useGatewayPortDialog } from "../features/settings/use-gateway-port-dialog";
@@ -27,7 +26,6 @@ import { SidebarControls } from "../components/sidebar-controls";
 import { NoticeToast } from "../components/notice-toast";
 import { SidebarHeader } from "../components/sidebar-header";
 import { ExitConfirmationDialog } from "../components/exit-confirmation-dialog";
-import { renderCompressionPrompt } from "../features/settings/compression-prompt";
 import { sessionCacheKey, useSessionLoader, type SessionView } from "../features/sessions/use-session-loader";
 import { useSessionWorkspaceState } from "../features/sessions/use-session-workspace-state";
 import { useAppMenuState } from "../hooks/use-app-menu-state";
@@ -59,8 +57,8 @@ import { GatewayPortOverlay } from './gateway-port-overlay'
 import { GatewayLogCleanupDialog, formatGatewayCleanupResult } from "../features/settings/gateway-log-cleanup-dialog";
 import { SessionOverlays } from './session-overlays'
 import { VendorManagerOverlay } from './vendor-manager-overlay'
-import { CompressionPromptOverlay } from './compression-prompt-overlay'
 import { SkillManagerOverlay } from './skill-manager-overlay'
+import { AboutDialog } from "../components/about-dialog";
 import { SidebarWorkbench } from "../features/workbench/workbench-view";
 import { VendorDataProvider } from "../features/vendors/vendor-context";
 import { GlobalSessionSearchPanel } from "../features/sessions/global-session-search-panel";
@@ -94,6 +92,8 @@ export function App() {
   const [workbenchOpen, setWorkbenchOpen] = useState(false);
   const [favoriteOpen, setFavoriteOpen] = useState(false);
   const [gatewayLogCleanupOpen, setGatewayLogCleanupOpen] = useState(false);
+  const [aboutOpen, setAboutOpen] = useState(false);
+  const [appVersion, setAppVersion] = useState("");
   const [exitConfirmationOpen, setExitConfirmationOpen] = useState(false);
   const [exitConfirmationBusy, setExitConfirmationBusy] = useState(false);
   const terminalTabSyncSignatureRef = useRef("");
@@ -528,25 +528,6 @@ export function App() {
   const activeSessionDetails = activeSession && selectedSessionDetails?.id === activeSession.id ? selectedSessionDetails : activeSession;
   const activeTitle = activeSession?.title || activeTab?.title || "当前无对话";
   const {
-    compressionManagerOpen,
-    setCompressionManagerOpen,
-    compressionManagerMode,
-    setCompressionManagerMode,
-    compressionPrompts,
-    compressionDraft,
-    setCompressionDraft,
-    compressionBusy,
-    compressionError,
-    compressionFieldErrors,
-    setCompressionFieldErrors,
-    compressionToast,
-    openCompressionManager,
-    editCompressionPromptDraft,
-    saveCompressionPromptDraft,
-    deleteCompressionPromptById,
-    generateCompressionPrompt
-  } = useCompressionPrompts({ getActiveSession: () => selectedSessionDetails || activeSession || selected });
-  const {
     cliInstallerOpen,
     setCliInstallerOpen,
     cliInstallerBusy,
@@ -597,8 +578,7 @@ export function App() {
 
   useContextReminder({
     session: statusSession,
-    setNotice,
-    copyCompressionPrompt
+    setNotice
   });
 
   useEffect(() => {
@@ -773,14 +753,14 @@ export function App() {
     });
   }
 
-  async function copyCompressionPrompt(sourceSession?: AiSession | null) {
-    const session = sourceSession || selectedSessionDetails || activeSession || selected;
-    const prompts = compressionPrompts.length > 0 ? compressionPrompts : await window.codexConsole.listCompressionPrompts();
-    const prompt = prompts[0];
-    if (!prompt) return;
-
-    await window.codexConsole.copyText(renderCompressionPrompt(prompt.content, session));
-    setNotice("压缩摘要提示词已复制。");
+  async function openAboutDialog() {
+    setAboutOpen(true);
+    try {
+      setAppVersion(await window.codexConsole.getAppVersion());
+    } catch (versionError: unknown) {
+      setAppVersion("无法读取");
+      setError(versionError instanceof Error ? versionError.message : String(versionError));
+    }
   }
 
   const appMenus = createAppMenus({
@@ -801,7 +781,6 @@ export function App() {
       exportSession: (format) => void exportActiveSession(format),
       quit: () => void executeAppCommand("quit"),
       manageVendors: () => void openVendorManager(),
-      manageCompressionPrompts: () => void openCompressionManager(),
       openSystemTerminal: openNewSystemTerminal,
       installCli: openCliInstallerDialog,
       openLogDirectory: () => void executeAppCommand("openLogDir"),
@@ -809,7 +788,7 @@ export function App() {
         setOpenAppMenu("");
         setGatewayLogCleanupOpen(true);
       },
-      showAbout: () => void executeAppCommand("about")
+      showAbout: () => void openAboutDialog()
     }
   });
 
@@ -1056,25 +1035,7 @@ export function App() {
         onClose={() => setCliInstallerOpen(false)}
         onInstall={installAiCli}
       />
-      <CompressionPromptOverlay
-        open={compressionManagerOpen}
-        prompts={compressionPrompts}
-        draft={compressionDraft}
-        mode={compressionManagerMode}
-        busy={compressionBusy}
-        error={compressionError}
-        fieldErrors={compressionFieldErrors}
-        toast={compressionToast}
-        onDraftChange={setCompressionDraft}
-        onFieldErrorClear={(field) => setCompressionFieldErrors((current) => ({ ...current, [field]: undefined }))}
-        onNew={() => editCompressionPromptDraft()}
-        onEdit={editCompressionPromptDraft}
-        onGenerate={(prompt) => void generateCompressionPrompt(prompt)}
-        onSave={() => void saveCompressionPromptDraft()}
-        onDelete={(promptId) => void deleteCompressionPromptById(promptId)}
-        onBack={() => setCompressionManagerMode("list")}
-        onClose={() => setCompressionManagerOpen(false)}
-      />
+      {aboutOpen && <AboutDialog version={appVersion} onClose={() => setAboutOpen(false)} />}
       <VendorManagerOverlay
         open={vendorManagerOpen}
         vendors={vendors}

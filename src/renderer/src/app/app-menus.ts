@@ -1,6 +1,6 @@
 import type { SessionExportFormat } from "../types";
 import type { AppMenuDefinition } from "./app-menu-bar";
-import { Command, Download, FileText, FolderOpen, Info, Landmark, LogOut, Settings, SlidersHorizontal, SquareTerminal, Trash2, Wrench } from "lucide-react";
+import { Command, Download, FileText, FolderOpen, Info, Landmark, LogOut, Network, Settings, SquareTerminal, Trash2, Wrench } from "lucide-react";
 
 type AppMenuActions = {
   openCommandPalette: () => void;
@@ -10,7 +10,6 @@ type AppMenuActions = {
   exportSession: (format: SessionExportFormat) => void;
   quit: () => void;
   manageVendors: () => void;
-  manageCompressionPrompts: () => void;
   openSystemTerminal: () => void;
   installCli: () => void;
   openLogDirectory: () => void;
@@ -43,7 +42,6 @@ export function createAppMenus({
       items: [
         { label: "管理 skill", icon: Wrench, disabled: !supportsSkills || !hasTarget, action: actions.manageSkills },
         { label: "设置会话", icon: Settings, disabled: !supportsSessionSettings || !isWslTarget, action: actions.openSessionSettings },
-        { label: "网关", icon: Settings, action: actions.openGatewayPortSettings },
         { separator: true, label: "" },
         {
           label: "导出",
@@ -64,7 +62,7 @@ export function createAppMenus({
       label: "工具箱",
       items: [
         { label: "供应商管理", icon: Landmark, action: actions.manageVendors },
-        { label: "压缩提示", icon: SlidersHorizontal, action: actions.manageCompressionPrompts }
+        { label: "网关", icon: Network, action: actions.openGatewayPortSettings }
       ]
     },
     { id: "terminal", label: "终端", items: [{ label: "新建终端", icon: SquareTerminal, action: actions.openSystemTerminal }] },

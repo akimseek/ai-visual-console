@@ -5,6 +5,7 @@ import {
   extractModelStatus,
   extractUsage,
   parseSessionContent,
+  parseSessionListContent,
   safeJsonParse,
   shouldKeepMessage
 } from "./session-parser";
@@ -69,6 +70,19 @@ describe("parseSessionContent", () => {
     const content = jsonl({ type: "event_msg", payload: { type: "user_message", message: "hi" } });
     const session = parseSessionContent(FILE, content);
     expect(session!.id).toBe(VALID_ID);
+  });
+
+  it("分支文件名中的线程 ID 优先于暂时残留的父线程 session_meta ID", () => {
+    const branchId = "66666666-7777-8888-9999-aaaaaaaaaaaa";
+    const branchFilePath = `/home/u/.codex/sessions/rollout-2026-01-02T03-04-05-${branchId}.jsonl`;
+    const content = jsonl(
+      { type: "session_meta", payload: { id: VALID_ID } },
+      { type: "event_msg", payload: { type: "user_message", message: "branch prompt" } }
+    );
+    const file = { filePath: branchFilePath, mtimeMs: 1, size: Buffer.byteLength(content) };
+
+    expect(parseSessionContent(branchFilePath, content)?.id).toBe(branchId);
+    expect(parseSessionListContent(file, content)?.id).toBe(branchId);
   });
 
   it("既无 id 也无法从文件名提取时返回 null", () => {

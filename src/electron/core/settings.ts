@@ -1,14 +1,11 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { createHash, randomBytes } from "node:crypto";
-import type { CodexTarget, CompressionPrompt, CompressionPromptInput, WorkspacePreset, WorkspacePresetInput } from "../types";
+import type { CodexTarget, WorkspacePreset, WorkspacePresetInput } from "../types";
 import {
-  deleteCompressionPromptRecord,
   deleteWorkspacePresetRecord,
   hasAppDatabase,
-  listCompressionPromptRecords,
   listWorkspacePresetRecords,
-  saveCompressionPromptRecord,
   saveWorkspacePresetRecord
 } from "./app-database";
 
@@ -23,31 +20,7 @@ type AppSettings = {
   gatewayCircuitDurationSeconds?: number;
   cachedTargets?: CodexTarget[];
   workspacePresets?: WorkspacePreset[];
-  compressionPrompts?: CompressionPrompt[];
 };
-
-const DEFAULT_COMPRESSION_PROMPT_CONTENT = `请生成“可恢复工作状态摘要”，用于新 Session 恢复上下文。
-
-保留：
-
-1. 当前任务目标
-2. 已完成内容
-3. 关键架构决策
-4. 修改过的文件
-5. 未解决问题
-6. 下一步计划
-7. 关键错误日志
-
-要求：
-
-- 使用 markdown
-- 使用 checklist
-- 不要解释过程
-- 不要自然语言总结
-- 保留精确路径
-- 保留关键命令、配置、SQL、错误日志
-- 控制在 1200 token
-- 输出必须适合 AI 继续接手开发`;
 
 let settingsPath = "";
 let settingsQueue = Promise.resolve();
@@ -257,82 +230,6 @@ export async function deleteWorkspacePreset(presetId: string) {
   return { deleted: true };
 }
 
-export async function listCompressionPrompts() {
-  if (hasAppDatabase()) {
-    await ensureStructuredSettingsMigrated();
-    const prompts = await listCompressionPromptRecords();
-    if (prompts.length > 0) return sortCompressionPrompts(prompts);
-    const initial = [createDefaultCompressionPrompt()];
-    await saveCompressionPromptRecord(initial[0]);
-    return initial;
-  }
-  const settings = await readSettings();
-  if (!settings.compressionPrompts) {
-    const initial = [createDefaultCompressionPrompt()];
-    await updateSettings((current) => ({ ...current, compressionPrompts: initial }));
-    return initial;
-  }
-  const migrated = migrateCompressionPrompts(settings.compressionPrompts);
-  if (JSON.stringify(migrated) !== JSON.stringify(settings.compressionPrompts)) {
-    await updateSettings((current) => ({ ...current, compressionPrompts: migrated }));
-  }
-  return sortCompressionPrompts(migrated);
-}
-
-export async function saveCompressionPrompt(input: CompressionPromptInput) {
-  const normalized = normalizeCompressionPromptInput(input);
-  const now = new Date().toISOString();
-  let saved: CompressionPrompt | null = null;
-
-  if (hasAppDatabase()) {
-    await ensureStructuredSettingsMigrated();
-    const existing = (await listCompressionPromptRecords()).find((item) => item.id === normalized.id);
-    saved = {
-      id: existing?.id || normalized.id || crypto.randomUUID(),
-      name: normalized.name,
-      content: normalized.content,
-      createdAt: existing?.createdAt || now,
-      updatedAt: now
-    };
-    await saveCompressionPromptRecord(saved);
-    return saved;
-  }
-
-  await updateSettings((settings) => {
-    const existing = settings.compressionPrompts || [];
-    const current = normalized.id ? existing.find((item) => item.id === normalized.id) : null;
-    saved = {
-      id: current?.id || crypto.randomUUID(),
-      name: normalized.name,
-      content: normalized.content,
-      createdAt: current?.createdAt || now,
-      updatedAt: now
-    };
-    return {
-      ...settings,
-      compressionPrompts: sortCompressionPrompts([
-        saved,
-        ...existing.filter((item) => item.id !== saved!.id)
-      ]).slice(0, 50)
-    };
-  });
-
-  return saved!;
-}
-
-export async function deleteCompressionPrompt(promptId: string) {
-  if (hasAppDatabase()) {
-    await ensureStructuredSettingsMigrated();
-    await deleteCompressionPromptRecord(promptId);
-    return { deleted: true };
-  }
-  await updateSettings((settings) => ({
-    ...settings,
-    compressionPrompts: (settings.compressionPrompts || []).filter((prompt) => prompt.id !== promptId)
-  }));
-  return { deleted: true };
-}
-
 function normalizeWorkspacePresetInput(input: WorkspacePresetInput) {
   const cwd = input.cwd.trim();
   if (!cwd) throw new Error("工作目录不能为空。");
@@ -350,33 +247,6 @@ function sortWorkspacePresets(presets: WorkspacePreset[]) {
   return [...presets].sort((left, right) => Date.parse(right.updatedAt) - Date.parse(left.updatedAt));
 }
 
-function createDefaultCompressionPrompt(): CompressionPrompt {
-  const now = new Date().toISOString();
-  return {
-    id: "default-recoverable-work-summary",
-    name: "可恢复工作状态摘要",
-    content: DEFAULT_COMPRESSION_PROMPT_CONTENT,
-    createdAt: now,
-    updatedAt: now
-  };
-}
-
-function normalizeCompressionPromptInput(input: CompressionPromptInput) {
-  const name = input.name.trim();
-  const content = input.content.trim();
-  if (!name) throw new Error("提示名称不能为空。");
-  if (!content) throw new Error("提示内容不能为空。");
-  return {
-    id: input.id?.trim() || undefined,
-    name: name.slice(0, 80),
-    content: content.slice(0, 20000)
-  };
-}
-
-function sortCompressionPrompts(prompts: CompressionPrompt[]) {
-  return [...prompts].sort((left, right) => Date.parse(right.updatedAt) - Date.parse(left.updatedAt));
-}
-
 async function ensureStructuredSettingsMigrated() {
   if (!structuredSettingsMigration) structuredSettingsMigration = migrateStructuredSettings();
   await structuredSettingsMigration;
@@ -385,38 +255,17 @@ async function ensureStructuredSettingsMigrated() {
 async function migrateStructuredSettings() {
   const settings = await readSettings();
   const legacyPresets = settings.workspacePresets || [];
-  const legacyPrompts = settings.compressionPrompts || [];
   const currentPresets = await listWorkspacePresetRecords();
-  const currentPrompts = await listCompressionPromptRecords();
 
   if (currentPresets.length === 0) {
     for (const preset of legacyPresets) await saveWorkspacePresetRecord(preset);
   }
-  if (currentPrompts.length === 0) {
-    for (const prompt of legacyPrompts) await saveCompressionPromptRecord(prompt);
-  }
-  if (legacyPresets.length === 0 && legacyPrompts.length === 0) return;
+  if (legacyPresets.length === 0) return;
 
   await updateSettings((current) => ({
     ...current,
-    workspacePresets: undefined,
-    compressionPrompts: undefined
+    workspacePresets: undefined
   }));
-}
-
-function migrateCompressionPrompts(prompts: CompressionPrompt[]) {
-  return prompts.map((prompt) => {
-    if (prompt.id !== "default-recoverable-work-summary") return prompt;
-    const content = removeSessionInfoBlock(prompt.content);
-    return content === prompt.content ? prompt : { ...prompt, content };
-  });
-}
-
-function removeSessionInfoBlock(content: string) {
-  return content.replace(
-    /\n+当前会话信息：\n- 会话编号：\{\{session_id\}\}\n- 标题：\{\{session_title\}\}\n- 工作目录：\{\{session_cwd\}\}\n- 模型：\{\{session_model\}\}\n- Token：\{\{session_token\}\}\n- 上下文：\{\{session_context\}\}\n+/,
-    "\n\n"
-  );
 }
 
 function mergeCachedTargetsByProvider(current: CodexTarget[], next: CodexTarget[]) {

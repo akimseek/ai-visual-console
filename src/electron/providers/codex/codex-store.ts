@@ -4,7 +4,7 @@ import path from "node:path";
 import os from "node:os";
 import { createInterface } from "node:readline";
 import type { CodexSession, CodexSessionFile, SessionMutationRef } from "../../types";
-import { parseSessionContent, parseSessionListContent } from "../../../shared/session-parser";
+import { getSessionIdFromFilePath, parseSessionContent, parseSessionListContent } from "../../../shared/session-parser";
 import {
   readSessionCache,
   removeSessionCacheEntries,
@@ -87,7 +87,7 @@ export async function listTrashSessions(): Promise<CodexSession[]> {
 
 export async function listCachedSessions(cachePath: string): Promise<CodexSession[]> {
   const cache = await readCache(cachePath);
-  return sortSessions(Object.values(cache.sessions).map((item) => item.session));
+  return sortSessions(Object.values(cache.sessions).map((item) => normalizeCachedSessionId(item.session)));
 }
 
 export async function listSessionsFromFiles(
@@ -105,8 +105,9 @@ export async function listSessionsFromFiles(
   const sessions = await mapLimit(files, LIST_PARSE_CONCURRENCY, async (file) => {
       const cached = cache.sessions[file.filePath];
       if (cached && cached.mtimeMs === file.mtimeMs && cached.changeMs === file.changeMs && cached.size === file.size) {
-        nextCache.sessions[file.filePath] = cached;
-        return cached.session;
+        const session = normalizeCachedSessionId(cached.session);
+        nextCache.sessions[file.filePath] = session === cached.session ? cached : { ...cached, session };
+        return session;
       }
 
       const content =
@@ -374,6 +375,11 @@ async function writeCache(cachePath: string, cache: SessionCache) {
 
 function emptyCache(): SessionCache {
   return { version: CACHE_VERSION, sessions: {} };
+}
+
+function normalizeCachedSessionId(session: CodexSession) {
+  const fileSessionId = getSessionIdFromFilePath(session.filePath);
+  return fileSessionId && fileSessionId !== session.id ? { ...session, id: fileSessionId } : session;
 }
 
 function sortSessions(sessions: CodexSession[]) {

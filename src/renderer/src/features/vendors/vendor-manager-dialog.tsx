@@ -623,9 +623,12 @@ export function VendorManagerDialog({
           <header>
             <div>
               <h2 id="gateway-failover-rules-dialog-title">Gateway 故障规则</h2>
-              <p>维护供应商返回的容量、限流和临时不可用错误识别规则。</p>
+              <p>识别容量、限流和临时不可用响应。内置规则始终生效；自定义规则按已填写条件同时匹配。</p>
             </div>
-            <IconButton icon={X} label="关闭故障规则" onClick={() => setFailoverRulesOpen(false)} disabled={failoverRulesBusy} />
+            <div className="gateway-failover-rules-header-actions">
+              <span>{failoverRules.length} 条自定义规则</span>
+              <IconButton icon={X} label="关闭故障规则" onClick={() => setFailoverRulesOpen(false)} disabled={failoverRulesBusy} />
+            </div>
           </header>
           <GatewayFailoverRulesPanel
             vendors={vendors}
@@ -763,41 +766,67 @@ function GatewayFailoverRulesPanel({
 }) {
   return (
     <section className="vendor-failover-rules" aria-labelledby="vendor-failover-rules-title">
-      <div className="vendor-failover-rules-heading">
-        <div>
-          <strong id="vendor-failover-rules-title">Gateway 故障识别规则</strong>
-          <small>内置状态码与错误文本规则始终生效；自定义规则中状态码和错误文本同时填写时需同时匹配。</small>
+      <section className="vendor-failover-rule-section" aria-labelledby="vendor-failover-rules-title">
+        <div className="vendor-failover-section-heading">
+          <strong id="vendor-failover-rules-title">内置规则</strong>
+          <span>始终生效</span>
         </div>
-        <span>{rules.length} 条自定义规则</span>
-      </div>
       <div className="vendor-failover-defaults">
-        <span>内置规则</span>
         <code>HTTP {GATEWAY_FAILOVER_DEFAULT_STATUS_CODES.join(", ")}</code>
         {GATEWAY_FAILOVER_DEFAULT_PATTERNS.map((item) => <code key={item}>{item}</code>)}
       </div>
+      </section>
+      <section className="vendor-failover-rule-section" aria-labelledby="vendor-failover-custom-title">
+        <div className="vendor-failover-section-heading">
+          <strong id="vendor-failover-custom-title">自定义规则</strong>
+          <span>可限定全局、Provider 或供应商</span>
+        </div>
       {rules.length > 0 && (
-        <div className="vendor-failover-rule-list">
-          {rules.map((rule) => (
-            <div className={`vendor-failover-rule-row${rule.enabled ? "" : " disabled"}`} key={rule.id}>
-              <button
-                type="button"
-                className={`vendor-candidate-toggle${rule.enabled ? " active" : ""}`}
-                role="switch"
-                aria-checked={rule.enabled}
-                aria-label={`${rule.pattern}${rule.enabled ? "已启用" : "已停用"}`}
-                onClick={() => onToggle(rule.id, !rule.enabled)}
-                disabled={busy}
-              ><span /></button>
-              <code title={formatRuleConditions(rule)}>{formatRuleConditions(rule)}</code>
-              <span>{formatRuleScope(rule, vendors)}</span>
-              {rule.customResponseStatus !== undefined && <span>返回 HTTP {rule.customResponseStatus}</span>}
-              <IconButton icon={Trash2} label={`删除规则 ${rule.pattern}`} onClick={() => onDelete(rule.id)} disabled={busy} />
-            </div>
-          ))}
+        <div className="vendor-failover-rule-table-wrap">
+          <table className="vendor-failover-rule-table">
+            <thead>
+              <tr>
+                <th scope="col">匹配条件</th>
+                <th scope="col">作用范围</th>
+                <th scope="col">失败响应</th>
+                <th scope="col">状态</th>
+                <th scope="col">操作</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rules.map((rule) => (
+                <tr key={rule.id} className={rule.enabled ? undefined : "disabled"}>
+                  <td><code title={formatRuleConditions(rule)}>{formatRuleConditions(rule)}</code></td>
+                  <td>{formatRuleScope(rule, vendors)}</td>
+                  <td>{rule.customResponseStatus !== undefined ? `HTTP ${rule.customResponseStatus}` : "网关默认响应"}</td>
+                  <td>
+                    <button
+                      type="button"
+                      className={`vendor-candidate-toggle${rule.enabled ? " active" : ""}`}
+                      role="switch"
+                      aria-checked={rule.enabled}
+                      aria-label={`${formatRuleConditions(rule)}${rule.enabled ? "已启用" : "已停用"}`}
+                      onClick={() => onToggle(rule.id, !rule.enabled)}
+                      disabled={busy}
+                    ><span /></button>
+                  </td>
+                  <td className="vendor-failover-rule-actions">
+                    <IconButton icon={Trash2} label={`删除规则 ${rule.pattern}`} onClick={() => onDelete(rule.id)} disabled={busy} />
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </div>
       )}
+      {rules.length === 0 && <p className="vendor-failover-empty">尚未添加自定义规则</p>}
+      </section>
+      <section className="vendor-failover-rule-section" aria-labelledby="vendor-failover-editor-title">
+        <div className="vendor-failover-section-heading">
+          <strong id="vendor-failover-editor-title">添加规则</strong>
+        </div>
       <div className="vendor-failover-rule-editor">
-        <label>
+        <label className="vendor-failover-scope-field">
           <span>作用域</span>
           <select value={scope} onChange={(event) => onScopeChange(event.target.value as GatewayFailoverRuleScope)}>
             <option value="global">全局</option>
@@ -805,13 +834,13 @@ function GatewayFailoverRulesPanel({
             <option value="vendor">指定供应商</option>
           </select>
         </label>
-        {scope !== "global" && <label>
+        {scope !== "global" && <label className="vendor-failover-provider-field">
           <span>Provider</span>
           <select value={providerId} onChange={(event) => onProviderChange(event.target.value as AiProviderId)}>
             {(["codex", "claude", "gemini", "qoder"] as AiProviderId[]).map((item) => <option key={item} value={item}>{providerLabel(item)}</option>)}
           </select>
         </label>}
-        {scope === "vendor" && <label>
+        {scope === "vendor" && <label className="vendor-failover-vendor-field">
           <span>供应商</span>
           <select value={vendorId} onChange={(event) => onVendorChange(event.target.value)}>
             <option value="">请选择供应商</option>
@@ -822,12 +851,12 @@ function GatewayFailoverRulesPanel({
           <span>错误信息包含</span>
           <input value={pattern} maxLength={200} placeholder="例如：credit insufficient balance" onChange={(event) => onPatternChange(event.target.value)} />
         </label>
-        <label>
+        <label className="vendor-failover-status-field">
           <span>HTTP 状态码</span>
           <input value={statusCodesText} inputMode="numeric" aria-invalid={Boolean(statusCodeError)} placeholder="例如：400, 429" onChange={(event) => onStatusCodesTextChange(event.target.value)} />
           {statusCodeError && <small className="form-field-error">{statusCodeError}</small>}
         </label>
-        <label>
+        <label className="vendor-failover-custom-status-field">
           <span>自定义返回状态码（可选）</span>
           <input value={customResponseStatusText} inputMode="numeric" aria-invalid={Boolean(customResponseError)} placeholder="例如：503" onChange={(event) => onCustomResponseStatusTextChange(event.target.value)} />
         </label>
@@ -836,12 +865,17 @@ function GatewayFailoverRulesPanel({
           <textarea value={customResponseBody} rows={3} aria-invalid={Boolean(customResponseError)} placeholder={'例如：{"error":"provider unavailable"}'} onChange={(event) => onCustomResponseBodyChange(event.target.value)} />
           {customResponseError && <small className="form-field-error">{customResponseError}</small>}
         </label>
-        <button type="button" className="ui-button ui-button-secondary" onClick={onSave} disabled={busy || (!pattern.trim() && parseGatewayFailoverStatusCodes(statusCodesText).statusCodes.length === 0) || Boolean(parseGatewayFailoverStatusCodes(statusCodesText).error) || Boolean(parseGatewayFailoverCustomResponse(customResponseStatusText, customResponseBody).error) || (scope === "vendor" && !vendorId)}>
+        <button type="button" className="ui-button ui-button-secondary vendor-failover-add-rule" onClick={onSave} disabled={busy || (!pattern.trim() && parseGatewayFailoverStatusCodes(statusCodesText).statusCodes.length === 0) || Boolean(parseGatewayFailoverStatusCodes(statusCodesText).error) || Boolean(parseGatewayFailoverCustomResponse(customResponseStatusText, customResponseBody).error) || (scope === "vendor" && !vendorId)}>
           <Plus aria-hidden="true" size={14} />
           添加规则
         </button>
       </div>
-      <div className="vendor-failover-rule-test">
+      </section>
+      <section className="vendor-failover-rule-section vendor-failover-rule-test" aria-labelledby="vendor-failover-test-title">
+        <div className="vendor-failover-section-heading vendor-failover-test-heading">
+          <strong id="vendor-failover-test-title">规则测试</strong>
+          <span>输入状态码和供应商错误内容，查看是否命中</span>
+        </div>
         <label>
           <span>HTTP 状态码</span>
           <input type="number" min={400} max={599} value={testStatusCodeText} placeholder="例如：400" onChange={(event) => onTestStatusCodeTextChange(event.target.value)} />
@@ -851,7 +885,7 @@ function GatewayFailoverRulesPanel({
           <input value={testText} placeholder="粘贴供应商返回的错误信息" onChange={(event) => onTestTextChange(event.target.value)} />
         </label>
         {(testText.trim() || testStatusCodeText.trim()) && <small className={testMatched ? "matched" : "not-matched"}>{testMatched ? `将触发故障切换${testCustomResponseStatus ? `；最终失败时返回 HTTP ${testCustomResponseStatus}` : "；未配置自定义响应"}` : "不会触发故障切换"}</small>}
-      </div>
+      </section>
     </section>
   );
 }

@@ -160,8 +160,7 @@ export function requireGatewayFailoverRuleInput(value: unknown): GatewayFailover
 export function requireAppCommand(value: unknown): AppCommand {
   const commands: AppCommand[] = [
     "quit",
-    "openLogDir",
-    "about"
+    "openLogDir"
   ];
   if (typeof value !== "string" || !commands.includes(value as AppCommand)) throw new Error("参数无效：app command");
   return value as AppCommand;
@@ -320,16 +319,6 @@ export function requireWorkspacePresetInput(value: unknown): WorkspacePresetInpu
     targetKind: input.targetKind === "local" || input.targetKind === "wsl" ? input.targetKind : undefined,
     prompt: typeof input.prompt === "string" && input.prompt.trim() ? input.prompt : undefined,
     cliArgs: typeof input.cliArgs === "string" && input.cliArgs.trim() ? input.cliArgs : undefined
-  };
-}
-
-export function requireCompressionPromptInput(value: unknown) {
-  if (!value || typeof value !== "object") throw new Error("参数无效：compression prompt");
-  const input = value as Record<string, unknown>;
-  return {
-    id: typeof input.id === "string" && input.id.trim() ? input.id.trim() : undefined,
-    name: typeof input.name === "string" ? input.name : "",
-    content: requireString(input.content, "content")
   };
 }
 

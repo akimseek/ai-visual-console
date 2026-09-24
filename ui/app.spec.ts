@@ -53,29 +53,34 @@ test.beforeEach(async ({ page }) => {
           configuredCircuitFailureThreshold: 3,
           configuredCircuitDurationSeconds: 60
         }),
-        listCompressionPrompts: async () => []
+        getGatewayExternalApiStatus: async () => ({ enabled: false, tokenConfigured: false }),
+        getAppVersion: async () => "1.2.0"
       }
     });
   });
   await page.goto("/");
 });
 
-test("opens core menus and overlays", async ({ page }) => {
+test("places Gateway in Toolbox and opens the styled About dialog", async ({ page }) => {
   await expect(page.getByRole("navigation", { name: "应用菜单" })).toBeVisible();
 
   await page.getByRole("button", { name: "文件", exact: true }).click();
-  await page.getByRole("menuitem", { name: "设置", exact: true }).click();
-  const settingsDialog = page.getByRole("dialog", { name: "设置" });
-  await expect(settingsDialog).toBeVisible();
-  await settingsDialog.getByRole("button", { name: "关闭" }).click();
-  await expect(settingsDialog).toBeHidden();
+  await expect(page.getByRole("menuitem", { name: "网关", exact: true })).toHaveCount(0);
 
   await page.getByRole("button", { name: "工具箱", exact: true }).click();
-  await page.getByRole("menuitem", { name: "压缩提示", exact: true }).click();
-  const compressionDialog = page.getByRole("dialog", { name: "压缩提示管理" });
-  await expect(compressionDialog).toBeVisible();
-  await compressionDialog.getByRole("button", { name: "关闭" }).click();
-  await expect(compressionDialog).toBeHidden();
+  await page.getByRole("menuitem", { name: "网关", exact: true }).click();
+  const gatewayDialog = page.getByRole("dialog", { name: "网关" });
+  await expect(gatewayDialog).toBeVisible();
+  await gatewayDialog.getByRole("button", { name: "取消" }).click();
+  await expect(gatewayDialog).toBeHidden();
+
+  await page.getByRole("button", { name: "帮助", exact: true }).click();
+  await page.getByRole("menuitem", { name: "关于", exact: true }).click();
+  const aboutDialog = page.getByRole("dialog", { name: "关于" });
+  await expect(aboutDialog.getByText("AI 可视化控制台", { exact: true })).toBeVisible();
+  await expect(aboutDialog.getByText("1.2.0", { exact: true })).toBeVisible();
+  await aboutDialog.locator("footer").getByRole("button", { name: "关闭" }).click();
+  await expect(aboutDialog).toBeHidden();
 });
 
 test("opens the vendor table for the selected target", async ({ page }) => {

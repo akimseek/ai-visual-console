@@ -6,6 +6,7 @@ import {
   deleteSession,
   deleteSessions,
   getCachePath,
+  listCachedSessions,
   listSessionsFromFiles,
   purgeSession,
   readSessionFileLines,
@@ -111,6 +112,37 @@ describe("deleteSessions 批量路径", () => {
 });
 
 describe("轻量会话缓存", () => {
+  it("缓存命中时也以分支 rollout 文件名修正过期的父线程 ID", async () => {
+    const branchId = "66666666-7777-8888-9999-aaaaaaaaaaaa";
+    const parentId = SESSION_ID;
+    const filePath = path.join(codexHome, "sessions", "2026", `rollout-2026-01-02T03-04-05-${branchId}.jsonl`);
+    const file = { filePath, mtimeMs: 1, changeMs: 1, size: 10 };
+    const cachePath = getCachePath();
+    await fs.mkdir(path.dirname(cachePath), { recursive: true });
+    await fs.writeFile(cachePath, JSON.stringify({
+      version: 6,
+      sessions: {
+        [filePath]: {
+          mtimeMs: file.mtimeMs,
+          changeMs: file.changeMs,
+          size: file.size,
+          session: { id: parentId, filePath, updatedAt: "2026-01-02T03:04:05Z", preview: [] }
+        }
+      }
+    }), "utf8");
+
+    const listed = await listSessionsFromFiles([file], {
+      readFile: async () => "",
+      readListFile: async () => "",
+      cachePath,
+      writeCache: true,
+      lightweight: true
+    });
+
+    expect(listed.map((session) => session.id)).toEqual([branchId]);
+    await expect(listCachedSessions(cachePath)).resolves.toMatchObject([{ id: branchId }]);
+  });
+
   it("文件路径、mtime 和大小相同但变更时间变化时重新解析", async () => {
     const cachePath = getCachePath();
     const file = { filePath: "/sessions/rollout-cache.jsonl", mtimeMs: 1, changeMs: 1, size: 1024 };

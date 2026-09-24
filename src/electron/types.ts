@@ -12,8 +12,6 @@ export type {
   ApiVendorInput,
   VendorPricing,
   ApiVendorEnabledResult,
-  CompressionPrompt,
-  CompressionPromptInput,
   CliEnvironmentRequest,
   CliEnvironmentStatus,
   CliInstallRequest,

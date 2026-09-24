@@ -1,7 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import type {
-  CompressionPrompt,
   CodexSession,
   SessionMetadata,
   WorkspacePreset
@@ -106,14 +105,6 @@ type WorkspacePresetRow = {
   target_kind: WorkspacePreset["targetKind"];
   prompt: string | null;
   cli_args: string | null;
-  updated_at: string;
-};
-
-type CompressionPromptRow = {
-  id: string;
-  name: string;
-  content: string;
-  created_at: string;
   updated_at: string;
 };
 
@@ -367,37 +358,6 @@ export async function deleteWorkspacePresetRecord(presetId: string) {
   });
 }
 
-export async function listCompressionPromptRecords(): Promise<CompressionPrompt[]> {
-  const db = await getDatabase();
-  const rows = db.prepare("SELECT * FROM compression_prompts ORDER BY updated_at DESC").all() as CompressionPromptRow[];
-  return rows.map((row) => ({
-    id: row.id,
-    name: row.name,
-    content: row.content,
-    createdAt: row.created_at,
-    updatedAt: row.updated_at
-  }));
-}
-
-export async function saveCompressionPromptRecord(prompt: CompressionPrompt) {
-  await updateDatabase((db) => {
-    db.prepare(`
-      INSERT INTO compression_prompts (id, name, content, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?)
-      ON CONFLICT(id) DO UPDATE SET
-        name = excluded.name,
-        content = excluded.content,
-        updated_at = excluded.updated_at
-    `).run(prompt.id, prompt.name, prompt.content, prompt.createdAt, prompt.updatedAt);
-  });
-}
-
-export async function deleteCompressionPromptRecord(promptId: string) {
-  await updateDatabase((db) => {
-    db.prepare("DELETE FROM compression_prompts WHERE id = ?").run(promptId);
-  });
-}
-
 async function getDatabase() {
   if (!databasePath) throw new Error("会话数据库路径未初始化。");
   if (database) return database;
@@ -463,16 +423,6 @@ async function getDatabase() {
     CREATE INDEX IF NOT EXISTS idx_workspace_presets_updated_at
       ON workspace_presets(updated_at);
 
-    CREATE TABLE IF NOT EXISTS compression_prompts (
-      id TEXT PRIMARY KEY,
-      name TEXT NOT NULL,
-      content TEXT NOT NULL,
-      created_at TEXT NOT NULL,
-      updated_at TEXT NOT NULL
-    );
-
-    CREATE INDEX IF NOT EXISTS idx_compression_prompts_updated_at
-      ON compression_prompts(updated_at);
   `);
   try {
     database.exec("ALTER TABLE session_cache ADD COLUMN cached_at TEXT NOT NULL DEFAULT ''");

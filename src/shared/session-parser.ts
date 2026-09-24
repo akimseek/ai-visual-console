@@ -24,7 +24,7 @@ export function parseSessionContent(filePath: string, content: string): CodexSes
 
 // 完整会话可逐行解析，避免大 JSONL 必须先整体读入内存。
 export function createSessionContentParser(filePath: string) {
-  let id = "";
+  let id = getSessionIdFromFilePath(filePath);
   let createdAt: string | undefined;
   let updatedAt: string | undefined;
   let cwd: string | undefined;
@@ -46,7 +46,7 @@ export function createSessionContentParser(filePath: string) {
 
     if (item.type === "session_meta") {
       const payload = item.payload || {};
-      id = stringField(payload.id) || id;
+      id ||= stringField(payload.id);
       createdAt = stringField(payload.timestamp) || createdAt;
       cwd = stringField(payload.cwd) || cwd;
       model = stringField(payload.model) || model;
@@ -96,7 +96,7 @@ export function createSessionContentParser(filePath: string) {
 export function parseSessionListContent(file: CodexSessionFile, content: string): CodexSession | null {
   const lines = content.split(/\r?\n/).filter(Boolean);
 
-  let id = "";
+  let id = getSessionIdFromFilePath(file.filePath);
   let createdAt: string | undefined;
   let cwd: string | undefined;
   let model: string | undefined;
@@ -117,7 +117,7 @@ export function parseSessionListContent(file: CodexSessionFile, content: string)
 
     if (item.type === "session_meta") {
       const payload = item.payload || {};
-      id = stringField(payload.id) || id;
+      id ||= stringField(payload.id);
       createdAt = stringField(payload.timestamp) || createdAt;
       cwd = stringField(payload.cwd) || cwd;
       model = stringField(payload.model) || model;
@@ -165,6 +165,10 @@ export function parseSessionListContent(file: CodexSessionFile, content: string)
     preview: messages,
     usage
   };
+}
+
+export function getSessionIdFromFilePath(filePath: string) {
+  return path.basename(filePath).match(/^rollout-.+-([0-9a-f-]{36})\.jsonl$/i)?.[1] || "";
 }
 
 export function extractUsage(item: SessionLine): SessionUsage | null {

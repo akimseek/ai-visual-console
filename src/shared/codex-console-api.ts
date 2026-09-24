@@ -15,8 +15,6 @@ import type {
   CliEnvironmentStatus,
   CliInstallRequest,
   CliInstallResult,
-  CompressionPrompt,
-  CompressionPromptInput,
   GatewayFailureDiagnosticsPage,
   GatewayFailureOutcomeFilter,
   GatewayFailoverRule,
@@ -64,6 +62,7 @@ import type {
 // 渲染进程与 preload 共用的 API 契约；这里只描述公开能力，不包含 Electron 运行时类型。
 export type CodexConsoleApi = {
   appCommand: (command: AppCommand) => Promise<void>;
+  getAppVersion: () => Promise<string>;
   chooseExitAction: (choice: "minimize" | "quit" | "cancel") => Promise<void>;
   onExitConfirmationRequested: (handler: () => void) => () => void;
   listProviders: () => Promise<AiProviderSummary[]>;
@@ -112,9 +111,6 @@ export type CodexConsoleApi = {
     providerId?: AiProviderId | ""
   ) => Promise<GatewayFailureDiagnosticsPage>;
   listModels: (targetId: string) => Promise<VendorModel[]>;
-  listCompressionPrompts: () => Promise<CompressionPrompt[]>;
-  saveCompressionPrompt: (input: CompressionPromptInput) => Promise<CompressionPrompt>;
-  deleteCompressionPrompt: (promptId: string) => Promise<{ deleted: boolean }>;
   listCachedTargets: (providerId?: AiProviderId) => Promise<AiTarget[]>;
   listCachedSessions: (targetId: string, view: "active" | "trash") => Promise<AiSession[]>;
   listTargets: (providerId?: AiProviderId) => Promise<AiTarget[]>;

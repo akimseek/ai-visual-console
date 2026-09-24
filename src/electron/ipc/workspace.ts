@@ -1,13 +1,6 @@
 import { ipcMain } from "electron";
-import {
-  deleteCompressionPrompt,
-  deleteWorkspacePreset,
-  listCompressionPrompts,
-  listWorkspacePresets,
-  saveCompressionPrompt,
-  saveWorkspacePreset
-} from "../core/settings";
-import { requireString, requireWorkspacePresetInput, requireCompressionPromptInput } from "./validation";
+import { deleteWorkspacePreset, listWorkspacePresets, saveWorkspacePreset } from "../core/settings";
+import { requireString, requireWorkspacePresetInput } from "./validation";
 
 export function registerWorkspaceIpcHandlers() {
   ipcMain.handle("workspace:list-presets", () => listWorkspacePresets());
@@ -16,12 +9,5 @@ export function registerWorkspaceIpcHandlers() {
   );
   ipcMain.handle("workspace:delete-preset", (_event, presetId: unknown) =>
     deleteWorkspacePreset(requireString(presetId, "presetId"))
-  );
-  ipcMain.handle("compression-prompt:list", () => listCompressionPrompts());
-  ipcMain.handle("compression-prompt:save", (_event, input: unknown) =>
-    saveCompressionPrompt(requireCompressionPromptInput(input))
-  );
-  ipcMain.handle("compression-prompt:delete", (_event, promptId: unknown) =>
-    deleteCompressionPrompt(requireString(promptId, "promptId"))
   );
 }

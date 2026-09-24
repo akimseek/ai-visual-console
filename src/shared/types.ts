@@ -443,20 +443,6 @@ export type VendorRouteUpdateResult = VendorRouteSwitchResult & {
   mode?: VendorRouteMode;
 };
 
-export type CompressionPrompt = {
-  id: string;
-  name: string;
-  content: string;
-  createdAt: string;
-  updatedAt: string;
-};
-
-export type CompressionPromptInput = {
-  id?: string;
-  name: string;
-  content: string;
-};
-
 export type CliInstallRequest = {
   providerId: AiProviderId;
   targetId?: string;
@@ -502,8 +488,7 @@ export type CliEnvironmentStatus = {
 
 export type AppCommand =
   | "quit"
-  | "openLogDir"
-  | "about";
+  | "openLogDir";
 
 export type GatewayPortStatus = {
   enabled: boolean;
